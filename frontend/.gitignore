@@ -1,0 +1,40 @@
+# Dependências
+/node_modules
+/.pnp
+.pnp.js
+
+# Testing
+/coverage
+
+# Next.js
+/.next/
+/out/
+
+# PWA — service worker gerado pelo next-pwa (artefactos de build)
+/public/sw.js
+/public/workbox-*.js
+/public/swe-worker-*.js
+/public/fallback-*.js
+
+# TypeScript build info (gerado por tsc --noEmit em modo incremental)
+*.tsbuildinfo
+
+# Production
+/build
+
+# Variáveis de ambiente (podem conter a URL da API com segredos)
+.env*
+!.env.example
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+
+# Sistema operativo
+.DS_Store
+
+# Editor
+.vscode/
+.idea/

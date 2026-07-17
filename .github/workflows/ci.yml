@@ -1,0 +1,79 @@
+# Autocell — Pipeline de Integração Contínua (CI)
+#
+# Corre em todos os push e pull_request nas branches main e dev.
+# Tem 2 jobs paralelos:
+#   1. frontend — lint, typecheck (tsc --noEmit) e build do Next.js
+#   2. backend  — testes unitários/integração com Jest + Supertest
+#
+# Ambos correm em ubuntu-latest com Node.js 18.
+
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main, dev]
+
+jobs:
+  # ----------------------------------------------------------------- #
+  # Job 1: Frontend (Next.js + TypeScript + Tailwind)                 #
+  # ----------------------------------------------------------------- #
+  frontend:
+    name: Frontend (lint + typecheck + build)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - name: 📥 Checkout do código
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: 📦 Instalar dependências (npm ci)
+        run: npm ci
+
+      - name: 🔍 Lint (ESLint)
+        run: npm run lint
+
+      - name: 🧩 Typecheck (tsc --noEmit)
+        run: npx tsc --noEmit
+
+      - name: 🏗️ Build (Next.js)
+        run: npm run build
+
+  # ----------------------------------------------------------------- #
+  # Job 2: Backend (Node.js + Express + Jest)                         #
+  # ----------------------------------------------------------------- #
+  backend:
+    name: Backend (test)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: 📥 Checkout do código
+        uses: actions/checkout@v4
+
+      - name: 🟢 Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+
+      - name: 📦 Instalar dependências (npm ci)
+        run: npm ci
+
+      - name: 🧪 Testes (Jest + Supertest)
+        run: npm test
