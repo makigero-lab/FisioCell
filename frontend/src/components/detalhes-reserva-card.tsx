@@ -1,1 +1,2 @@
-export default function DetalhesReservaCard() { return null; }
+export function DetalhesReservaCard() { return null; }
+export default DetalhesReservaCard;
