@@ -978,3 +978,105 @@ Stage Summary:
 - **/gestor partilhado** por diretor_clinico + rececionista (a rececionista gere marcações; o backend limita via `isRececionista` o acesso a notas clínicas).
 - **111/111 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
 - **Próximo passo:** F2 (Criar Paciente + CRUD + permissões).
+
+---
+Task ID: DOC-F2
+Agent: general-purpose
+Task: Atualização de documentação para F2 (Pacientes)
+
+Work Log:
+- Lido `WORKLOG.md` (980 linhas, últimas entradas DOC-F0/F0/DOC-F1/F1) e `docs/ARQUITETURA.md` (357 linhas) para contexto.
+- Confirmado estado pós-F2 no código: `backend/models/Paciente.js` (empresa_id, nome, data_nascimento default null index, genero enum ['M','F','Outro','NA'] default 'NA', num_utente SNS, nif, telefone obrigatório, email/morada, contacto_emergencia {nome,telefone,relacao}, historico_medico, alergias [String], consentimento_dados {concedido,data,versao_termos}, ativo index, eliminado_em index soft delete, observacoes, origem enum ['walk_in','referenciacao','online','outro'] default 'walk_in'; índices compostos {empresa_id,nome}, {empresa_id,num_utente}, {empresa_id,ativo,eliminado_em}); `backend/controllers/pacienteController.js` (6 funções + helpers `temAcessoClinico`/`sanitizarParaNaoClinico` + auditoria); `backend/routes/pacienteRoutes.js` (middleware custom `podeVer` 4 roles para GET/POST/PUT, `isRececionista` para PATCH estado, `isDiretorClinico` para DELETE soft delete); `backend/server.js` mount `/api/gestor/pacientes`; `frontend/src/app/gestor/pacientes/page.tsx` (grid de cartões + busca + modais); `frontend/src/lib/api.ts` (PacienteDTO + PacienteListResponse); `frontend/src/components/gestor/gestor-sidebar.tsx` (item Pacientes, ícone UserRound).
+
+- **docs/BACKEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 2 (Estrutura): adicionado `pacienteController.js` à árvore de controllers; `Paciente.js` à árvore de models; `pacienteRoutes.js` à árvore de routes. Atualizada contagem "5 coleções" → "6 coleções" na secção 3.1.
+  - Secção 3.1: nova subsecção `Paciente` (após `Tarefa`) — nota F2 sobre entidade separada do Utilizador + soft delete + sanitização; tabela completa de campos (empresa_id, nome, data_nascimento, genero, num_utente, nif, telefone, email, morada, contacto_emergencia, historico_medico, alergias, consentimento_dados, ativo, eliminado_em, observacoes, origem); sub-tabela `consentimento_dados` (concedido/data/versao_termos); lista de índices compostos; nota de permissões (temAcessoClinico/sanitizarParaNaoClinico, podeVer/isRececionista/isDiretorClinico, flag dados_clinicos).
+  - Secção 6 (API): nova secção 6.12 — Pacientes (`/api/gestor/pacientes`). Bloco de permissões (podeVer/isRececionista/isDiretorClinico), bloco de sanitização (temAcessoClinico/sanitizarParaNaoClinico/dados_clinicos), nota F2 sobre filtro "fisio vê só os seus" ficar para F4. Documentados 6 endpoints: GET / (lista com query params busca/ativo/limit), GET /:id (detalhe), POST / (criar com body exemplo completo), PUT /:id (atualizar), PATCH /:id/estado (alternar ativo), DELETE /:id (soft delete). Cada um com auth, body, resposta, erros, auditoria.
+  - Secção 9 (Histórico): nova entrada F2 no topo do changelog descrevendo os 4 grupos de alterações (modelo Paciente com todos os campos + índices; controller com 6 funções + helpers + auditoria; routes com middlewares; mount em server.js). 130/130 testes ✓.
+
+- **docs/FRONTEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 3 (Rotas): adicionada linha `/gestor/pacientes` à tabela (CRUD de Pacientes F2 — grid, busca, modais, soft delete, permissões por role).
+  - Secção 11 (`lib/api.ts`): adicionado bullet `PacienteDTO`/`PacienteListResponse` (F2) — campos clínicos opcionais espelham a sanitização do backend; PacienteListResponse com flag dados_clinicos.
+  - Secção 11: nova subsecção `/gestor/pacientes (Client Component) — F2` (após `/admin/calendario`). Nota sobre item de sidebar (gestor-sidebar.tsx, href /gestor/pacientes, ícone UserRound do lucide-react, entre Propriedades e Equipa). Documentação do grid de cartões, busca (?busca=), modal criar/editar (Dialog) com campos clínicos condicionados a dados_clinicos, modal de detalhe, toggle de estado (adminPatch), editar (adminPut), eliminar (adminDelete só diretor_clinico/admin), estados visuais (loading/erro/vazio), tipos PacienteDTO/PacienteListResponse.
+  - Secção 13 (Histórico): nova entrada F2 no topo do changelog descrevendo os 3 grupos de alterações (página /gestor/pacientes; tipos PacienteDTO/PacienteListResponse em lib/api.ts; item Pacientes no gestor-sidebar com ícone UserRound). Lint + tsc + build ✓.
+
+- **docs/ARQUITETURA.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Banner topo: "acompanha as fases F0 e F1" → "acompanha as fases F0, F1 e F2" (com descrição "Paciente + CRUD + sanitização de dados clínicos").
+  - Secção 4 (Mapa de Migração): linha do `Paciente` marcada com "F2 ✅" (era "F2").
+  - Secção 5.3 `Paciente`: título "F2" → "✅ F2 concluído"; schema reescrito para refletir a implementação real (genero enum ['M','F','Outro','NA'] default 'NA'; num_utente SNS; nif; morada; contacto_emergencia estruturado {nome,telefone,relacao}; historico_medico; alergias [String]; consentimento_dados sub-documento {concedido,data,versao_termos} em vez de 3 booleans; ativo index; observacoes; origem enum; índices compostos {empresa_id,nome}/{empresa_id,num_utente}/{empresa_id,ativo,eliminado_em}). Adicionada nota "F2 — Implementação real" listando as diferenças face à proposta v0.1 (genero rename, novos campos, consentimento_dados reestruturado, índices alterados, sanitização).
+  - Secção 8 (Roadmap): F2 marcado como "✅ Concluído" (era "Pendente").
+
+Stage Summary:
+- **docs/BACKEND.md**: nova subsecção do modelo Paciente (tabela completa + sub-tabela consentimento_dados + índices + nota de permissões); nova secção 6.12 com 6 endpoints documentados (GET/GET:id/POST/PUT/PATCH estado/DELETE soft delete) + blocos de permissões e sanitização; árvore de ficheiros atualizada (pacienteController.js, Paciente.js, pacienteRoutes.js); entrada F2 no histórico. 130/130 testes ✓ referenciado.
+- **docs/FRONTEND.md**: rota /gestor/pacientes na tabela; subsecção completa da página (grid, busca, modais criar/editar/detalhe, toggle estado, soft delete, permissões via dados_clinicos); tipos PacienteDTO/PacienteListResponse documentados; item de sidebar (UserRound) documentado; entrada F2 no histórico.
+- **docs/ARQUITETURA.md**: F2 marcado ✅ no roadmap (secção 8) e no mapa de migração (secção 4); schema de Paciente (secção 5.3) alinhado com a implementação real + nota de divergências face à proposta v0.1; banner topo atualizado.
+- **WORKLOG.md**: esta entrada DOC-F2 adicionada em append.
+- **Finding (não resolvido por escopo):** a matriz de permissões da secção 3.1 de ARQUITETURA.md indica `admin` ❌ para "Pacientes (CRUD)" e a decisão de design #6 diz "admin não vê dados clínicos", mas a implementação F2 inclui `admin` no middleware `podeVer` e em `temAcessoClinico` (admin vê pacientes E dados clínicos). Esta divergência foi deixada intacta por estar fora do escopo pedido (a task pedia apenas atualizar o schema e o roadmap); fica como assunto a clarificar numa futura revisão (ou o `admin` deve ser removido do `podeVer`/`temAcessoClinico`, ou a matriz + decisão #6 devem ser atualizadas para refletir que o admin plataforma tem acesso total por conveniência operacional).
+
+
+---
+Task ID: F2
+Agent: Z.ai Code
+Task: Criar modelo Paciente + CRUD + permissões baseadas em role (rececionista/diretor vê todos, fisio vê só os seus, sanitização de dados clínicos para rececionistas).
+
+Work Log:
+
+### F2-A — Modelo Paciente
+- Criado `backend/models/Paciente.js` com 17 campos: empresa_id, nome, data_nascimento, genero (M/F/Outro/NA), num_utente (SNS), nif, telefone (obrigatório), email, morada, contacto_emergencia {nome, telefone, relacao}, historico_medico, alergias (array), consentimento_dados {concedido, data, versao_termos}, ativo, eliminado_em (soft delete), observacoes, origem (walk_in/referenciacao/online/outro).
+- Índices: {empresa_id, nome}, {empresa_id, num_utente}, {empresa_id, ativo, eliminado_em}.
+
+### F2-B — Controller (pacienteController.js)
+- 6 funções: listarPacientes, obterPaciente, criarPaciente, atualizarPaciente, eliminarPaciente (soft delete), alternarEstadoPaciente.
+- Helper `temAcessoClinico` (admin/diretor_clinico/fisioterapeuta) e `sanitizarParaNaoClinico` (remove historico_medico, alergias, contacto_emergencia).
+- Validações: nome + telefone obrigatórios, data_nascimento não pode ser futura, genero/origem enum.
+- Consentimento RGPD com data automática.
+- Campos clínicos só são guardados/editados se `temAcessoClinico` (rececionista envia mas são ignorados).
+- Auditoria registada em criar/atualizar/eliminar.
+- Resposta inclui flag `dados_clinicos: boolean` para o frontend saber se pode mostrar campos clínicos.
+
+### F2-C — Routes (pacienteRoutes.js) + server.js
+- Middleware custom `podeVer` (todos os 4 roles) para GET/POST/PUT.
+- `isRececionista` para PATCH /:id/estado.
+- `isDiretorClinico` para DELETE /:id (soft delete).
+- Montado em server.js: `app.use('/api/gestor/pacientes', pacienteRoutes)`.
+
+### F2-D — Testes (130/130 ✓)
+- Adicionados 19 testes no bloco "F2 — Pacientes (CRUD + permissões)":
+  - Criação por rececionista (201) e fisio (201 com campos clínicos).
+  - Validações (400): campos obrigatórios, data futura.
+  - Sanitização: rececionista NÃO recebe historico_medico/alergias/contacto_emergencia.
+  - Fisio RECEBE dados clínicos completos.
+  - Busca por nome.
+  - Detalhe (404 se inexistente, soft deleted).
+  - PUT (rececionista edita admin, fisio edita clínico).
+  - PATCH estado.
+  - DELETE: rececionista 403, fisio 403, diretor_clinico 200 (soft delete).
+  - 401 sem token.
+- **Resultado: 130/130 testes a passar ✓** (+19).
+
+### F2-E — Frontend (/gestor/pacientes)
+- Criada página `frontend/src/app/gestor/pacientes/page.tsx`:
+  - Grid de cartões com nome, idade, telefone, email, alergias (se clínico), consentimento RGPD.
+  - Busca por nome/Nº utente/telefone/email.
+  - Modal criar/editar com campos administrativos + bloco clínico (só se dadosClinicos=true).
+  - Modal detalhe com todos os campos.
+  - Botões: Editar, Ativar/Desativar, Eliminar (soft delete com confirm).
+  - Flag `dados_clinicos` controla visibilidade dos campos clínicos.
+- `PacienteDTO` e `PacienteListResponse` adicionados a `lib/api.ts`.
+- **Lint ✓, tsc ✓, build ✓** (rota /gestor/pacientes = 5.22 kB).
+
+### F2-F — Sidebar
+- Adicionado item "Pacientes" (ícone UserRound) ao `gestor-sidebar.tsx`, entre Propriedades e Equipa.
+
+### F2-G — Documentação (Task DOC-F2 por subagent)
+- `docs/BACKEND.md`: modelo Paciente documentado (17 campos + índices), endpoints /api/gestor/pacientes (6 endpoints), permissões por role, sanitização, entrada F2 no histórico.
+- `docs/FRONTEND.md`: rota /gestor/pacientes, PacienteDTO, página documentada, entrada F2 no histórico.
+- `docs/ARQUITETURA.md`: F2 marcado ✅ no roadmap, schema de Paciente alinhado com implementação real.
+
+Stage Summary:
+- **Paciente criado** com schema completo (dados demográficos, contactos, dados clínicos, consentimentos RGPD, soft delete).
+- **Permissões RGPD implementadas**: rececionista vê dados administrativos mas NÃO vê historico_medico/alergias/contacto_emergencia. Fisio/diretor/admin vêem tudo.
+- **Soft delete** preserva histórico (RGPD: obrigações de retenção 10-20 anos).
+- **130/130 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
+- **Nota**: o filtro "fisioterapeuta vê só os seus pacientes" será implementado em F4 (Consulta com paciente_id + fisioterapeuta_id). Por agora, todos os clínicos vêem todos os pacientes ativos da empresa.
+- **Próximo passo:** F3 (Sala de Propriedade + HorarioFisioterapeuta + motor de disponibilidade).

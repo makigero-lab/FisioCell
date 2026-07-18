@@ -2846,3 +2846,251 @@ describe('Prompt 116 — Fundação SaaS + Lógica de Negócio', () => {
     await Utilizador.deleteOne({ _id: staff._id });
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* F2 — Pacientes (CRUD + permissões por role)                         */
+/* ------------------------------------------------------------------ */
+
+describe('F2 — Pacientes (CRUD + permissões)', () => {
+  let fisioToken, rececionistaToken, diretorToken;
+  let fisioId, rececionistaId, diretorId;
+  let pacienteId;
+
+  beforeAll(async () => {
+    // Cria 3 utilizadores com roles diferentes para testar permissões.
+    const hash = await bcrypt.hash(PASSWORD, 10);
+
+    const fisio = await Utilizador.create({
+      nome: 'Fisio Teste', email: 'fisio.f2@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'fisioterapeuta', ativo: true,
+    });
+    fisioId = String(fisio._id);
+
+    const rececionista = await Utilizador.create({
+      nome: 'Rececionista Teste', email: 'rececionista.f2@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'rececionista', ativo: true,
+    });
+    rececionistaId = String(rececionista._id);
+
+    const diretor = await Utilizador.create({
+      nome: 'Diretor Teste', email: 'diretor.f2@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'diretor_clinico', ativo: true,
+    });
+    diretorId = String(diretor._id);
+
+    // Login para obter tokens.
+    const [rFisio, rRec, rDir] = await Promise.all([
+      request(app).post('/api/auth/login').send({ email: 'fisio.f2@teste.pt', password: PASSWORD }),
+      request(app).post('/api/auth/login').send({ email: 'rececionista.f2@teste.pt', password: PASSWORD }),
+      request(app).post('/api/auth/login').send({ email: 'diretor.f2@teste.pt', password: PASSWORD }),
+    ]);
+    fisioToken = rFisio.body.token;
+    rececionistaToken = rRec.body.token;
+    diretorToken = rDir.body.token;
+  });
+
+  afterAll(async () => {
+    // Limpa utilizadores e pacientes de teste.
+    await Utilizador.deleteMany({ email: { $in: ['fisio.f2@teste.pt', 'rececionista.f2@teste.pt', 'diretor.f2@teste.pt'] } });
+    const Paciente = require('../models/Paciente');
+    await Paciente.deleteMany({ empresa_id: empresaId });
+  });
+
+  it('POST /api/gestor/pacientes (rececionista) → 201 cria paciente', async () => {
+    const res = await request(app)
+      .post('/api/gestor/pacientes')
+      .set('Authorization', `Bearer ${rececionistaToken}`)
+      .send({
+        nome: 'João Silva',
+        telefone: '+351912345678',
+        data_nascimento: '1990-05-15',
+        genero: 'M',
+        num_utente: '123456789',
+        email: 'joao.silva@email.pt',
+        consentimento_dados: { concedido: true, versao_termos: '1.0' },
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.paciente).toHaveProperty('_id');
+    expect(res.body.paciente.nome).toBe('João Silva');
+    expect(res.body.paciente.telefone).toBe('+351912345678');
+    expect(res.body.paciente.consentimento_dados.concedido).toBe(true);
+    expect(res.body.dados_clinicos).toBe(false); // rececionista não tem acesso clínico
+    pacienteId = res.body.paciente._id;
+  });
+
+  it('POST sem campos obrigatórios → 400', async () => {
+    const res = await request(app)
+      .post('/api/gestor/pacientes')
+      .set('Authorization', `Bearer ${rececionistaToken}`)
+      .send({ nome: 'Sem Telefone' });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST com data_nascimento futura → 400', async () => {
+    const res = await request(app)
+      .post('/api/gestor/pacientes')
+      .set('Authorization', `Bearer ${rececionistaToken}`)
+      .send({ nome: 'Futuro', telefone: '+351900000000', data_nascimento: '2099-01-01' });
+    expect(res.status).toBe(400);
+  });
+
+  it('rececionista NÃO pode definir campos clínicos (são ignorados)', async () => {
+    const res = await request(app)
+      .post('/api/gestor/pacientes')
+      .set('Authorization', `Bearer ${rececionistaToken}`)
+      .send({
+        nome: 'Paciente Rececionista',
+        telefone: '+351911111111',
+        historico_medico: 'Diabetes',
+        alergias: ['Penicilina'],
+        contacto_emergencia: { nome: 'Filho', telefone: '+351922222222' },
+      });
+    expect(res.status).toBe(201);
+    // Os campos clínicos NÃO devem ter sido guardados.
+    expect(res.body.paciente.historico_medico).toBeUndefined();
+    expect(res.body.paciente.alergias).toBeUndefined();
+    expect(res.body.paciente.contacto_emergencia).toBeUndefined();
+  });
+
+  it('fisioterapeuta PODE definir campos clínicos', async () => {
+    const res = await request(app)
+      .post('/api/gestor/pacientes')
+      .set('Authorization', `Bearer ${fisioToken}`)
+      .send({
+        nome: 'Paciente Fisio',
+        telefone: '+351933333333',
+        historico_medico: 'Lombalgia crónica',
+        alergias: ['Ibuprofeno', 'Marisco'],
+        contacto_emergencia: { nome: 'Esposa', telefone: '+351944444444', relacao: 'Cônjuge' },
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.paciente.historico_medico).toBe('Lombalgia crónica');
+    expect(res.body.paciente.alergias).toEqual(['Ibuprofeno', 'Marisco']);
+    expect(res.body.paciente.contacto_emergencia.nome).toBe('Esposa');
+    expect(res.body.dados_clinicos).toBe(true);
+  });
+
+  it('GET /api/gestor/pacientes (rececionista) → 200 lista sem dados clínicos', async () => {
+    const res = await request(app)
+      .get('/api/gestor/pacientes')
+      .set('Authorization', `Bearer ${rececionistaToken}`);
+    expect(res.status).toBe(200);
+    expect(Array.isArray(res.body.pacientes)).toBe(true);
+    expect(res.body.total).toBeGreaterThan(0);
+    expect(res.body.dados_clinicos).toBe(false);
+    // Rececionista não recebe campos clínicos.
+    const p = res.body.pacientes[0];
+    expect(p.historico_medico).toBeUndefined();
+    expect(p.alergias).toBeUndefined();
+    expect(p.contacto_emergencia).toBeUndefined();
+  });
+
+  it('GET /api/gestor/pacientes (fisioterapeuta) → 200 lista COM dados clínicos', async () => {
+    const res = await request(app)
+      .get('/api/gestor/pacientes')
+      .set('Authorization', `Bearer ${fisioToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.dados_clinicos).toBe(true);
+    // Fisio recebe campos clínicos.
+    const p = res.body.pacientes.find((x) => x.nome === 'Paciente Fisio');
+    expect(p).toBeTruthy();
+    expect(p.historico_medico).toBe('Lombalgia crónica');
+    expect(p.alergias).toEqual(['Ibuprofeno', 'Marisco']);
+  });
+
+  it('GET com busca por nome → filtra correctamente', async () => {
+    const res = await request(app)
+      .get('/api/gestor/pacientes?busca=João')
+      .set('Authorization', `Bearer ${rececionistaToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.pacientes.length).toBeGreaterThanOrEqual(1);
+    expect(res.body.pacientes.every((p) => p.nome.includes('João'))).toBe(true);
+  });
+
+  it('GET /:id (rececionista) → 200 sem dados clínicos', async () => {
+    const res = await request(app)
+      .get(`/api/gestor/pacientes/${pacienteId}`)
+      .set('Authorization', `Bearer ${rececionistaToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.paciente.nome).toBe('João Silva');
+    expect(res.body.dados_clinicos).toBe(false);
+    expect(res.body.paciente.historico_medico).toBeUndefined();
+  });
+
+  it('GET /:id (fisio) → 200 COM dados clínicos', async () => {
+    const res = await request(app)
+      .get(`/api/gestor/pacientes/${pacienteId}`)
+      .set('Authorization', `Bearer ${fisioToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.dados_clinicos).toBe(true);
+  });
+
+  it('GET /:id inexistente → 404', async () => {
+    const idInexistente = new mongoose.Types.ObjectId();
+    const res = await request(app)
+      .get(`/api/gestor/pacientes/${idInexistente}`)
+      .set('Authorization', `Bearer ${rececionistaToken}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('PUT /:id (rececionista) → 200 atualiza nome', async () => {
+    const res = await request(app)
+      .put(`/api/gestor/pacientes/${pacienteId}`)
+      .set('Authorization', `Bearer ${rececionistaToken}`)
+      .send({ nome: 'João Silva Atualizado' });
+    expect(res.status).toBe(200);
+    expect(res.body.paciente.nome).toBe('João Silva Atualizado');
+  });
+
+  it('PUT /:id (fisio) → 200 atualiza historico_medico', async () => {
+    const res = await request(app)
+      .put(`/api/gestor/pacientes/${pacienteId}`)
+      .set('Authorization', `Bearer ${fisioToken}`)
+      .send({ historico_medico: 'Histórico atualizado pelo fisio' });
+    expect(res.status).toBe(200);
+    expect(res.body.paciente.historico_medico).toBe('Histórico atualizado pelo fisio');
+  });
+
+  it('PATCH /:id/estado → 200 alterna ativo', async () => {
+    const res = await request(app)
+      .patch(`/api/gestor/pacientes/${pacienteId}/estado`)
+      .set('Authorization', `Bearer ${rececionistaToken}`)
+      .send({ ativo: false });
+    expect(res.status).toBe(200);
+    expect(res.body.paciente.ativo).toBe(false);
+  });
+
+  it('DELETE /:id (rececionista) → 403 (só diretor_clinico/admin)', async () => {
+    const res = await request(app)
+      .delete(`/api/gestor/pacientes/${pacienteId}`)
+      .set('Authorization', `Bearer ${rececionistaToken}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('DELETE /:id (fisioterapeuta) → 403', async () => {
+    const res = await request(app)
+      .delete(`/api/gestor/pacientes/${pacienteId}`)
+      .set('Authorization', `Bearer ${fisioToken}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('DELETE /:id (diretor_clinico) → 200 soft delete', async () => {
+    const res = await request(app)
+      .delete(`/api/gestor/pacientes/${pacienteId}`)
+      .set('Authorization', `Bearer ${diretorToken}`);
+    expect(res.status).toBe(200);
+    expect(res.body.paciente.eliminado_em).toBeTruthy();
+  });
+
+  it('GET /:id após soft delete → 404', async () => {
+    const res = await request(app)
+      .get(`/api/gestor/pacientes/${pacienteId}`)
+      .set('Authorization', `Bearer ${rececionistaToken}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('sem token → 401', async () => {
+    const res = await request(app).get('/api/gestor/pacientes');
+    expect(res.status).toBe(401);
+  });
+});

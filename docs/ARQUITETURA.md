@@ -1,8 +1,9 @@
 # Arquitetura — FisioCell (v0.1)
 
 > **Proposta de arquitetura v0.1** para o SaaS FisioCell (Clínicas de Fisioterapia).
-> Este documento acompanha as fases **F0** (rename + remoção Smoobu) e **F1**
-> (migração de roles + `perfil_profissional` + `config` da empresa) e define o
+> Este documento acompanha as fases **F0** (rename + remoção Smoobu), **F1**
+> (migração de roles + `perfil_profissional` + `config` da empresa) e **F2**
+> (`Paciente` + CRUD + sanitização de dados clínicos) e define o
 > roadmap de migração F0–F9. Os esquemas Mongoose abaixo são **propostas** — a
 > implementação decorre fase a fase.
 
@@ -103,7 +104,7 @@ const isRececionista   = requireRole('admin', 'diretor_clinico', 'rececionista')
 | `smoobuController.js`                 | → | ❌ **removido**                   | F0 ✅ |
 | `webhookController.js`                | → | ❌ **removido**                   | F0 ✅ |
 | `routes/webhookRoutes.js`             | → | ❌ **removido**                   | F0 ✅ |
-| — (novo)                              | → | `Paciente`                       | F2 |
+| — (novo)                              | → | `Paciente`                       | F2 ✅ |
 | — (novo)                              | → | `HorarioFisioterapeuta`          | F3 |
 | — (novo)                              | → | `Documento`                      | F9 |
 
@@ -168,33 +169,50 @@ const utilizadorSchema = new Schema({
 }, { timestamps: true });
 ```
 
-### 5.3 `Paciente` — F2
+### 5.3 `Paciente` — ✅ F2 concluído
 
 ```js
 const pacienteSchema = new Schema({
   empresa_id:   { type: ObjectId, ref: 'Empresa', required: true, index: true },
-  // Dados demográficos
+  // Dados demográficos (RGPD: mínimo necessário)
   nome:         { type: String, required: true, trim: true, index: true },
-  data_nascimento: { type: Date },
-  genero:       { type: String, enum: ['M', 'F', 'Outro', 'Não especificado'], default: 'Não especificado' },
+  data_nascimento: { type: Date, default: null, index: true },
+  genero:       { type: String, enum: ['M', 'F', 'Outro', 'NA'], default: 'NA' },
+  num_utente:   { type: String, trim: true, default: '', index: true },  // SNS — Saúde 24
+  nif:          { type: String, trim: true, default: '' },
   // Contactos
-  email:        { type: String, lowercase: true, trim: true },
   telefone:     { type: String, trim: true, required: true },
-  morada:       { type: String, trim: true },
-  // Dados clínicos
-  notas_gerais: { type: String, default: '' },          // alergias, medicação, observações gerais
-  historico:    { type: String, default: '' },           // histórico clínico relevante
-  // Consentimentos RGPD
-  consentimento_dados:       { type: Boolean, default: false },  // tratamento de dados pessoais
-  consentimento_marketing:   { type: Boolean, default: false },
-  consentimento_fotografias: { type: Boolean, default: false },  // fotografias clínicas (F9)
-  // Soft delete
-  eliminado_em: { type: Date, default: null },
+  email:        { type: String, lowercase: true, trim: true, default: '' },
+  morada:       { type: String, trim: true, default: '' },
+  // Dados clínicos (acesso restrito a isClinico — sanitizado para rececionista)
+  contacto_emergencia: {
+    nome:    { type: String, default: '' },
+    telefone:{ type: String, default: '' },
+    relacao: { type: String, default: '' },  // "Filho", "Cônjuge", etc.
+  },
+  historico_medico: { type: String, default: '' },        // patologias, medicação
+  alergias:     { type: [String], default: [] },
+  // Consentimento RGPD (obrigatório em saúde)
+  consentimento_dados: {
+    concedido:      { type: Boolean, default: false },
+    data:           { type: Date, default: null },        // preenchida quando concedido=true
+    versao_termos:  { type: String, default: '1.0' },
+  },
+  // Estado
+  ativo:        { type: Boolean, default: true, index: true },
+  eliminado_em: { type: Date, default: null, index: true },  // soft delete (preserva histórico)
+  // Metadados
+  observacoes:  { type: String, default: '', trim: true },
+  origem:       { type: String, enum: ['walk_in', 'referenciacao', 'online', 'outro'], default: 'walk_in' },
 }, { timestamps: true });
 
+// Índices compostos para queries frequentes.
 pacienteSchema.index({ empresa_id: 1, nome: 1 });
-pacienteSchema.index({ empresa_id: 1, telefone: 1 });
+pacienteSchema.index({ empresa_id: 1, num_utente: 1 });
+pacienteSchema.index({ empresa_id: 1, ativo: 1, eliminado_em: 1 });
 ```
+
+> **F2 — Implementação real:** o schema acima reflete o modelo `backend/models/Paciente.js` implementado. Em relação à proposta v0.1 inicial houve as seguintes alterações: o `genero` passou de `['M','F','Outro','Não especificado']` para `['M','F','Outro','NA']` (default `'NA'`); foram adicionados `num_utente` (SNS), `nif`, `morada`, `contacto_emergencia` estruturado e `origem`; o `consentimento_dados` passou de 3 booleans separados para um sub-documento `{ concedido, data, versao_termos }` (auditável); foram adicionados `ativo` (independente do soft delete) e `observacoes`. O índice composto `{ empresa_id, telefone }` foi substituído por `{ empresa_id, num_utente }` (procura por SNS) e `{ empresa_id, ativo, eliminado_em }` (listagem de ativos). Os campos clínicos (`historico_medico`, `alergias`, `contacto_emergencia`) são sanitizados na resposta para a `rececionista` via `pacienteController.sanitizarParaNaoClinico`.
 
 ### 5.4 `Consulta` — F4 (substitui `Tarefa`)
 
@@ -328,7 +346,7 @@ Todos mantêm `timezone: 'Europe/Lisbon'`.
 |------|--------|--------|
 | **F0** | Rename Autocell→FisioCell + remoção Smoobu + `ARQUITETURA.md` | ✅ Concluído |
 | **F1** | Adaptar `Empresa` (já tem `morada`/`telefone`/`email`) + `Utilizador` (novos roles + `perfil_profissional`) | ✅ Concluído |
-| **F2** | Criar `Paciente` + CRUD + permissões (diretor_clinico vê todos; fisio vê só os seus; rececionista vê dados demográficos) | Pendente |
+| **F2** | Criar `Paciente` + CRUD + permissões (diretor_clinico vê todos; fisio vê só os seus; rececionista vê dados demográficos) | ✅ Concluído |
 | **F3** | `Sala` (de `Propriedade`) + `HorarioFisioterapeuta` + motor de disponibilidade (3 camadas) | Pendente |
 | **F4** | `Consulta` (de `Tarefa`) + CRUD de marcação + validação de conflitos (sala + fisio + paciente) | Pendente |
 | **F5** | Nota clínica SOAP + `ModeloProtocolo` (de `ModeloChecklist`) | Pendente |

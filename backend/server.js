@@ -35,6 +35,7 @@ const authRoutes = require('./routes/authRoutes');
 const ausenciaRoutes = require('./routes/ausenciaRoutes');
 const relatorioRoutes = require('./routes/relatorioRoutes');
 const staffRoutes = require('./routes/staffRoutes');
+const pacienteRoutes = require('./routes/pacienteRoutes'); // F2 — Pacientes
 const { iniciarDailyBriefing } = require('./jobs/dailyBriefing');
 const { iniciarAgendaAmanha } = require('./jobs/agendaAmanha');
 const { iniciarCaoGuarda } = require('./jobs/caoGuarda');
@@ -119,6 +120,9 @@ app.use('/api/admin', adminRoutes);
 
 // Staff — gestão das próprias ausências (pedidos de férias/doença).
 app.use('/api/staff', staffRoutes);
+
+// F2 — Pacientes (CRUD com permissões por role).
+app.use('/api/gestor/pacientes', pacienteRoutes);
 
 /* ------------------------------------------------------------------ */
 /* Middleware global de tratamento de erros                            */

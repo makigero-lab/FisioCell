@@ -17,6 +17,7 @@ import {
   LogOut,
   Bell,
   ListChecks,
+  UserRound,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -53,6 +54,7 @@ const gestorNavItems: NavItem[] = [
   { label: "Calendário", href: "/gestor/calendario", icon: CalendarRange },
   { label: "Tarefas", href: "/gestor/tarefas", icon: ClipboardList },
   { label: "Propriedades", href: "/gestor/propriedades", icon: Building2 },
+  { label: "Pacientes", href: "/gestor/pacientes", icon: UserRound },
   { label: "Equipa", href: "/gestor/equipa", icon: Users },
   { label: "Ausências / Férias", href: "/gestor/ausencias", icon: CalendarOff },
   { label: "Relatórios", href: "/gestor/relatorios", icon: BarChart3 },

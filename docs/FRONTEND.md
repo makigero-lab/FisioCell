@@ -96,6 +96,7 @@ A aplicação tem **três áreas privadas** (cada uma com layout próprio), uma 
 | `/admin/calendario-operacional` | Calendário operacional avançado (filtros + navegação meses + cartões coloridos por estado + modal com reatribuição rápida) | Desktop-first |
 | `/admin/relatorios`   | Relatórios/Analytics com gráficos (recharts: linha, barras, pie) | Desktop-first |
 | `/gestor`       | Painel operacional da clínica — **protegido** (F1: roles `diretor_clinico` + `rececionista` partilham a área via `RouteGuard role={["diretor_clinico", "rececionista"]}`; permissões diferenciadas no backend via `isDiretorClinico`/`isRececionista`) | Desktop-first |
+| `/gestor/pacientes` | **CRUD de Pacientes** (F2) — grid de cartões, busca, modais criar/editar/detalhe, soft delete; permissões por role | Desktop-first |
 | `/staff`        | Área do Fisioterapeuta (executante) — **protegida** (F1: role `fisioterapeuta`) | Mobile-first |
 | `/staff/ausencias` | Pedidos de ausência do fisioterapeuta (férias/doença/outro) — criar + histórico + cancelar pendentes | Mobile-first |
 | `/staff/tarefas/[id]` | Detalhe da Tarefa (checklist + concluir)      | Mobile-first |
@@ -315,6 +316,7 @@ Isto força o framework para `nextjs`, pelo que o output directory passa a `.nex
 - `LoginResponse` — tipo da resposta de `POST /api/auth/login`.
 - `UtilizadorDTO` / `Role` — tipos que espelham o modelo `Utilizador` do backend (F1: `Role = "admin" | "diretor_clinico" | "fisioterapeuta" | "rececionista"`).
 - `AusenciaDTO` / `TipoAusencia` — tipos que espelham o modelo `Ausencia` do backend.
+- `PacienteDTO` / `PacienteListResponse` (F2) — tipos que espelham o modelo `Paciente` do backend. `PacienteDTO` inclui os campos clínicos (`contacto_emergencia`, `historico_medico`, `alergias`) como opcionais — só estão presentes quando o backend devolve `dados_clinicos: true` (isClinico). `PacienteListResponse` = `{ pacientes: PacienteDTO[]; total: number; dados_clinicos: boolean }`.
 
 ### `/login` (Client Component)
 Ecrã minimalista premium centrado:
@@ -352,6 +354,21 @@ Primeiro ecrã a consumir a API real (mock-data abandonado nesta secção):
 - Validações no cliente: funcionário + datas obrigatórios; `data_fim >= data_inicio`.
 - Tipo `AusenciaDTO` + `TipoAusencia` em `lib/api.ts`.
 - **Integração com o motor de atribuição**: as ausências registadas aqui excluem automaticamente o staff da atribuição de tarefas (o load balancer consulta `Ausencia` no passo 2).
+
+### `/gestor/pacientes` (Client Component) — F2
+Página de gestão de pacientes da clínica. Consome `GET/POST/PUT/PATCH/DELETE /api/gestor/pacientes` via `adminGet`/`adminPost`/`adminPut`/`adminPatch`/`adminDelete`.
+
+> **Item de sidebar (F2):** o `components/gestor/gestor-sidebar.tsx` inclui o item **Pacientes** (`href: "/gestor/pacientes"`, ícone `UserRound` do `lucide-react`), posicionado entre **Propriedades** e **Equipa**.
+
+- **Listagem em grid de cartões:** cada cartão mostra `nome`, idade (calculada de `data_nascimento`), `telefone`, `email`, badge de estado (Ativo/Inativo), e ícones de ação. `useEffect` chama `adminGet('/api/gestor/pacientes')` ao montar; a resposta traz a flag `dados_clinicos` que controla a visibilidade dos campos clínicos.
+- **Busca:** campo de texto no topo que filtra via query param `?busca=` (debounce) — corresponde à pesquisa server-side por `nome`/`num_utente`/`telefone`/`email`.
+- **Modal criar/editar** (`Dialog`): formulário com Nome (obrigatório), Telefone (obrigatório), Data de Nascimento, Género, Nº Utente (SNS), NIF, Email, Morada, Contacto de Emergência (`nome`/`telefone`/`relação`), Histórico Médico, Alergias (array), Consentimento de Dados (`concedido`/`versao_termos`), Observações, Origem. Os campos clínicos só aparecem/editáveis quando `dados_clinicos === true` (isClinico); a rececionista só vê e edita campos administrativos.
+- **Modal de detalhe** (`Dialog`): mostra todos os campos do paciente (incl. clínicos se `dados_clinicos`). Ícones `Phone`/`Mail`/`Calendar` para contacto e data de nascimento; `ShieldCheck` para o bloco de consentimento RGPD; `AlertTriangle` para alergias.
+- **Ativar/Desativar** (botão `Power`): `adminPatch('/:id/estado')` com otimismo. Disponível para todos os roles que acedem à página (o backend permite `isRececionista` no PATCH).
+- **Editar** (botão `Pencil`): abre o modal de criar/editar pré-preenchido → `adminPut('/:id')`.
+- **Eliminar** (botão `Trash2`, só para `diretor_clinico`/`admin`): abre modal de confirmação → `adminDelete('/:id')` (soft delete). O botão só é renderizado quando o role do utilizador permite eliminar.
+- Estados visuais: loading (`Loader2` spinner), erro (`AlertCircle` cartão vermelho + botão `RefreshCw` para tentar de novo), vazio (call-to-action).
+- Tipo `PacienteDTO` + `PacienteListResponse` em `lib/api.ts` (F2).
 
 ---
 
@@ -406,6 +423,7 @@ O token passou a ser guardado num **cookie** (`fisiocell_token`, SameSite=Lax, 7
 
 | Data    | Versão | Alteração                                                                       |
 |---------|--------|---------------------------------------------------------------------------------|
+| **F2**  | —      | **Pacientes:** (1) Nova página `app/gestor/pacientes/page.tsx` — Client Component com grid de cartões, busca server-side (`?busca=`), modal criar/editar (`Dialog`), modal de detalhe, toggle de estado (`adminPatch`), soft delete (`adminDelete`, só diretor_clinico/admin). Campos clínicos visíveis/editáveis apenas quando `dados_clinicos === true` (isClinico). (2) `lib/api.ts` — novos tipos `PacienteDTO` e `PacienteListResponse` (campos clínicos opcionais, espelham a sanitização do backend). (3) `components/gestor/gestor-sidebar.tsx` — novo item **Pacientes** (`href: "/gestor/pacientes"`, ícone `UserRound` do `lucide-react`), posicionado entre Propriedades e Equipa. Lint + tsc + build ✓. |
 | **F1**  | —      | **Migração de roles (Fisioterapia):** (1) `middleware.ts` — tipo `Role` atualizado para `"admin" \| "diretor_clinico" \| "fisioterapeuta" \| "rececionista"`; `rotaPorRole` mapeia `rececionista` → `/gestor` (partilhado); validação de rota errada aceita `diretor_clinico`+`rececionista` em `/gestor/*`. (2) `lib/auth.ts` + `lib/api.ts` — tipo `Role` atualizado. (3) `components/auth/route-guard.tsx` — prop `role` passou a aceitar `Role \| Role[]` para suportar áreas partilhadas. (4) `app/gestor/layout.tsx` — `RouteGuard role={["diretor_clinico", "rececionista"]}`. (5) `app/gestor/equipa/page.tsx` — `ROLE_LABEL` e `ROLE_VARIANT` atualizados (Diretor Clínico/Fisioterapeuta/Rececionista); formulário de criar/editar usa `role: "fisioterapeuta"` por defeito. (6) `app/admin/page.tsx` — labels de role no modal de utilizadores (`diretor_clinico` → "Diretor Clínico", `fisioterapeuta` → "Fisioterapeuta", `rececionista` → "Rececionista"); botão "Criar Novo Gestor" passa a criar com `role: "diretor_clinico"`. Lint + tsc + build ✓. |
 | Inicial | 1.0.0  | Scaffold Next.js 14 + TS + Tailwind + shadcn; rotas `/admin` (sidebar + dashboard + placeholders) e `/staff` (mobile-first com cartões de tarefas); mock data. Build validado. |
 | v1.1.0  | 1.1.0  | Ecrã de Detalhe da Tarefa (`/staff/tarefas/[id]`): checklist interativa gerada de array, textarea de observações, botão "Concluir Tarefa" desativado até todas as checkboxes marcadas (React State). Componentes UI Checkbox e Textarea. TaskCard agora abre o detalhe via Link. |

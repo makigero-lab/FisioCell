@@ -216,6 +216,45 @@ export interface UtilizadorDTO {
 
 export type TipoAusencia = "ferias" | "folga";
 
+// F2 — Paciente
+export interface PacienteDTO {
+  _id: string;
+  empresa_id: string;
+  nome: string;
+  data_nascimento: string | null;
+  genero: "M" | "F" | "Outro" | "NA";
+  num_utente: string;
+  nif?: string;
+  telefone: string;
+  email: string;
+  morada?: string;
+  // Campos clínicos — só presentes se dados_clinicos=true (isClinico)
+  contacto_emergencia?: {
+    nome: string;
+    telefone: string;
+    relacao: string;
+  };
+  historico_medico?: string;
+  alergias?: string[];
+  consentimento_dados: {
+    concedido: boolean;
+    data: string | null;
+    versao_termos: string;
+  };
+  ativo: boolean;
+  eliminado_em?: string | null;
+  observacoes?: string;
+  origem: "walk_in" | "referenciacao" | "online" | "outro";
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface PacienteListResponse {
+  pacientes: PacienteDTO[];
+  total: number;
+  dados_clinicos: boolean;
+}
+
 export interface AusenciaDTO {
   _id: string;
   utilizador_id: string;

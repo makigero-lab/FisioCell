@@ -31,6 +31,7 @@ backend/
 │   ├── adminController.js    # Painel de Administração + setup Cliente Zero
 │   ├── authController.js     # Autenticação: login (JWT) + /me
 │   ├── gestorController.js   # Painel do Gestor (dashboard, tarefas, equipa)
+│   ├── pacienteController.js # CRUD de Pacientes (F2) — permissões por role + sanitização de dados clínicos
 │   ├── staffController.js    # Painel do Staff
 │   ├── tarefaController.js   # CRUD de tarefas + atribuição manual
 │   ├── ausenciaController.js # Ausências (folgas/férias)
@@ -46,7 +47,8 @@ backend/
 │   ├── Propriedade.js        #   Alojamento (será migrado para Sala em F3)
 │   ├── Utilizador.js         #   Admin / Staff de uma empresa (email + password_hash)
 │   ├── Ausencia.js           #   Indisponibilidade de Staff num dia
-│   └── Tarefa.js             #   Tarefa de limpeza (será migrada para Consulta em F4)
+│   ├── Tarefa.js             #   Tarefa de limpeza (será migrada para Consulta em F4)
+│   └── Paciente.js           #   Paciente da clínica (F2) — soft delete + dados clínicos sanitizados
 ├── utils/
 │   ├── loadBalancer.js       # Motor de atribuição (extraído do webhook em F0)
 │   ├── geocoding.js          # Geocoding de moradas (Nominatim)
@@ -59,6 +61,7 @@ backend/
 └── routes/
     ├── adminRoutes.js        # Rotas /api/admin/*
     ├── gestorRoutes.js       # Rotas /api/gestor/*
+    ├── pacienteRoutes.js     # Rotas /api/gestor/pacientes/* (F2)
     ├── staffRoutes.js        # Rotas /api/staff/*
     ├── authRoutes.js         # POST /api/auth/login, GET /api/auth/me
     ├── ausenciaRoutes.js     # Rotas de ausências
@@ -88,7 +91,7 @@ O fluxo de arranque segue uma sequência segura:
 
 ## 3.1. Modelos de dados (Mongoose)
 
-O sistema gira em torno de 5 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
+O sistema gira em torno de 6 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
 
 ### `Empresa`
 Entidade principal do SaaS (multi-tenant). Cada empresa agrupa Propriedades e Utilizadores.
@@ -218,6 +221,46 @@ Tarefa de limpeza. **F0:** o campo `smoobu_reserva_id` foi removido. Será migra
 | `detalhes_reserva`      | Object   | **Prompt 92 (Fase 1.5)** — snapshot da reserva. Sub-campos: `checkin` (String), `checkout` (String), `pax` (Number), `nome_hospede` (String). |
 
 > Nota: `empresa_id` é uma referência a `Empresa` (modelo criado na v1.2.0).
+
+### `Paciente`
+Paciente de uma clínica (empresa). **F2** — novo modelo do domínio Fisioterapia.
+
+> **F2:** O `Paciente` é uma entidade **separada** do `Utilizador` — pacientes não fazem login (não têm JWT nem `password_hash`). Soft delete via `eliminado_em` para preservar histórico clínico (RGPD: direito ao esquecimento vs. integridade referencial de consultas/notas históricas). Os campos clínicos (`historico_medico`, `alergias`, `contacto_emergencia`) só são devolvidos a `isClinico` (admin/diretor_clinico/fisioterapeuta); a `rececionista` recebe uma versão sanitizada (ver `pacienteController.sanitizarParaNaoClinico`).
+
+| Campo                   | Tipo     | Notas                                                              |
+|-------------------------|----------|--------------------------------------------------------------------|
+| `empresa_id`            | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
+| `nome`                  | String   | Obrigatório, trim, indexado.                                       |
+| `data_nascimento`       | Date     | Default `null`, indexado. Não pode ser futura (validado no controller). |
+| `genero`                | String   | `enum: ['M','F','Outro','NA']`, default `'NA'`.                    |
+| `num_utente`            | String   | Nº de Utente de Saúde (SNS). Default `''`, trim, indexado. Para futuras integrações com Saúde 24. |
+| `nif`                   | String   | Default `''`, trim.                                                |
+| `telefone`              | String   | Obrigatório, trim. Único contacto obrigatório.                    |
+| `email`                 | String   | Default `''`, lowercase, trim.                                     |
+| `morada`                | String   | Default `''`, trim.                                                |
+| `contacto_emergencia`   | Object   | Sub-documento `{ nome, telefone, relacao }` (todos default `''`). **Dado clínico** — sanitizado para rececionista. |
+| `historico_medico`      | String   | Default `''`. Histórico clínico relevante (patologias, medicação). **Dado clínico** — sanitizado para rececionista. |
+| `alergias`              | [String] | Default `[]`. **Dado clínico** — sanitizado para rececionista.     |
+| `consentimento_dados`   | Object   | Sub-documento RGPD (ver tabela abaixo).                            |
+| `ativo`                 | Boolean  | Default `true`, indexado. `false` = paciente inativo (alta/férias clínicas) mas não eliminado. |
+| `eliminado_em`          | Date     | Default `null`, indexado. **Soft delete** (RGPD: preserva histórico). |
+| `observacoes`           | String   | Default `''`, trim. Notas administrativas livres.                  |
+| `origem`                | String   | `enum: ['walk_in','referenciacao','online','outro']`, default `'walk_in'`. |
+
+#### `consentimento_dados` (sub-documento) — F2
+
+| Campo            | Tipo    | Notas                                                              |
+|------------------|---------|--------------------------------------------------------------------|
+| `concedido`      | Boolean | Default `false`. `true` = paciente consentiu o tratamento de dados. |
+| `data`           | Date    | Default `null`. Preenchida com `new Date()` quando `concedido: true`. |
+| `versao_termos`  | String  | Default `'1.0'`. Versão dos termos consentidos.                    |
+
+**Índices compostos:**
+- `{ empresa_id: 1, nome: 1 }` — listagem ordenada por nome.
+- `{ empresa_id: 1, num_utente: 1 }` — procura por SNS.
+- `{ empresa_id: 1, ativo: 1, eliminado_em: 1 }` — listagem de pacientes ativos (query mais frequente).
+
+> **Permissões (F2):** o controller `pacienteController` exporta o helper `temAcessoClinico(req)` (true para admin/diretor_clinico/fisioterapeuta) e `sanitizarParaNaoClinico(p)` (remove `historico_medico`, `alergias` e `contacto_emergencia`). Todas as respostas incluem a flag `dados_clinicos: boolean` para o frontend saber se pode mostrar os campos clínicos. As rotas usam um middleware custom `podeVer` (todos os 4 roles) para GET/POST/PUT, `isRececionista` para `PATCH /:id/estado` e `isDiretorClinico` para `DELETE /:id` (soft delete).
 
 ---
 
@@ -689,6 +732,109 @@ As ações diretas do admin (falta súbita, baixa prolongada, registo manual) cr
 
 ---
 
+### 6.12. Pacientes (`/api/gestor/pacientes`) — F2
+
+> **Auth:** JWT (strito, sem fallback legacy). Todas as rotas protegidas por `auth` (em `pacienteRoutes.js`).
+>
+> **Permissões (F2):**
+> - `podeVer` (middleware custom) — todos os 4 roles (`admin`, `diretor_clinico`, `fisioterapeuta`, `rececionista`) podem aceder a GET (listar/obter), POST (criar) e PUT (atualizar). Como o Express não tem middleware "OR" nativo entre `isClinico` e `isRececionista`, define-se um `podeVer` inline que valida `req.user.role` contra o conjunto dos 4 roles.
+> - `isRececionista` (admin + diretor_clinico + rececionista) — `PATCH /:id/estado` (alternar ativo). O fisioterapeuta **não** pode alterar o estado do paciente.
+> - `isDiretorClinico` (admin + diretor_clinico) — `DELETE /:id` (soft delete). Só o diretor clínico/admin podem eliminar pacientes (RGPD).
+>
+> **Sanitização de dados clínicos:** o controller `pacienteController` decide consoante a role quais os campos a devolver:
+> - `temAcessoClinico(req)` → `true` para admin/diretor_clinico/fisioterapeuta → devolve `historico_medico`, `alergias` e `contacto_emergencia`.
+> - Rececionista → `sanitizarParaNaoClinico(p)` remove esses 3 campos da resposta.
+> - Todas as respostas incluem a flag `dados_clinicos: boolean` para o frontend saber se pode mostrar os campos clínicos.
+>
+> **Nota F2:** o filtro "fisioterapeuta vê só os seus pacientes" será implementado em F4 (Consulta com `paciente_id` + `fisioterapeuta_id`). Por agora, todos os clínicos vêem todos os pacientes ativos da empresa.
+
+#### `GET /api/gestor/pacientes`
+Lista pacientes da empresa do utilizador autenticado (exclui soft-deleted).
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Query params (opcionais):**
+  - `busca` — filtra por `nome`, `num_utente`, `telefone` ou `email` (regex case-insensitive, com escape de caracteres especiais para evitar injeção).
+  - `ativo` — `'true'`/`'false'` filtra por `ativo`.
+  - `limit` — default `200`, máx `500`.
+- **Resposta (200 OK):**
+```json
+{
+  "pacientes": [ { "_id": "...", "nome": "...", "telefone": "...", "ativo": true, ... } ],
+  "total": 42,
+  "dados_clinicos": true
+}
+```
+  - `dados_clinicos: true` para isClinico (resposta com `historico_medico`/`alergias`/`contacto_emergencia`); `false` para rececionista (versão sanitizada).
+- **Erros:** `401` não autenticado; `403` role sem permissão; `500` erro interno.
+
+#### `GET /api/gestor/pacientes/:id`
+Devolve o detalhe de um paciente.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Resposta (200 OK):** `{ "paciente": { ... }, "dados_clinicos": boolean }`.
+- **Erros:** `400` ID inválido; `401` não autenticado; `404` não encontrado / não pertence à empresa / eliminado; `500` erro.
+
+#### `POST /api/gestor/pacientes`
+Cria um novo paciente na empresa do utilizador autenticado.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Body:**
+```json
+{
+  "nome": "Ana Silva",
+  "telefone": "912345678",
+  "data_nascimento": "1990-05-12",
+  "genero": "F",
+  "num_utente": "123456789",
+  "nif": "123456789",
+  "email": "ana.silva@email.pt",
+  "morada": "Rua das Flores, 12, Lisboa",
+  "contacto_emergencia": { "nome": "Rui Silva", "telefone": "913000000", "relacao": "Cônjuge" },
+  "historico_medico": "Lombalgia crónica (2022).",
+  "alergias": ["Penicilina", "Látex"],
+  "consentimento_dados": { "concedido": true, "versao_termos": "1.0" },
+  "observacoes": "Prefere consultas matinais.",
+  "origem": "walk_in"
+}
+```
+  - `nome` (obrigatório), `telefone` (obrigatório).
+  - `genero` — `enum: ['M','F','Outro','NA']`.
+  - `origem` — `enum: ['walk_in','referenciacao','online','outro']`.
+  - `data_nascimento` — não pode ser futura.
+  - **Campos clínicos** (`contacto_emergencia`, `historico_medico`, `alergias`) — só `isClinico` os pode definir; se a rececionista os enviar, são **ignorados**.
+- **Resposta (201 Created):** `{ "paciente": { ... }, "dados_clinicos": boolean }` (sanitizada para rececionista).
+- **Auditoria:** registada via `utils/auditoria.js` (`acao: 'criar'`, `recurso: 'paciente'`).
+- **Erros:** `400` campos em falta / enums inválidos / `data_nascimento` futura; `401` não autenticado; `500` erro.
+
+#### `PUT /api/gestor/pacientes/:id`
+Atualiza um paciente existente.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Body (todos opcionais, mas pelo menos um):** qualquer campo do modelo exceto `empresa_id`. `ativo` também pode ser alternado aqui (além do `PATCH /:id/estado`).
+  - **Regras:** `nome` e `telefone` não podem ficar vazios. `data_nascimento` não pode ser futura. `genero` e `origem` validados contra os enums.
+  - **Campos clínicos** — só `isClinico` os pode editar; se a rececionista os enviar, são **ignorados**.
+- **Resposta (200 OK):** `{ "paciente": { ... }, "dados_clinicos": boolean }` (sanitizada para rececionista).
+- **Auditoria:** registada (`acao: 'atualizar'`).
+- **Erros:** `400` ID inválido / campos vazios / enums inválidos; `401` não autenticado; `404` não encontrado; `500` erro.
+
+#### `PATCH /api/gestor/pacientes/:id/estado`
+Alterna o estado `ativo` do paciente (ativa ↔ desativa). Útil para pacientes que receberam alta mas podem voltar.
+
+- **Auth:** JWT + `isRececionista` (admin + diretor_clinico + rececionista). O fisioterapeuta **não** tem acesso.
+- **Body (opcional):** `{ "ativo": true }` — se não vier, alterna o estado atual.
+- **Resposta (200 OK):** `{ "message": "Paciente ativado." | "Paciente desativado.", "paciente": { "_id", "nome", "ativo" } }`.
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` role sem permissão; `404` não encontrado; `500` erro.
+
+#### `DELETE /api/gestor/pacientes/:id` (soft delete)
+**Soft delete** do paciente — marca `eliminado_em = now()` e `ativo = false` (RGPD: preserva histórico).
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico). Só o diretor clínico/admin podem eliminar pacientes.
+- **Resposta (200 OK):** `{ "message": "Paciente \"X\" eliminado.", "paciente": { "_id", "eliminado_em" } }`.
+- **Auditoria:** registada (`acao: 'soft-delete'`).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` role sem permissão; `404` não encontrado; `500` erro.
+
+---
+
 ## 7. Deploy no Render
 
 | Definição        | Valor                        |
@@ -720,6 +866,7 @@ As ações diretas do admin (falta súbita, baixa prolongada, registo manual) cr
 
 | Data       | Versão | Alteração                                                            |
 |------------|--------|----------------------------------------------------------------------|
+| **F2**     | —      | **Pacientes (Fisioterapia):** (1) Novo modelo `models/Paciente.js` — `empresa_id`, `nome`, `data_nascimento`, `genero` (`enum ['M','F','Outro','NA']` default `'NA'`), `num_utente` (SNS), `nif`, `telefone` (obrigatório), `email`, `morada`, `contacto_emergencia` (`{nome, telefone, relacao}`), `historico_medico`, `alergias` (`[String]`), `consentimento_dados` (`{concedido, data, versao_termos}`), `ativo`, `eliminado_em` (soft delete), `observacoes`, `origem` (`enum ['walk_in','referenciacao','online','outro']` default `'walk_in'`). Índices compostos `{empresa_id, nome}`, `{empresa_id, num_utente}`, `{empresa_id, ativo, eliminado_em}`. (2) Novo `controllers/pacienteController.js` — CRUD completo (`listarPacientes`, `obterPaciente`, `criarPaciente`, `atualizarPaciente`, `eliminarPaciente` soft delete, `alternarEstadoPaciente`) + helpers `temAcessoClinico` e `sanitizarParaNaoClinico` (remove `historico_medico`/`alergias`/`contacto_emergencia` para rececionistas) + auditoria via `utils/auditoria.js`. (3) Novas `routes/pacienteRoutes.js` montadas em `/api/gestor/pacientes` — middleware custom `podeVer` (4 roles) para GET/POST/PUT, `isRececionista` para `PATCH /:id/estado`, `isDiretorClinico` para `DELETE /:id` (soft delete). (4) `server.js` — mount `app.use('/api/gestor/pacientes', pacienteRoutes)`. Respostas incluem flag `dados_clinicos: boolean`. 130/130 testes ✓ (+19 testes de Paciente). |
 | **F1**     | —      | **Migração de roles (Fisioterapia):** (1) Modelo `Utilizador` — enum migrado de `['admin','manager','staff']` para `['admin','diretor_clinico','fisioterapeuta','rececionista']` (default `'rececionista'`); adicionado bloco `perfil_profissional` (`cedula`, `especialidades`, `biografia`, `cor_calendario` default `'#3b82f6'`, `ativo_clinico` default `true`). (2) Modelo `Empresa` — adicionado `logo_url` e bloco `config` (`horario_padrao`, `duracao_consulta_padrao` default `45`/min `15`, `tolerancia_atraso_min` default `10`, `fuso_horario` default `'Europe/Lisbon'`). (3) `middleware/requireRole.js` — removidos `isGestor`/`requireStaff`/`requireManager`/`requireAdmin` (legacy); adicionados `isAdmin` (só admin), `isDiretorClinico` (admin+diretor_clinico), `isClinico` (admin+diretor_clinico+fisioterapeuta), `isRececionista` (admin+diretor_clinico+rececionista). (4) `utils/loadBalancer.js` + controllers — queries de role: `'staff'` → `'fisioterapeuta'`; `'gestor'` → `'diretor_clinico'`; `['staff','gestor']` → `['fisioterapeuta','diretor_clinico']`; `isGestor` → `isDiretorClinico` em todas as routes (`gestorRoutes.js`, `ausenciaRoutes.js`). (5) `setupClienteZero` atualizado: 3 utilizadores (`admin@fisiocell.pt` admin, `gestor@fisiocell.pt` diretor_clinico, `joao.fisio@fisiocell.pt` fisioterapeuta). 111/111 testes ✓. |
 | Inicial    | 1.0.0  | Criação da estrutura base: `package.json`, `server.js`, `.env.example`, `.gitignore`. Ligação ao MongoDB e rota de teste `GET /`. |
 | v1.1.0     | 1.1.0  | Lógica central: modelos `Propriedade`, `Utilizador`, `Ausencia`, `Tarefa`; `controllers/webhookController.js` (fluxo estrito de atribuição com filtro de ausências + load balancing); `routes/webhookRoutes.js` (`POST /webhooks/smoobu`); resposta 200 imediata + processamento assíncrono; tratamento de erros robusto. |
