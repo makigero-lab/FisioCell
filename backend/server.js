@@ -1,5 +1,5 @@
 /**
- * Autocell - API de gestão para Alojamento Local
+ * FisioCell - API de gestão para Clínicas de Fisioterapia
  * Ponto de entrada da aplicação backend (Express + MongoDB).
  *
  * Variáveis de ambiente (ver .env.example):
@@ -8,13 +8,13 @@
  *   - JWT_SECRET         — segredo de assinatura dos JWT (obrigatória)
  *   - JWT_EXPIRACAO      — expiração do JWT (default "7d")
  *   - FRONTEND_URL       — origem permitida para CORS (default localhost:3000)
- *   - SMOOBU_API_KEY     — API Key do Smoobu para sincronização em massa
- *                          (POST /api/admin/smoobu/sincronizar). Opcional:
- *                          sem ela, a sincronização devolve 400.
  *   - VAPID_PUBLIC_KEY   — Chave pública VAPID para Web Push (notificações push)
  *   - VAPID_PRIVATE_KEY  — Chave privada VAPID (assina as notificações)
- *   - VAPID_SUBJECT      — Identificador do emissor (mailto:admin@autocell.com)
+ *   - VAPID_SUBJECT      — Identificador do emissor (mailto:admin@fisiocell.com)
  *                          Gerar com: npx web-push generate-vapid-keys
+ *
+ * F0 — A integração Smoobu foi removida. O motor de atribuição (load
+ * balancer) foi extraído para utils/loadBalancer.js.
  *
  * NOTA: a instância `app` é exportada (module.exports) para poder ser
  * usada nos testes com supertest SEM iniciar o servidor HTTP nem ligar
@@ -29,7 +29,6 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 
-const webhookRoutes = require('./routes/webhookRoutes');
 const gestorRoutes = require('./routes/gestorRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const authRoutes = require('./routes/authRoutes');
@@ -70,7 +69,6 @@ app.use(
 app.use(express.json());
 
 // Rate limiting global: 100 pedidos por IP a cada 15 minutos.
-// Não se aplica ao webhook do Smoobu (que tem o seu próprio padrão).
 // Em ambiente de teste (Jest) o limite é desativado para não bloquear
 // os testes de integração que fazem centenas de pedidos seguidos.
 const globalLimiter = rateLimit({
@@ -98,11 +96,8 @@ app.get('/api/health', async (req, res) => {
 
 // Rota de teste para confirmar que a API está online.
 app.get('/', (req, res) => {
-  res.json({ status: 'API do Alojamento Local online e ligada à BD!' });
+  res.json({ status: 'API do FisioCell online e ligada à BD!' });
 });
-
-// Webhooks de integrações externas (Smoobu, etc.).
-app.use('/webhooks', webhookRoutes);
 
 // Autenticação (login público + /me protegido).
 app.use('/api/auth', authRoutes);

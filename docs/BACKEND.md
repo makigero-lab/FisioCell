@@ -1,6 +1,8 @@
-# Documentação Técnica — Backend (Autocell)
+# Documentação Técnica — Backend (FisioCell)
 
-API REST do SaaS de gestão para Alojamento Local, construída com **Node.js**, **Express** e **MongoDB** (via **Mongoose**).
+> ⚠️ **F0 — Documentação em transição.** O projeto está a migrar de Alojamento Local para Fisioterapia. A integração Smoobu foi removida. Os modelos `Tarefa`/`Propriedade` serão transformados em `Consulta`/`Sala` nas próximas fases (ver [`docs/ARQUITETURA.md`](ARQUITETURA.md) para o roadmap completo F0–F9).
+
+API REST do SaaS de gestão para Fisioterapia, construída com **Node.js**, **Express** e **MongoDB** (via **Mongoose**).
 
 ---
 
@@ -26,21 +28,40 @@ backend/
 ├── .env.example              # Modelo das variáveis de ambiente (a copiar para .env)
 ├── .gitignore                # Ignora node_modules, .env, logs, etc.
 ├── controllers/
-│   ├── webhookController.js  # Webhook do Smoobu: atribuição de tarefas (lógica central)
 │   ├── adminController.js    # Painel de Administração + setup Cliente Zero
-│   └── authController.js     # Autenticação: login (JWT) + /me
+│   ├── authController.js     # Autenticação: login (JWT) + /me
+│   ├── gestorController.js   # Painel do Gestor (dashboard, tarefas, equipa)
+│   ├── staffController.js    # Painel do Staff
+│   ├── tarefaController.js   # CRUD de tarefas + atribuição manual
+│   ├── ausenciaController.js # Ausências (folgas/férias)
+│   ├── superAdminController.js # Gestão cross-tenant de empresas
+│   ├── relatorioController.js # Relatórios/analytics
+│   ├── checklistController.js # Modelos de checklist
+│   └── notificacaoController.js # Notificações in-app
 ├── middleware/
 │   └── auth.js               # Verifica JWT (strito), injeta req.user — sem fallback legacy
 ├── models/                   # Modelos Mongoose (ODM do MongoDB)
 │   ├── Empresa.js            #   Entidade principal (multi-tenant)
-│   ├── Propriedade.js        #   Alojamento sincronizado com o Smoobu
+│   ├── Propriedade.js        #   Alojamento (será migrado para Sala em F3)
 │   ├── Utilizador.js         #   Admin / Staff de uma empresa (email + password_hash)
 │   ├── Ausencia.js           #   Indisponibilidade de Staff num dia
-│   └── Tarefa.js             #   Tarefa de limpeza gerada por reserva
+│   └── Tarefa.js             #   Tarefa de limpeza (será migrada para Consulta em F4)
+├── utils/
+│   ├── loadBalancer.js       # Motor de atribuição (extraído do webhook em F0)
+│   ├── geocoding.js          # Geocoding de moradas (Nominatim)
+│   ├── scheduler.js          # Scheduler sequencial de horas
+│   ├── disponibilidade.js    # Filtros de ausência/folga
+│   ├── distancia.js          # Haversine (tempo de viagem)
+│   ├── notificar.js          # Notificações in-app + push
+│   ├── push.js               # Web Push (VAPID)
+│   └── auditoria.js          # Registo de auditoria
 └── routes/
-    ├── webhookRoutes.js      # POST /webhooks/smoobu
-    ├── adminRoutes.js        # GET/POST /api/admin/propriedades, GET /api/admin/setup
-    └── authRoutes.js         # POST /api/auth/login, GET /api/auth/me
+    ├── adminRoutes.js        # Rotas /api/admin/*
+    ├── gestorRoutes.js       # Rotas /api/gestor/*
+    ├── staffRoutes.js        # Rotas /api/staff/*
+    ├── authRoutes.js         # POST /api/auth/login, GET /api/auth/me
+    ├── ausenciaRoutes.js     # Rotas de ausências
+    └── relatorioRoutes.js    # Rotas de relatórios
 ```
 
 ---
@@ -54,7 +75,7 @@ O fluxo de arranque segue uma sequência segura:
 3. **Middlewares:**
    - `cors()` — habilita respostas a pedidos vindos de outras origens (essencial para o frontend na Vercel comunicar com a API no Render).
    - `express.json()` — faz parse do corpo dos pedidos em JSON, disponibilizando-os em `req.body`.
-4. **Rotas** — `GET /` (healthcheck), montagem de `/webhooks` e `/api/admin` (ver secção 6).
+4. **Rotas** — `GET /` (healthcheck), montagem de `/api/admin`, `/api/gestor`, `/api/staff`, `/api/auth` (ver secção 6).
 5. **Ligação ao MongoDB** — `mongoose.connect(process.env.MONGODB_URI)`.
    - Em **caso de sucesso**: regista mensagem e **só depois** arranca o servidor HTTP com `app.listen(PORT)`. Isto garante que a API só recebe tráfego quando a base de dados está acessível.
    - Em **caso de erro**: regista o erro e termina o processo (`process.exit(1)`), evitando arrancar um servidor sem acesso à BD.
@@ -71,27 +92,31 @@ O sistema gira em torno de 5 coleções. Todas usam `timestamps: true` (createdA
 ### `Empresa`
 Entidade principal do SaaS (multi-tenant). Cada empresa agrupa Propriedades e Utilizadores.
 
+> **F0:** Os campos `morada`, `telefone`, `email` foram adicionados (substituem o antigo `smoobu_api_key`).
+
 | Campo         | Tipo    | Notas                                              |
 |---------------|---------|----------------------------------------------------|
 | `nome`        | String  | Obrigatório, trim, indexado.                       |
 | `nif`         | String  | Opcional, trim.                                    |
+| `morada`      | String  | Opcional, trim. Morada da clínica (F0).            |
+| `telefone`    | String  | Opcional, trim. Telefone da clínica (F0).          |
+| `email`       | String  | Opcional, trim. Email de contacto da clínica (F0). |
 | `plano_ativo` | Boolean | Default `true`.                                    |
 
 ### `Propriedade`
-Representa um alojamento sincronizado com o Smoobu.
+Representa um alojamento. **F0:** o campo `smoobu_id` foi removido. Será migrado para `Sala` em F3.
 
 | Campo                        | Tipo     | Notas                                                              |
 |------------------------------|----------|--------------------------------------------------------------------|
-| `smoobu_id`                  | String   | Único, indexado. ID do apartment no Smoobu (cruzamento webhook).   |
 | `nome`                       | String   | Obrigatório, trim.                                                 |
 | `morada`                     | String   | Obrigatório, trim. Geocoding automático (Nominatim) ao criar/editar. |
 | `coordenadas`                | Object   | `{ lat: Number, lng: Number }`. Preenchidas via geocoding (default null). |
 | `empresa_id`                 | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
-| `tempo_limpeza_minutos`      | Number   | Default `45`, `min: 0`. Usado se o payload do Smoobu não trouxer valor. |
-| `ativo`                      | Boolean  | Default `true`. Inativas são ignoradas pelo webhook.               |
+| `tempo_limpeza_minutos`      | Number   | Default `45`, `min: 0`. Unidade de carga.                          |
+| `ativo`                      | Boolean  | Default `true`.                                                    |
 | `checklist`                  | [String] | Default `[]`. Itens de limpeza definidos pelo gestor (v1.34.0).    |
-| `capacidade_hospedes`        | Number   | Default `null`, `min: 0`. Vinda do Smoobu (v1.61.0 / Prompt 84).   |
-| `funcionario_preferencial_id`| ObjectId | `ref: 'Utilizador'`, default `null`, indexado. **Prompt 92 (Fase 1.5)** — staff preferencial da propriedade; a lógica de prioridade no load balancer será ativada num prompt seguinte. |
+| `capacidade_hospedes`        | Number   | Default `null`, `min: 0`. Capacidade (v1.61.0 / Prompt 84).        |
+| `funcionario_preferencial_id`| ObjectId | `ref: 'Utilizador'`, default `null`, indexado. **Prompt 92 (Fase 1.5)** — staff preferencial da propriedade. |
 
 ### `Utilizador`
 Admin, Manager ou Staff de uma empresa. Credenciais de login (email + password_hash).
@@ -109,7 +134,7 @@ Admin, Manager ou Staff de uma empresa. Credenciais de login (email + password_h
 | `empresa_id`     | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
 | `role`           | String   | `enum: ['admin','manager','staff']`, default `'staff'`.           |
 | `responsavel_id` | ObjectId | `ref: 'Utilizador'`, default `null`. Superior hierárquico (admin/manager). O admin não tem responsavel_id (topo da hierarquia). Indexado. |
-| `ativo`          | Boolean  | Default `true`. Utilizador inativo é ignorado pelo webhook e pelo login. |
+| `ativo`          | Boolean  | Default `true`. Utilizador inativo é ignorado pelo login.         |
 
 > **Regras de segurança (v1.7.0):** não é possível criar/editar utilizadores com role `admin` via `/api/admin/equipa` (403). Não é possível editar/eliminar/desativar utilizadores que já sejam `admin` (403 "Não é possível modificar um administrador"). O `responsavel_id` tem de ser um admin/manager da mesma empresa (validado no backend).
 
@@ -129,18 +154,17 @@ Indisponibilidade (férias/folga) de um Staff num intervalo de datas. Todas as d
 
 Índice único composto `{ utilizador_id, data_inicio }` → evita duplicar o mesmo início para o mesmo utilizador. A validação de **sobreposição de intervalos** é feita no controller (mensagem clara de 409).
 
-> **v1.8.0:** o modelo passou de dia único (`data`) para intervalos (`data_inicio`/`data_fim`) com `tipo` e `notas`. O webhook foi atualizado para verificar sobreposição de intervalos (mantém a query `data` legacy para retrocompatibilidade).
+> **v1.8.0:** o modelo passou de dia único (`data`) para intervalos (`data_inicio`/`data_fim`) com `tipo` e `notas`. A verificação de sobreposição de intervalos mantém a query `data` legacy para retrocompatibilidade.
 
 ### `Tarefa`
-Tarefa de limpeza gerada a partir de uma reserva do Smoobu.
+Tarefa de limpeza. **F0:** o campo `smoobu_reserva_id` foi removido. Será migrada para `Consulta` em F4.
 
 | Campo                   | Tipo     | Notas                                                              |
 |-------------------------|----------|--------------------------------------------------------------------|
 | `empresa_id`            | ObjectId | Obrigatório, indexado.                                             |
 | `propriedade_id`        | ObjectId | `ref: 'Propriedade'`. Obrigatório, indexado.                       |
-| `smoobu_reserva_id`     | String   | ID da reserva no Smoobu (auditoria / idempotência). Indexado.      |
 | `utilizador_id`         | ObjectId | `ref: 'Utilizador'`, **default `null`** → tarefa por atribuir.     |
-| `data`                  | Date     | Dia do check-in (meia-noite UTC). Obrigatório, indexado.           |
+| `data`                  | Date     | Dia da tarefa (meia-noite UTC). Obrigatório, indexado.             |
 | `tempo_limpeza_minutos` | Number   | Obrigatório, default `45`, `min: 0`. Unidade de carga.             |
 | `tipo`                  | String   | `enum: ['limpeza','check_in','check_out','manutencao','outro']`.   |
 | `estado`                | String   | `enum: ['por_atribuir','atribuida','em_curso','concluida','cancelada']`. |
@@ -150,33 +174,28 @@ Tarefa de limpeza gerada a partir de uma reserva do Smoobu.
 | `hora_conclusao`        | Date     | Timestamp preciso de conclusão (v1.34.0, auditoria). Default `null`. |
 | `avarias`               | [String] | Avarias reportadas pelo staff (v1.38.0). Default `[]`.             |
 | `checklist`             | [String] | Snapshot da checklist da propriedade na criação (v1.55.0 / Prompt 77). Default `[]`. |
-| `detalhes_reserva`      | Object   | **Prompt 92 (Fase 1.5)** — snapshot da reserva Smoobu. Sub-campos: `checkin` (String), `checkout` (String), `pax` (Number), `nome_hospede` (String). Preparado para Fase 1.5; o preenchimento via webhook/sincronização será feito num prompt seguinte. |
+| `detalhes_reserva`      | Object   | **Prompt 92 (Fase 1.5)** — snapshot da reserva. Sub-campos: `checkin` (String), `checkout` (String), `pax` (Number), `nome_hospede` (String). |
 
 > Nota: `empresa_id` é uma referência a `Empresa` (modelo criado na v1.2.0).
 
 ---
 
-## 3.2. Lógica central — Atribuição de tarefas (Webhook Smoobu)
+## 3.2. Lógica central — Atribuição de tarefas
 
-Quando o Smoobu notifica uma **nova reserva** (`POST /webhooks/smoobu`), a API executa o seguinte fluxo **estrito**:
+> **F0 — A integração Smoobu foi removida.** O motor de atribuição (load balancer) foi extraído para `utils/loadBalancer.js`. A lógica abaixo descreve o algoritmo que continua a ser usado pelos cron jobs (`caoGuarda`) e pela atribuição manual/reatribuição de tarefas. A criação automática de tarefas via webhook Smoobu foi descontinuada — na era Fisioterapia, as marcações de consultas serão criadas manualmente ou via motor de disponibilidade (F3–F4).
 
-1. **Receber o payload** — extrai o ID da propriedade, a data de check-in, o ID da reserva e os **detalhes da reserva** (checkin, checkout, pax, nome_hospede) do payload do Smoobu. **Mapeamento primário (estrutura oficial):** `payload.data.apartment.id`, `payload.data.arrival`, `payload.data.id`; `departure`, `guests`/`guestName` para os detalhes (Prompt 93). Fallbacks com `??` para variantes (`content.*`, campos achatados).
-2. **Encontrar a empresa** — procura a `Propriedade` por `smoobu_id` e obtém o respetivo `empresa_id`. Se não existir → erro (a tarefa não pode ser criada sem saber a empresa).
-3. **Procurar Staff** — lista todos os `Utilizador` com `role: 'staff'`, `ativo: true`, `eliminado_em: null` dessa empresa (v1.45.0: gestores já não recebem tarefas de limpeza).
-4. **Filtro de Ausências + Folgas** — exclui os Staff que tenham uma `Ausencia` **aprovada** que cubra o dia do check-in (`data_inicio <= dia AND data_fim >= dia`) e os Staff cujo dia da semana do check-in esteja no seu `dias_folga` (folgas fixas semanais).
-5. **Algoritmo VIP — Funcionário Preferencial (Prompt 93 / Fase 1.5)** — *antes* do load balancer geral, verifica se a propriedade tem `funcionario_preferencial_id`. Se tiver, e esse funcionário estiver **disponível** (passou os filtros de ausência + folga) e **dentro do SLA de 8h/dia** (`cargaLimpeza + tempoNovaTarefa ≤ CAPACIDADE_MAXIMA_MINUTOS` = 480 min), a tarefa é-lhe atribuída **obrigatoriamente**, ignorando o cálculo de distância/carga dos outros. Só se o preferencial não puder (folga/ausência/inativo ou excede o SLA) é que o sistema faz **fallback** para o load balancer geral.
-6. **Cálculo de Carga + Tempo de Viagem (Load Balancing geral)** — para cada Staff disponível, soma `tempo_limpeza_minutos` das tarefas já atribuídas nesse dia (excluindo `cancelada`/`concluida`) + tempo de viagem (Haversine entre a última tarefa do dia e a nova propriedade) + tempo da nova tarefa. Se a `carga_total > 480 min` (SLA de 8h), o utilizador é excluído (v1.15.0).
-7. **Atribuição** — a nova Tarefa é atribuída ao Staff com **menor `carga_total`** (empate → primeiro encontrado).
-8. **Sem disponíveis** — se não houver Staff disponível (ou a lógica de atribuição falhar), a Tarefa é **mesmo assim criada** com `utilizador_id: null` e `estado: 'por_atribuir'`, para o Admin atribuir manualmente.
-9. **Scheduler sequencial** — se a tarefa for atribuída, calcula a hora exata de início (11:00 por defeito; após a última tarefa do dia + viagem, com proteção de almoço 13h-14h). Guarda os **`detalhes_reserva`** (checkin, checkout, pax, nome_hospede) extraídos do payload (Prompt 93).
+O motor de atribuição (`utils/loadBalancer.js`) implementa o seguinte fluxo **estrito** quando precisa de escolher um utilizador para uma tarefa/consulta:
 
-> **Reação a ações do Smoobu (v1.19.0):** `newReservation` cria; `updateReservation` atualiza data/propriedade/tempo + `detalhes_reserva` (Prompt 93) e reavalia atribuição se a data mudou; `cancellation` cancela (respeita concluídas). Idempotente por `smoobu_reserva_id`.
-
-### Regra de resposta (anti-timeout)
-> O handler devolve **`200 OK` imediato** (`{ status: 'recebido' }`) **antes** de qualquer acesso à BD. O processamento das regras decorre de forma **assíncrona** (`setImmediate`), porque o Smoobu cancela pedidos demorados. Erros do processamento assíncrono são capturados em `try/catch` e registados (não propagam para o cliente).
+1. **Procurar Staff** — lista todos os `Utilizador` elegíveis (`ativo: true`, `eliminado_em: null`) da empresa (v1.45.0: gestores já não recebem tarefas de limpeza).
+2. **Filtro de Ausências + Folgas** — exclui os Staff que tenham uma `Ausencia` **aprovada** que cubra o dia (`data_inicio <= dia AND data_fim >= dia`) e os Staff cujo dia da semana esteja no seu `dias_folga` (folgas fixas semanais).
+3. **Algoritmo VIP — Funcionário Preferencial (Prompt 93 / Fase 1.5)** — *antes* do load balancer geral, verifica se a propriedade tem `funcionario_preferencial_id`. Se tiver, e esse funcionário estiver **disponível** (passou os filtros de ausência + folga) e **dentro do SLA de 8h/dia** (`cargaLimpeza + tempoNovaTarefa ≤ CAPACIDADE_MAXIMA_MINUTOS` = 480 min), a tarefa é-lhe atribuída **obrigatoriamente**, ignorando o cálculo de distância/carga dos outros. Só se o preferencial não puder (folga/ausência/inativo ou excede o SLA) é que o sistema faz **fallback** para o load balancer geral.
+4. **Cálculo de Carga + Tempo de Viagem (Load Balancing geral)** — para cada Staff disponível, soma `tempo_limpeza_minutos` das tarefas já atribuídas nesse dia (excluindo `cancelada`/`concluida`) + tempo de viagem (Haversine entre a última tarefa do dia e a nova propriedade) + tempo da nova tarefa. Se a `carga_total > 480 min` (SLA de 8h), o utilizador é excluído (v1.15.0).
+5. **Atribuição** — a tarefa é atribuída ao Staff com **menor `carga_total`** (empate → primeiro encontrado).
+6. **Sem disponíveis** — se não houver Staff disponível, a tarefa fica com `utilizador_id: null` e `estado: 'por_atribuir'`, para o gestor atribuir manualmente.
+7. **Scheduler sequencial** — se a tarefa for atribuída, calcula a hora exata de início (11:00 por defeito; após a última tarefa do dia + viagem, com proteção de almoço 13h-14h).
 
 ### Regra de robustez
-> A criação da Tarefa (passo 8) **nunca** é impedida por falhas na lógica de atribuição (passos 3–7): se algo falhar ao determinar o utilizador, a tarefa é criada com `utilizador_id: null` e o erro é registado. Apenas a falha nos passos 1–2 (payload inválido / propriedade inexistente) impede a criação, por serem pré-requisitos.
+> A criação da Tarefa **nunca** é impedida por falhas na lógica de atribuição: se algo falhar ao determinar o utilizador, a tarefa é criada com `utilizador_id: null` e o erro é registado.
 
 ---
 
@@ -196,7 +215,7 @@ Executa **duas fases** todos os dias às 18:00 (Europe/Lisbon):
 **FASE A — Auto-Atribuição de Emergência (Fail-Safe, Prompt 98):** corre **antes** dos alertas.
 1. Calcula o intervalo do dia **seguinte** (meia-noite UTC).
 2. Procura todas as `Tarefa` com `data` nesse intervalo, `estado: 'por_atribuir'` e `utilizador_id: null` (órfãs), com populate de `propriedade_id` (nome + coordenadas).
-3. Para cada tarefa órfã, invoca `determinarUtilizadorAtribuido` (load balancer: Algoritmo VIP + Haversine + SLA 8h) — o mesmo usado no webhook e na auto-atribuição manual.
+3. Para cada tarefa órfã, invoca `determinarUtilizadorAtribuido` (load balancer: Algoritmo VIP + Haversine + SLA 8h) — o mesmo usado na auto-atribuição manual.
 4. Se encontrar staff: recalcula a hora de início via scheduler sequencial (Haversine + almoço 13h-14h), atualiza a tarefa (`utilizador_id`, `estado: 'atribuida'`, nova `data`) e envia push `🧹 Nova Limpeza Atribuída` (fire-and-forget).
 5. Se não houver staff disponível: mantém `por_atribuir` (órfã).
 6. Devolve `{ encontradas, atribuidas, orfas }`.
@@ -272,38 +291,9 @@ Rota de verificação de estado (healthcheck).
 **Resposta (200 OK):**
 ```json
 {
-  "status": "API do Alojamento Local online e ligada à BD!"
+  "status": "API do FisioCell online e ligada à BD!"
 }
 ```
-
-### `POST /webhooks/smoobu`
-Recebe o webhook do Smoobu (nova reserva) e cria a respetiva Tarefa de limpeza, aplicando a lógica de atribuição descrita na secção 3.2.
-
-- **Resposta imediata (200 OK):** `{ "status": "recebido" }` — o processamento decorre em segundo plano.
-- **Payload esperado (estrutura OFICIAL do Smoobu — `data` + sub-objeto `apartment`):**
-
-  | Campo lido (prioritário) | Fallbacks | Uso |
-  |---|---|---|
-  | `payload.data.apartment.id` | `data.apartmentId` / `data.apartment_id` / `data.propertyId` / `data.property_id` / `content.apartmentId` / `content.property_id` / `content.propriedade_id` | Identifica a propriedade no Smoobu |
-  | `payload.data.arrival` | `data.check_in` / `data.checkIn` / `data.data_check_in` / `data.startDate` / `content.arrival` / `content.startDate` | Data de check-in (dia da tarefa) |
-  | `payload.data.id` | `data.reservationId` / `data.reservation_id` / `content.id` / `content.reservation_id` | ID da reserva (auditoria) |
-  | — | `content.tempo_limpeza_minutos` / `content.cleaning_minutes` | (Opcional) sobrepõe-se ao default da propriedade |
-
-- **Exemplo de payload Smoobu (estrutura oficial documentada):**
-```json
-{
-  "action": "newReservation",
-  "data": {
-    "id": 292,
-    "arrival": "2024-07-15",
-    "apartment": {
-      "id": 38,
-      "name": "Apartment 1"
-    }
-  }
-}
-```
-- **Resultado (assíncrono):** é criado um documento `Tarefa` com `utilizador_id` preenchido (Staff com menor carga) ou `null` (sem disponíveis / erro). O resultado é registado nos logs do servidor.
 
 ### 6.1. Painel de Administração (`/api/admin`)
 
@@ -320,7 +310,7 @@ Devolve as propriedades da empresa (ordenadas por `nome`).
 ```json
 {
   "propriedades": [
-    { "_id": "...", "smoobu_id": "99999", "nome": "Casa Teste", "empresa_id": "...", "tempo_limpeza_minutos": 60, "ativo": true, "createdAt": "...", "updatedAt": "..." }
+    { "_id": "...", "nome": "Casa Teste", "empresa_id": "...", "tempo_limpeza_minutos": 60, "ativo": true, "createdAt": "...", "updatedAt": "..." }
   ]
 }
 ```
@@ -333,16 +323,14 @@ Cria uma propriedade para a empresa.
 - **Body:**
 ```json
 {
-  "smoobu_id": "99999",
   "nome": "Casa Teste",
   "tempo_limpeza_minutos": 60
 }
 ```
-  - `smoobu_id` (obrigatório, único global) — ID do apartment no Smoobu.
   - `nome` (obrigatório).
   - `tempo_limpeza_minutos` (opcional, default `60`, tem de ser `>= 0`).
 - **Resposta (201 Created):** `{ "propriedade": { ... } }`
-- **Erros:** `400` campos em falta / `tempo_limpeza_minutos` inválido; `401` não autenticado; `409` se `smoobu_id` já existir; `500` erro interno.
+- **Erros:** `400` campos em falta / `tempo_limpeza_minutos` inválido; `401` não autenticado; `500` erro interno.
 
 #### `GET /api/admin/equipa`
 Lista todos os utilizadores da empresa (qualquer role), ordenados por `nome`.
@@ -352,7 +340,7 @@ Lista todos os utilizadores da empresa (qualquer role), ordenados por `nome`.
 ```json
 {
   "utilizadores": [
-    { "_id": "...", "nome": "João Limpezas", "email": "joao.limpezas@autocell.pt", "empresa_id": "...", "role": "staff", "ativo": true, "createdAt": "...", "updatedAt": "..." }
+    { "_id": "...", "nome": "João Limpezas", "email": "joao.limpezas@fisiocell.pt", "empresa_id": "...", "role": "staff", "ativo": true, "createdAt": "...", "updatedAt": "..." }
   ]
 }
 ```
@@ -367,7 +355,7 @@ Cria um novo membro de equipa (Utilizador) para a empresa.
 ```json
 {
   "nome": "Maria Ferreira",
-  "email": "maria.ferreira@autocell.pt",
+  "email": "maria.ferreira@fisiocell.pt",
   "password": "segredo123",
   "role": "staff"
 }
@@ -417,30 +405,30 @@ Remove permanentemente o utilizador da base de dados.
 #### `GET /api/admin/setup`  *(PÚBLICO — sem auth)*
 **Bootstrap do “Cliente Zero”** — cria dados iniciais para testes (idempotente):
 
-- 1 **Empresa** «O Meu Alojamento Local» (procura por `nome`).
+- 1 **Empresa** «Clínica FisioCell Teste» (procura por `nome`).
 - 3 **Utilizadores** (procura por `email` único), cada um com `password_hash` bcrypt:
-  - `admin@autocell.pt` (admin — dono da conta)
-  - `manager@autocell.pt` (manager — responsável de limpezas)
-  - `joao.limpezas@autocell.pt` (staff — executante de limpezas)
-- 1 **Propriedade** «Casa Teste» (`smoobu_id: '99999'`).
+  - `admin@fisiocell.pt` (admin — dono da conta)
+  - `manager@fisiocell.pt` (manager — responsável de limpezas)
+  - `joao.limpezas@fisiocell.pt` (staff — executante de limpezas)
+- 1 **Propriedade** «Casa Teste».
 
 - **Resposta (200 OK):**
 ```json
 {
   "mensagem": "Cliente Zero criado com sucesso.",
   "empresa_id": "<ObjectId>",
-  "empresa":  { "id": "...", "nome": "O Meu Alojamento Local", "plano_ativo": true, "criada": true },
+  "empresa":  { "id": "...", "nome": "Clínica FisioCell Teste", "plano_ativo": true, "criada": true },
   "utilizadores": [
-    { "id": "...", "nome": "Gestor Autocell", "email": "admin@autocell.pt", "role": "admin", "criado": true, "password_definida": true, "credenciais_teste": { "email": "admin@autocell.pt", "password": "autocell123" } },
-    { "id": "...", "nome": "Responsável Limpezas", "email": "manager@autocell.pt", "role": "manager", "criado": true, "password_definida": true, "credenciais_teste": { "email": "manager@autocell.pt", "password": "autocell123" } },
-    { "id": "...", "nome": "João Limpezas", "email": "joao.limpezas@autocell.pt", "role": "staff", "criado": true, "password_definida": true, "credenciais_teste": { "email": "joao.limpezas@autocell.pt", "password": "autocell123" } }
+    { "id": "...", "nome": "Gestor FisioCell", "email": "admin@fisiocell.pt", "role": "admin", "criado": true, "password_definida": true, "credenciais_teste": { "email": "admin@fisiocell.pt", "password": "fisiocell123" } },
+    { "id": "...", "nome": "Responsável Limpezas", "email": "manager@fisiocell.pt", "role": "manager", "criado": true, "password_definida": true, "credenciais_teste": { "email": "manager@fisiocell.pt", "password": "fisiocell123" } },
+    { "id": "...", "nome": "João Limpezas", "email": "joao.limpezas@fisiocell.pt", "role": "staff", "criado": true, "password_definida": true, "credenciais_teste": { "email": "joao.limpezas@fisiocell.pt", "password": "fisiocell123" } }
   ],
-  "propriedade": { "id": "...", "nome": "Casa Teste", "smoobu_id": "99999", "criada": true }
+  "propriedade": { "id": "...", "nome": "Casa Teste", "criada": true }
 }
 ```
 - Se já existir tudo, devolve `mensagem: "Cliente Zero já existia (nada foi alterado)."` com `criada/criado: false`.
 - **Retrocompatibilidade:** se um utilizador já existir sem `password_hash` (criado antes do auth), o setup define-lhe a password e garante o role correto.
-- **Credenciais de teste (3 contas):** `admin@autocell.pt`, `manager@autocell.pt`, `joao.limpezas@autocell.pt` — todas com password `autocell123` (remover em produção).
+- **Credenciais de teste (3 contas):** `admin@fisiocell.pt`, `manager@fisiocell.pt`, `joao.limpezas@fisiocell.pt` — todas com password `fisiocell123` (remover em produção).
 
 ### 6.2. Autenticação (`/api/auth`)
 
@@ -449,7 +437,7 @@ Login com email + password. Valida a hash bcrypt e devolve um JWT.
 
 - **Body:**
 ```json
-{ "email": "joao.limpezas@autocell.pt", "password": "autocell123" }
+{ "email": "joao.limpezas@fisiocell.pt", "password": "fisiocell123" }
 ```
 - **Resposta (200 OK):**
 ```json
@@ -458,7 +446,7 @@ Login com email + password. Valida a hash bcrypt e devolve um JWT.
   "utilizador": {
     "id": "...",
     "nome": "João Limpezas",
-    "email": "joao.limpezas@autocell.pt",
+    "email": "joao.limpezas@fisiocell.pt",
     "role": "staff",
     "empresa_id": "..."
   }
@@ -571,133 +559,9 @@ Métricas de produtividade da empresa num intervalo de datas.
 
 ---
 
-### 6.5. Webhooks — Logs do Smoobu (`/api/admin/webhooks`)
+### 6.5–6.9. ⚠️ F0 — Removidos
 
-*Protegido por JWT (middleware `auth`).*
-
-#### `GET /api/admin/webhooks`
-
-Lista os `WebhookLog` recebidos do Smoobu (ordenados por data desc). Útil para o Admin confirmar que os webhooks estão a chegar e ver o estado de processamento.
-
-**Query params (opcionais):**
-- `status` — filtra por estado: `recebido` | `processado` | `erro`
-- `limit` — máximo de resultados (default 50, máx 200)
-
-**Resposta 200:** `{ webhooks: [...], total }`
-
-> NOTA: o `WebhookLog` é global (não tem `empresa_id`) porque o webhook é um endpoint público do Smoobu. A auth continua exigida para que só admins vejam os logs.
-
-#### `POST /api/admin/webhooks/:id/reprocessar`
-
-Reprocessa um `WebhookLog` (útil quando falhou por motivo transitório e o Admin já corrigiu a causa — ex: criou a propriedade em falta). Reutiliza a função interna `processarReservaSmoobu` com o payload original guardado no log. A idempotência (verificação de `smoobu_reserva_id`) garante que reproccessar um webhook já processado não cria tarefa duplicada.
-
-**Resposta 200:** `{ status: 'processado' | 'erro', erro_msg: string | null }`
-
----
-
-### 6.6. Webhook Smoobu — robustez de produção (v1.18.0 + v1.19.0)
-
-O endpoint `POST /webhooks/smoobu` reage a 3 tipos de ação do Smoobu:
-
-| Action do Smoobu | Comportamento do Autocell |
-|------------------|---------------------------|
-| `newReservation` (nova reserva) | **Cria** a tarefa (com load balancing). Idempotente: se já existir, não duplica. Se existir mas estiver cancelada, **re-activa**. |
-| `updateReservation` (reserva editada) | **Atualiza** a tarefa existente: `data`, `propriedade_id`, `tempo_limpeza_minutos`. Se a data mudou, **reavalia a atribuição** (mantém o funcionário se ainda for disponível no novo dia; caso contrário passa a `por_atribuir`). Se a tarefa estava cancelada, **re-activa**. Se não existir tarefa, cai para o fluxo de criação (fallback). |
-| `cancellation` (reserva cancelada) | **Cancela** a tarefa existente (`estado = 'cancelada'`). Respeita tarefas já **concluídas** (o trabalho já foi feito). Idempotente. |
-| outras (ex: `pingTest`) | **Ignora** graciosamente (log + 200, sem erro). |
-
-Melhorias de robustez:
-
-1. **Idempotência** (v1.18.0): o Smoobu faz retries — sem isto, teríamos tarefas duplicadas. Verifica `smoobu_reserva_id` antes de criar.
-2. **Reação a cancelamentos e edições** (v1.19.0): o sistema já não ignora `cancellation` e `updateReservation` — reage conforme a tabela acima. Uma reserva cancelada no Smoobu cancela a tarefa; uma reserva editada atualiza a data/propriedade da tarefa.
-3. **Visibilidade** (v1.18.0): todos os webhooks ficam em `WebhookLog` (`status` + `erro_msg` + `payload`). O Admin consulta em `GET /api/admin/webhooks` e pode reprocessar os que falharam (`POST /:id/reprocessar`).
-
----
-
-### 6.7. Sincronização em massa do Smoobu (REST API pull) — v1.20.0
-
-*Protegido por JWT (middleware `auth`).*
-
-#### `POST /api/admin/smoobu/sincronizar`
-
-Vai buscar todas as reservas **futuras** (a partir de hoje) ao Smoobu via REST API e cria as tarefas correspondentes usando a mesma lógica do webhook. Casos de uso: configuração inicial (importar reservas antes do webhook), recuperação (webhook esteve em baixo), auditoria (confirmar que não há reservas sem tarefa).
-
-**Requer:** variável de ambiente `SMOOBU_API_KEY` (obtém-na no painel do Smoobu: Settings > API > API Key). Sem ela → `400`.
-
-**Fluxo:**
-1. Calcula a data de hoje (YYYY-MM-DD, UTC) — não importa o passado.
-2. `fetch('https://login.smoobu.com/api/reservations?from=YYYY-MM-DD')` com header `Api-Key`. Timeout de 30s.
-3. Itera sobre o array `reservations` do JSON de resposta.
-4. Para cada reserva, mapeia para o formato do webhook (`{ action: 'newReservation', data: { id, arrival, apartment: { id, name } } }`) e chama `_processarReservaSmoobu`.
-5. **Idempotência**: a função `processarReservaSmoobu` já verifica `smoobu_reserva_id` antes de criar — correr várias vezes não cria duplicados.
-6. Cada reserva é envolvida num try/catch — se uma falhar (ex: propriedade não existe na BD), as outras continuam.
-7. Devolve contadores.
-
-**Resposta 200:**
-```json
-{
-  "totalRecebidas": 50,
-  "importadas": 48,
-  "criadas": 30,
-  "existentes": 18,
-  "erros": 2,
-  "detalheErros": [{ "reservaId": "12345", "erro": "Propriedade Smoobu 999 não encontrada na BD." }]
-}
-```
-
-**Erros:** `400` (API key em falta), `502` (erro no fetch ao Smoobu — timeout, 4xx/5xx, JSON inválido), `500` (erro interno).
-
----
-
-### 6.8. Listar propriedades do Smoobu — v1.21.0
-
-*Protegido por JWT (middleware `auth`).*
-
-#### `GET /api/admin/smoobu/propriedades`
-
-Vai buscar a lista de apartamentos ao Smoobu (endpoint oficial `/api/apartments`) e devolve-a de forma limpa (só `id` + `name` por apartamento). Isto facilita o mapeamento no fluxo de criação de propriedades: o frontend pode mostrar um dropdown com os apartamentos do Smoobu em vez de o Admin ter de digitar o `smoobu_id` manualmente.
-
-**Requer:** `SMOOBU_API_KEY`.
-
-**Resposta 200:** `{ propriedadesSmoobu: [{ id, name }, ...] }`
-
-**Erros:** `400` (API key em falta), `502` (erro no fetch ao Smoobu).
-
----
-
-### 6.9. Sincronizar propriedades do Smoobu (upsert em massa) — v1.22.0
-
-*Protegido por JWT (middleware `auth`).*
-
-#### `POST /api/admin/smoobu/sincronizar-propriedades`
-
-Importa em massa os apartamentos do Smoobu para a coleção `Propriedade`.
-
-**Comportamento (Prompt 92 / Fase 1.5):**
-- **Propriedades novas** → criadas com `nome`, `morada`, `coordenadas` (geocoding via Nominatim), `capacidade_hospedes` e `tempo_limpeza_minutos` (45 min por defeito).
-- **Propriedades já existentes** → atualiza **SEMPRE** a `morada` e a `capacidade_hospedes` quando o Smoobu as trouxer no payload (a fonte de verdade destes dois campos passa a ser o Smoobu). Refaz o geocoding sempre que a morada for atualizada. Os restantes campos (`nome`, `tempo_limpeza_minutos`, `ativo`, `checklist`, `funcionario_preferencial_id`) continuam a ser preservados, mantendo as edições manuais do gestor.
-
-Caso de uso: configuração inicial **e** manutenção contínua — mantém as moradas e capacidades sincronizadas com o Smoobu ao longo do tempo.
-
-**Requer:** `SMOOBU_API_KEY`. O `empresa_id` vem do JWT.
-
-**Resposta 200:**
-```json
-{
-  "totalRecebidas": 20,
-  "criadas": 15,
-  "atualizadas": 3,
-  "existentes": 2,
-  "erros": 0,
-  "detalheErros": []
-}
-```
-
-**Erros:** `400` (API key em falta), `502` (erro no fetch ao Smoobu).
-
-> **Nota sobre o `atualizarPropriedade`:** o endpoint `PUT /api/admin/propriedades/:id` já existe desde a v1.19.1 — permite editar `nome`, `smoobu_id`, `morada`, `tempo_limpeza_minutos` (com re-geocoding automático se a morada mudar). Não foi duplicado nesta versão.
-
-> **Diferença para o `importarPropriedades` (POST /api/gestor/smoobu/propriedades):** este é multi-tenant por `empresa_id` (só cria/atualiza propriedades da empresa do gestor) e mantém o comportamento conservador de **só preencher** a morada quando está `'A definir'` (não sobrescreve moradas reais). O `sincronizarPropriedades` (este endpoint) é mais agressivo: sobrescreve sempre morada + capacidade quando o Smoobu as traz.
+> As secções 6.5–6.9 documentavam os endpoints de webhooks e sincronização Smoobu (`POST /webhooks/smoobu`, `GET/POST /api/admin/webhooks`, `POST /api/admin/smoobu/sincronizar`, `GET /api/admin/smoobu/propriedades`, `POST /api/admin/smoobu/sincronizar-propriedades`). Foram **removidos em F0** juntamente com `controllers/smoobuController.js`, `controllers/webhookController.js` e `routes/webhookRoutes.js`. A variável de ambiente `SMOOBU_API_KEY` deixou de ser necessária.
 
 ---
 
@@ -772,9 +636,9 @@ O staff **não pode aprovar** os próprios pedidos — só o admin.
 }
 ```
 
-#### Impacto no webhook (load balancer)
+#### Impacto no motor de atribuição (load balancer)
 
-O webhook do Smoobu (e o `atualizarTarefaPorReserva`) agora só consideram ausências com `estado: 'aprovada'` para excluir staff da atribuição. Pedidos pendentes ou rejeitados **não bloqueiam** a atribuição (o staff pode ainda trabalhar).
+O load balancer (`utils/loadBalancer.js`) e a reatribuição de tarefas agora só consideram ausências com `estado: 'aprovada'` para excluir staff da atribuição. Pedidos pendentes ou rejeitados **não bloqueiam** a atribuição (o staff pode ainda trabalhar).
 
 #### Ações do admin que criam ausências
 
@@ -806,14 +670,16 @@ As ações diretas do admin (falta súbita, baixa prolongada, registo manual) cr
 
 ## 9. Histórico de alterações (backend)
 
+> ⚠️ **F0 — Nota histórica:** As entradas abaixo anteriores a F0 descrevem a era Alojamento Local. Referências a Smoobu/webhooks/sincronização correspondem a funcionalidade **removida em F0**. O histórico completo (incluindo commits Smoobu) está preservado no `git log`.
+
 | Data       | Versão | Alteração                                                            |
-|------------|--------|---------------------------------------------------------------------|
+|------------|--------|----------------------------------------------------------------------|
 | Inicial    | 1.0.0  | Criação da estrutura base: `package.json`, `server.js`, `.env.example`, `.gitignore`. Ligação ao MongoDB e rota de teste `GET /`. |
 | v1.1.0     | 1.1.0  | Lógica central: modelos `Propriedade`, `Utilizador`, `Ausencia`, `Tarefa`; `controllers/webhookController.js` (fluxo estrito de atribuição com filtro de ausências + load balancing); `routes/webhookRoutes.js` (`POST /webhooks/smoobu`); resposta 200 imediata + processamento assíncrono; tratamento de erros robusto. |
 | v1.2.0     | 1.2.0  | Painel de Administração: modelo `Empresa` (nome, nif, plano_ativo); `controllers/adminController.js` (`getPropriedades`, `criarPropriedade`, `setupClienteZero`); `routes/adminRoutes.js` (`GET/POST /api/admin/propriedades`, `GET /api/admin/setup`); montagem em `server.js`. `empresa_id` via header `x-empresa-id` (sem JWT ainda). |
-| v1.3.0     | 1.3.0  | **Autenticação JWT:** dependências `jsonwebtoken` + `bcryptjs`; modelo `Utilizador` com `email` único + `password_hash`; `middleware/auth.js` (verifica JWT, injeta `req.user`, fallback legacy `x-empresa-id`); `controllers/authController.js` (`login` com bcrypt + JWT, `/me`); `routes/authRoutes.js` (`POST /api/auth/login`, `GET /api/auth/me`); `/api/admin` protegido por `auth` com `empresa_id` do token; `setupClienteZero` cria Staff com `password_hash` (`joao.limpezas@autocell.pt` / `autocell123`); `.env.example` com `JWT_SECRET` + `JWT_EXPIRACAO`. |
+| v1.3.0     | 1.3.0  | **Autenticação JWT:** dependências `jsonwebtoken` + `bcryptjs`; modelo `Utilizador` com `email` único + `password_hash`; `middleware/auth.js` (verifica JWT, injeta `req.user`, fallback legacy `x-empresa-id`); `controllers/authController.js` (`login` com bcrypt + JWT, `/me`); `routes/authRoutes.js` (`POST /api/auth/login`, `GET /api/auth/me`); `/api/admin` protegido por `auth` com `empresa_id` do token; `setupClienteZero` cria Staff com `password_hash` (`joao.limpezas@fisiocell.pt` / `fisiocell123`); `.env.example` com `JWT_SECRET` + `JWT_EXPIRACAO`. |
 | v1.3.1     | 1.3.1  | **Fix bootstrap:** o `auth` deixou de ser aplicado a todo `/api/admin` e passou a ser aplicado apenas às rotas `/propriedades` (dentro de `adminRoutes.js`). A rota `/api/admin/setup` voltou a ser **PÚBLICA** (era o endpoint de bootstrap que criava o primeiro utilizador — não podia exigir token). Corrige o erro `401 Autenticação obrigatória` ao chamar `/setup`. |
-| v1.4.0     | 1.4.0  | **Novo role `manager`:** modelo `Utilizador` enum `['admin','manager','staff']`; `webhookController` inclui managers na atribuição de tarefas (load balancing); `setupClienteZero` cria 3 utilizadores (admin `admin@autocell.pt` + manager `manager@autocell.pt` + staff `joao.limpezas@autocell.pt`, todos com password `autocell123`). |
+| v1.4.0     | 1.4.0  | **Novo role `manager`:** modelo `Utilizador` enum `['admin','manager','staff']`; `webhookController` inclui managers na atribuição de tarefas (load balancing); `setupClienteZero` cria 3 utilizadores (admin `admin@fisiocell.pt` + manager `manager@fisiocell.pt` + staff `joao.limpezas@fisiocell.pt`, todos com password `fisiocell123`). |
 | v1.4.1     | 1.4.1  | **Payload Smoobu oficial:** `extrairDadosReserva` atualizada para a estrutura documentada (`{ action, data: { id, arrival, apartment: { id, name } } }`). Mapeamento primário: `payload.data.apartment.id`, `payload.data.arrival`, `payload.data.id`. Fallbacks `??` mantidos para variantes (`content.*`, campos achatados). |
 | v1.5.0     | 1.5.0  | **Gestão de Equipa:** `adminController` com `getEquipa` (lista utilizadores, `.select('-password_hash')`) e `criarMembroEquipa` (valida nome/email/password/role, hash bcrypt, email único); `adminRoutes` com `GET/POST /api/admin/equipa` (protegidos por `auth`). |
 | v1.6.0     | 1.6.0  | **CRUD completo de Utilizadores:** `adminController` com `atualizarMembroEquipa` (PUT — nome/email/role/password opcional com nova hash bcrypt), `alternarEstadoMembro` (PATCH — ativa/desativa, inativos não fazem login), `eliminarMembroEquipa` (DELETE — não permite auto-eliminação); `adminRoutes` com `PUT/PATCH/DELETE /api/admin/equipa/:id` (protegidos por `auth`). Validação de pertença à empresa em todas as operações. |

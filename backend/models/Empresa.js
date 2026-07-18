@@ -1,10 +1,10 @@
 /**
- * Modelo: Empresa
- * Representa a entidade principal do SaaS (multi-tenant).
- * Cada empresa agrupa Propriedades e Utilizadores (Admin/Staff).
+ * Modelo: Empresa (Clínica)
+ * Representa a entidade principal do SaaS multi-tenant FisioCell.
+ * Cada empresa agrupa Salas, Utilizadores e Consultas.
  *
- * Prompt 109: Adicionado smoobu_api_key para que cada empresa (tenant)
- * tenha a sua própria ligação ao Smoobu sem hardcode no .env.
+ * F0: Removido smoobu_api_key (integração Smoobu eliminada).
+ * Adicionados campos de clínica: morada, telefone, email.
  */
 const mongoose = require('mongoose');
 
@@ -25,8 +25,7 @@ const empresaSchema = new mongoose.Schema(
       default: true,
     },
     // Prompt 116 — Estado da empresa (SaaS). Quando `false`:
-    //   - o login é bloqueado para todos os utilizadores desta empresa;
-    //   - os webhooks do Smoobu são rejeitados (propriedades não criam tarefas).
+    //   - o login é bloqueado para todos os utilizadores desta empresa.
     // Diferente de `plano_ativo` (que é informativo/comercial) — `ativa`
     // é o bloqueio operacional efetivo.
     ativa: {
@@ -36,7 +35,7 @@ const empresaSchema = new mongoose.Schema(
     },
     // Prompt 122 — Soft Delete (Lixeira de Empresas). Quando `true`:
     //   - a empresa desaparece da aba "Ativas" e aparece na "Reciclagem";
-    //   - `ativa` é forçada para false (bloqueia login + webhooks);
+    //   - `ativa` é forçada para false (bloqueia login);
     //   - pode ser restaurada via PATCH /api/admin/empresas/:id/restaurar.
     // Não apaga fisicamente — preserva os dados para auditoria/restauro.
     apagada: {
@@ -44,12 +43,21 @@ const empresaSchema = new mongoose.Schema(
       default: false,
       index: true,
     },
-    // Prompt 109 — API Key do Smoobu por empresa (multi-tenant SaaS).
-    // Quando preenchida, as operações de sincronização usam esta chave
-    // em vez da variável de ambiente SMOOBU_API_KEY global.
-    smoobu_api_key: {
+    // F0 — Dados da clínica (substituem o antigo smoobu_api_key).
+    morada: {
       type: String,
       default: '',
+      trim: true,
+    },
+    telefone: {
+      type: String,
+      default: '',
+      trim: true,
+    },
+    email: {
+      type: String,
+      default: '',
+      lowercase: true,
       trim: true,
     },
   },
