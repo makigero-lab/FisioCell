@@ -20,6 +20,7 @@ import {
   UserRound,
   Clock,
   CalendarPlus,
+  Stethoscope,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -60,6 +61,7 @@ const gestorNavItems: NavItem[] = [
   { label: "Pacientes", href: "/gestor/pacientes", icon: UserRound },
   { label: "Equipa", href: "/gestor/equipa", icon: Users },
   { label: "Horários", href: "/gestor/equipa/horarios", icon: Clock },
+  { label: "Protocolos", href: "/gestor/protocolos", icon: Stethoscope },
   { label: "Ausências / Férias", href: "/gestor/ausencias", icon: CalendarOff },
   { label: "Relatórios", href: "/gestor/relatorios", icon: BarChart3 },
   { label: "Notificações", href: "/gestor/notificacoes", icon: Bell },

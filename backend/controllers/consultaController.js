@@ -27,6 +27,7 @@ const Propriedade = require('../models/Propriedade');
 const { obterEmpresaId } = require('./gestorController');
 const { registarAuditoria } = require('../utils/auditoria');
 const { verificarDisponibilidadeCompleta } = require('../utils/disponibilidade');
+const { gerarSnapshotProtocolo } = require('./protocoloController'); // F5 — protocolos
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                             */
@@ -290,6 +291,7 @@ exports.criarConsulta = async (req, res) => {
       tipo = 'sessao',
       observacoes = '',
       forcar = false,
+      protocolo_id = null, // F5 — protocolo clínico (gera snapshot)
     } = req.body || {};
 
     // Validações de presença.
@@ -363,6 +365,15 @@ exports.criarConsulta = async (req, res) => {
 
     const fim = new Date(inicio.getTime() + duracao * 60000);
 
+    // F5 — Gera snapshot do protocolo clínico (se protocolo_id fornecido).
+    let protocoloSnapshot = null;
+    if (protocolo_id) {
+      protocoloSnapshot = await gerarSnapshotProtocolo(protocolo_id, empresaId);
+      if (!protocoloSnapshot) {
+        return res.status(400).json({ erro: 'Protocolo não encontrado (ou não pertence a esta empresa).' });
+      }
+    }
+
     const nova = await Consulta.create({
       empresa_id: empresaId,
       sala_id,
@@ -375,6 +386,8 @@ exports.criarConsulta = async (req, res) => {
       estado: 'marcada',
       criada_por: req.user.id,
       observacoes: observacoes ? String(observacoes).trim() : '',
+      // F5 — Snapshot do protocolo clínico (imutável após criação).
+      'nota_clinica.protocolo_aplicado': protocoloSnapshot || [],
     });
 
     registarAuditoria({
@@ -688,13 +701,27 @@ exports.atualizarNotaClinica = async (req, res) => {
       });
     }
 
-    const { subjetivo, objetivo, avaliacao, plano, tratamento_efetuado } = req.body || {};
+    const { subjetivo, objetivo, avaliacao, plano, tratamento_efetuado, protocolo_aplicado } = req.body || {};
 
     if (subjetivo !== undefined) consulta.nota_clinica.subjetivo = String(subjetivo);
     if (objetivo !== undefined) consulta.nota_clinica.objetivo = String(objetivo);
     if (avaliacao !== undefined) consulta.nota_clinica.avaliacao = String(avaliacao);
     if (plano !== undefined) consulta.nota_clinica.plano = String(plano);
     if (tratamento_efetuado !== undefined) consulta.nota_clinica.tratamento_efetuado = String(tratamento_efetuado);
+
+    // F5 — Atualiza items do protocolo aplicado (marcar concluido).
+    // Recebe array de { nome, items: [{ texto, concluido }] } — substitui o snapshot.
+    if (protocolo_aplicado !== undefined && Array.isArray(protocolo_aplicado)) {
+      consulta.nota_clinica.protocolo_aplicado = protocolo_aplicado.map((sec) => ({
+        nome: String(sec.nome || ''),
+        items: Array.isArray(sec.items)
+          ? sec.items.map((item) => ({
+              texto: String(item.texto || ''),
+              concluido: !!item.concluido,
+            }))
+          : [],
+      }));
+    }
 
     // Snapshot da cédula do assinante (auditoria legal).
     if (fisioAssinante) {

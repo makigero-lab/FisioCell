@@ -38,6 +38,7 @@ const staffRoutes = require('./routes/staffRoutes');
 const pacienteRoutes = require('./routes/pacienteRoutes'); // F2 — Pacientes
 const horarioRoutes = require('./routes/horarioRoutes'); // F3 — Horários
 const consultaRoutes = require('./routes/consultaRoutes'); // F4 — Consultas
+const protocoloRoutes = require('./routes/protocoloRoutes'); // F5 — Protocolos
 const { iniciarDailyBriefing } = require('./jobs/dailyBriefing');
 const { iniciarAgendaAmanha } = require('./jobs/agendaAmanha');
 const { iniciarCaoGuarda } = require('./jobs/caoGuarda');
@@ -131,6 +132,9 @@ app.use('/api/gestor/horarios', horarioRoutes);
 
 // F4 — Consultas (marcações com validação de conflitos fisio+sala+paciente).
 app.use('/api/gestor/consultas', consultaRoutes);
+
+// F5 — Protocolos Clínicos (templates reutilizáveis com snapshot na Consulta).
+app.use('/api/gestor/protocolos', protocoloRoutes);
 
 /* ------------------------------------------------------------------ */
 /* Middleware global de tratamento de erros                            */

@@ -1308,3 +1308,112 @@ Stage Summary:
 - **Imutabilidade RGPD**: consultas concluídas não podem ser eliminadas nem ter a nota clínica editada.
 - **176/176 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
 - **Próximo passo:** F5 (Nota clínica SOAP avançada + ModeloProtocolo de ModeloChecklist).
+
+---
+Task ID: DOC-F5
+Agent: general-purpose
+Task: Atualização de documentação para F5 (Protocolos Clínicos + snapshot na Consulta)
+
+Work Log:
+- Lido `WORKLOG.md` (entrada F4) para herdar o formato e a convenção das entradas por fase (subagent de documentação a seguir a cada fase de implementação).
+- Lido `docs/ARQUITETURA.md` (intro, secção 4 Mapa de Migração, secção 5 Modelos Propostos, secção 7 Decisões de Design, secção 8 Roadmap).
+- Lido `docs/BACKEND.md` (estrutura de ficheiros, secção 3.1 Modelos, secção 6.14 Consultas, secção 9 Histórico) e `docs/FRONTEND.md` (secção 3 Sistema de rotas, secção 11 Integração API, secção 13 Histórico).
+- Lidos os ficheiros de implementação F5 para extrair detalhes exatos: `backend/models/ModeloProtocolo.js`, `backend/controllers/protocoloController.js`, `backend/routes/protocoloRoutes.js`, `backend/server.js` (mount), integração em `backend/controllers/consultaController.js` (`protocolo_id` em `criarConsulta`, `protocolo_aplicado` em `atualizarNotaClinica`) e `frontend/src/lib/api.ts` (`AreaProtocolo`/`ModeloProtocoloDTO`/`ProtocoloListResponse`).
+
+- `docs/BACKEND.md`:
+  - Estrutura de ficheiros (secção 2): adicionados `protocoloController.js`, `ModeloProtocolo.js` e `protocoloRoutes.js` às árvores de controllers/models/routes (o `protocoloController.js` já constava da árvore de controllers — a árvore de models e routes foi completada).
+  - Secção 3.1: contador de coleções atualizado de 8 → 9.
+  - Nova subsecção `### ModeloProtocolo` (após `### Consulta`) com tabela de campos (`empresa_id`, `nome`, `descricao`, `area` enum, `seccoes[{nome, items[]}]`, `ativo`), índice composto `{empresa_id, ativo, area}`, nota F5 sobre a evolução do `ModeloChecklist`, permissões (`podeVer` 4 roles / `isDiretorClinico`) e documentação do helper `gerarSnapshotProtocolo(protocoloId, empresaId)`.
+  - Campo `nota_clinica.protocolo_aplicado` do modelo `Consulta` atualizado de "(futuro F5)" para "F5 — gerado por `gerarSnapshotProtocolo` no `criarConsulta`; atualizado via `PATCH /nota-clinica`".
+  - `POST /api/gestor/consultas`: body ganhou `protocolo_id` (opcional, default `null`); validações e erros atualizados com `400` para protocolo não encontrado/não pertence à empresa.
+  - `PATCH /api/gestor/consultas/:id/nota-clinica`: body ganhou `protocolo_aplicado` (array de `{nome, items:[{texto, concluido}]}`) com explicação de que substitui o snapshot para marcar items concluídos durante a sessão.
+  - Nova secção `6.15. Protocolos Clínicos (/api/gestor/protocolos) — F5` com header de permissões/snapshot/auditoria + 5 endpoints (`GET /`, `GET /:id`, `POST`, `PUT`, `DELETE`) documentados com body, validações, respostas, erros.
+  - Secção 9 (Histórico): adicionada entrada `**F5**` no topo da tabela (antes de `**F4**`) com o resumo completo da implementação (modelo, controller, routes, mount, integração na Consulta, 192/192 testes).
+
+- `docs/FRONTEND.md`:
+  - Secção 3 (Sistema de rotas): adicionada linha `/gestor/protocolos` à tabela de rotas (após `/gestor/consultas`).
+  - Secção 11 (`lib/api.ts`): adicionado bullet para os tipos `AreaProtocolo` / `ModeloProtocoloDTO` / `ProtocoloListResponse` (F5) com detalhe dos campos e da diferença entre `items: string[]` no template vs `{texto, concluido}` no snapshot.
+  - Nova subsecção `### /gestor/protocolos (Client Component) — F5` (após `/gestor/consultas`) com item de sidebar (ícone `Stethoscope`), lista de cartões, filtro por área clínica, modal criar/editar com secções/items dinâmicos, toggle ativo/inativo, hard delete, permissões client-side e nota de integração com a Consulta (`protocolo_id` no `POST`, `protocolo_aplicado` no `PATCH`).
+  - Secção 13 (Histórico): adicionada entrada `**F5**` no topo da tabela (antes de `**F4**`) com a nova página, tipos, item de sidebar e integração (lint/tsc/build ✓, rota 3.46 kB).
+
+- `docs/ARQUITETURA.md`:
+  - Intro: parágrafo de abertura alargado para mencionar **F5** (`ModeloProtocolo` + snapshot imutável na Consulta).
+  - Secção 4 (Mapa de Migração de Domínio): linha `ModeloChecklist → ModeloProtocolo` marcada `F5 ✅`.
+  - Secção 5 (Modelos Propostos): inserida nova subsecção `5.5 ModeloProtocolo — ✅ F5 concluído` com o schema Mongoose completo (`empresa_id`, `nome`, `descricao`, `area` enum, `seccoes`, `ativo`, índices) + nota "F5 — Implementação real" (evolução do `ModeloChecklist`, helper `gerarSnapshotProtocolo`, integração na Consulta, permissões). Secções seguintes renumeradas: `5.5 Sala → 5.6`, `5.6 HorarioFisioterapeuta → 5.7`, `5.7 Documento → 5.8`.
+  - Nota "F4 — Implementação real" atualizada: a referência a `protocolo_aplicado[]` passou de "futuro F5" para "**F5 concluído**: povoado no `criarConsulta` via `gerarSnapshotProtocolo`, atualizado via `PATCH /nota-clinica`".
+  - Secção 8 (Roadmap): linha **F5** marcada `✅ Concluído` com escopo reescrito para refletir a implementação real (`ModeloProtocolo` + CRUD + snapshot imutável na Consulta).
+
+Stage Summary:
+- **3 ficheiros de documentação atualizados** (`docs/BACKEND.md`, `docs/FRONTEND.md`, `docs/ARQUITETURA.md`) por via cirúrgica (Edit/MultiEdit — sem reescrita integral).
+- **BACKEND.md**: novo modelo `ModeloProtocolo` documentado (campos, índices, permissões, helper `gerarSnapshotProtocolo`); nova secção `6.15` com 5 endpoints de Protocolos; integração na Consulta (`protocolo_id` em `POST`, `protocolo_aplicado` em `PATCH /nota-clinica`); entrada F5 no histórico; estrutura de ficheiros + contador de coleções atualizados.
+- **FRONTEND.md**: nova rota `/gestor/protocolos` na tabela; nova subsecção de página (cartões, filtro por área, modal com secções/items dinâmicos); 3 tipos em `lib/api.ts` (`AreaProtocolo`, `ModeloProtocoloDTO`, `ProtocoloListResponse`); item de sidebar `Stethoscope`; entrada F5 no histórico.
+- **ARQUITETURA.md**: F5 marcado `✅ Concluído` no roadmap; schema de `ModeloProtocolo` (secção 5.5) alinhado com a implementação real (campos `area` + `ativo` + índice composto); migração `ModeloChecklist → ModeloProtocolo` marcada `F5 ✅`; nota F4 atualizada (snapshot já não é "futuro F5"); secções 5.5–5.8 renumeradas.
+- **Linguagem pt-pt** preservada; formatação Markdown mantida; sem informação inventada (todos os detalhes foram extraídos dos ficheiros de implementação F5 — modelo, controller, routes, server.js, controller da Consulta e `lib/api.ts`).
+- **Próximo passo:** F6 (adaptar frontend — calendário FullCalendar mostra `Consultas` em vez de `Tarefas`).
+
+---
+Task ID: F5
+Agent: Z.ai Code
+Task: Criar ModeloProtocolo (de ModeloChecklist) + CRUD + snapshot imutável na Consulta + integração com nota clínica SOAP.
+
+Work Log:
+
+### F5-A — Modelo ModeloProtocolo
+- Criado `backend/models/ModeloProtocolo.js` (evolução do ModeloChecklist com área clínica e ativo):
+  - Campos: empresa_id, nome, descricao, area (musculoesqueletica/neurologica/cardioresp/desporto/pediatria/outro), seccoes[{nome, items[]}], ativo (boolean).
+  - Índices: {empresa_id, ativo, area}.
+
+### F5-B — Controller + Helper
+- Criado `backend/controllers/protocoloController.js`:
+  - CRUD completo: listarProtocolos, criarProtocolo, obterProtocolo, atualizarProtocolo, apagarProtocolo.
+  - Helper `gerarSnapshotProtocolo(protocoloId, empresaId)` — devolve array de {nome, items: [{texto, concluido: false}]} para injectar na Consulta.
+  - Validações: nome obrigatório, área enum, pelo menos 1 secção com items.
+  - Auditoria registada em todas as mutações.
+
+### F5-C — Integração na Consulta
+- `consultaController.criarConsulta` aceita `protocolo_id` opcional:
+  - Gera snapshot imutável via `gerarSnapshotProtocolo`.
+  - Guarda em `nota_clinica.protocolo_aplicado`.
+  - 400 se protocolo não pertencer à empresa.
+- `consultaController.atualizarNotaClinica` (PATCH /nota-clinica) aceita `protocolo_aplicado`:
+  - Permite marcar items como concluídos durante a sessão.
+  - Substitui o snapshot (mantém estrutura {nome, items: [{texto, concluido}]}).
+
+### F5-D — Routes + server.js
+- Criado `backend/routes/protocoloRoutes.js` montado em `/api/gestor/protocolos`.
+  - GET /, GET /:id → podeVer (4 roles).
+  - POST /, PUT /, DELETE / → isDiretorClinico.
+- `server.js`: montado `app.use('/api/gestor/protocolos', protocoloRoutes)`.
+
+### F5-E — Testes (192/192 ✓)
+- Adicionados 16 testes no bloco "F5 — Protocolos (CRUD + snapshot)":
+  - CRUD completo (criar, listar, detalhe, atualizar, eliminar).
+  - Validações (400): sem nome, sem secções, área inválida.
+  - Permissões (403): fisioterapeuta não pode criar.
+  - GET com filtro area.
+  - **Snapshot na Consulta**: criar consulta com protocolo_id → snapshot gerado com items concluido=false.
+  - **Protocolo inexistente** → 400.
+  - **Marcar items concluídos** via PATCH /nota-clinica.
+  - 401 sem token.
+- **Resultado: 192/192 testes a passar ✓** (+16).
+
+### F5-F — Frontend (/gestor/protocolos)
+- Criada página `frontend/src/app/gestor/protocolos/page.tsx`:
+  - Lista de protocolos (cartões com nome, área, secções/items, estado ativo).
+  - Filtro por área clínica.
+  - Modal criar/editar com secções e items dinâmicos (adicionar/remover).
+- `ModeloProtocoloDTO`, `ProtocoloListResponse`, `AreaProtocolo` adicionados a `lib/api.ts`.
+- Item "Protocolos" (ícone Stethoscope) adicionado ao sidebar do gestor.
+- **Lint ✓, tsc ✓, build ✓** (rota /gestor/protocolos = 3.46 kB).
+
+### F5-G — Documentação (Task DOC-F5 por subagent)
+- `docs/BACKEND.md`: modelo ModeloProtocolo documentado, 5 endpoints, helper gerarSnapshotProtocolo, integração com Consulta, entrada F5 no histórico.
+- `docs/FRONTEND.md`: rota /gestor/protocolos, tipos DTO, página documentada, entrada F5 no histórico.
+- `docs/ARQUITETURA.md`: F5 marcado ✅ no roadmap, schema de ModeloProtocolo alinhado.
+
+Stage Summary:
+- **ModeloProtocolo criado** com área clínica (6 valores) e flag ativo.
+- **Snapshot imutável** gerado na criação da Consulta (RGPD/legal — alterações futuras no template não afetam consultas antigas).
+- **Items marcáveis** durante a sessão via PATCH /nota-clinica (protocolo_aplicado com concluido boolean).
+- **192/192 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
+- **Próximo passo:** F6 (adaptar frontend — calendário FullCalendar mostra Consultas em vez de Tarefas).

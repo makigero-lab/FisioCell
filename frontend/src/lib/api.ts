@@ -348,6 +348,32 @@ export interface ValidarConflitosResponse {
   horario?: { hora_inicio: string; hora_fim: string } | null;
 }
 
+// F5 — Modelo de Protocolo Clínico
+export type AreaProtocolo =
+  | "musculoesqueletica"
+  | "neurologica"
+  | "cardioresp"
+  | "desporto"
+  | "pediatria"
+  | "outro";
+
+export interface ModeloProtocoloDTO {
+  _id: string;
+  empresa_id: string;
+  nome: string;
+  descricao: string;
+  area: AreaProtocolo;
+  seccoes: { nome: string; items: string[] }[];
+  ativo: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ProtocoloListResponse {
+  protocolos: ModeloProtocoloDTO[];
+  total: number;
+}
+
 export interface AusenciaDTO {
   _id: string;
   utilizador_id: string;

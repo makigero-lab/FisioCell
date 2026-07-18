@@ -3767,3 +3767,282 @@ describe('F4 — Consultas (CRUD + conflitos)', () => {
     expect(res.status).toBe(401);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* F5 — Protocolos Clínicos (CRUD + snapshot na Consulta)             */
+/* ------------------------------------------------------------------ */
+
+describe('F5 — Protocolos (CRUD + snapshot)', () => {
+  let diretorF5Token, fisioF5Token;
+  let protocoloId;
+
+  beforeAll(async () => {
+    const hash = await bcrypt.hash(PASSWORD, 10);
+
+    const diretor = await Utilizador.create({
+      nome: 'Diretor F5', email: 'diretor.f5@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'diretor_clinico', ativo: true,
+      perfil_profissional: { cedula: 'DIR-F5' },
+    });
+
+    const fisio = await Utilizador.create({
+      nome: 'Fisio F5', email: 'fisio.f5@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'fisioterapeuta', ativo: true,
+      perfil_profissional: { cedula: 'FIS-F5', ativo_clinico: true },
+    });
+
+    const [rDir, rFisio] = await Promise.all([
+      request(app).post('/api/auth/login').send({ email: 'diretor.f5@teste.pt', password: PASSWORD }),
+      request(app).post('/api/auth/login').send({ email: 'fisio.f5@teste.pt', password: PASSWORD }),
+    ]);
+    diretorF5Token = rDir.body.token;
+    fisioF5Token = rFisio.body.token;
+  });
+
+  afterAll(async () => {
+    await Utilizador.deleteMany({ email: { $in: ['diretor.f5@teste.pt', 'fisio.f5@teste.pt'] } });
+    const ModeloProtocolo = require('../models/ModeloProtocolo');
+    await ModeloProtocolo.deleteMany({ empresa_id: empresaId });
+  });
+
+  it('POST /api/gestor/protocolos (diretor) → 201 cria protocolo', async () => {
+    const res = await request(app)
+      .post('/api/gestor/protocolos')
+      .set('Authorization', `Bearer ${diretorF5Token}`)
+      .send({
+        nome: 'Avaliação Ombro',
+        descricao: 'Protocolo de avaliação inicial de ombro',
+        area: 'musculoesqueletica',
+        seccoes: [
+          { nome: 'Inspeção', items: ['Simetria', 'Edema', 'Atrofia'] },
+          { nome: 'Palpação', items: ['Ponto doloroso', 'Temperatura'] },
+          { nome: 'Testes Especiais', items: ['Neer', 'Hawkins-Kennedy', 'Empty Can'] },
+        ],
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.protocolo).toHaveProperty('_id');
+    expect(res.body.protocolo.nome).toBe('Avaliação Ombro');
+    expect(res.body.protocolo.area).toBe('musculoesqueletica');
+    expect(res.body.protocolo.seccoes).toHaveLength(3);
+    expect(res.body.protocolo.seccoes[0].items).toHaveLength(3);
+    protocoloId = res.body.protocolo._id;
+  });
+
+  it('POST sem nome → 400', async () => {
+    const res = await request(app)
+      .post('/api/gestor/protocolos')
+      .set('Authorization', `Bearer ${diretorF5Token}`)
+      .send({ seccoes: [{ nome: 'Teste', items: ['Item'] }] });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST sem secções → 400', async () => {
+    const res = await request(app)
+      .post('/api/gestor/protocolos')
+      .set('Authorization', `Bearer ${diretorF5Token}`)
+      .send({ nome: 'Sem secções' });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST com área inválida → 400', async () => {
+    const res = await request(app)
+      .post('/api/gestor/protocolos')
+      .set('Authorization', `Bearer ${diretorF5Token}`)
+      .send({ nome: 'Teste', area: 'invalida', seccoes: [{ nome: 'S', items: ['I'] }] });
+    expect(res.status).toBe(400);
+  });
+
+  it('fisioterapeuta NÃO pode criar protocolos (403)', async () => {
+    const res = await request(app)
+      .post('/api/gestor/protocolos')
+      .set('Authorization', `Bearer ${fisioF5Token}`)
+      .send({ nome: 'Teste Fisio', seccoes: [{ nome: 'S', items: ['I'] }] });
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /api/gestor/protocolos (fisio) → 200 lista (pode ver)', async () => {
+    const res = await request(app)
+      .get('/api/gestor/protocolos')
+      .set('Authorization', `Bearer ${fisioF5Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBeGreaterThanOrEqual(1);
+  });
+
+  it('GET com filtro area → filtra', async () => {
+    const res = await request(app)
+      .get('/api/gestor/protocolos?area=musculoesqueletica')
+      .set('Authorization', `Bearer ${diretorF5Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.protocolos.every((p) => p.area === 'musculoesqueletica')).toBe(true);
+  });
+
+  it('GET /:id → 200 detalhe', async () => {
+    const res = await request(app)
+      .get(`/api/gestor/protocolos/${protocoloId}`)
+      .set('Authorization', `Bearer ${diretorF5Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.protocolo._id).toBe(protocoloId);
+  });
+
+  it('PUT /:id → 200 atualiza nome e secções', async () => {
+    const res = await request(app)
+      .put(`/api/gestor/protocolos/${protocoloId}`)
+      .set('Authorization', `Bearer ${diretorF5Token}`)
+      .send({
+        nome: 'Avaliação Ombro V2',
+        seccoes: [
+          { nome: 'Inspeção', items: ['Simetria', 'Edema'] },
+          { nome: 'Mobility', items: ['ABD', 'ROT externa'] },
+        ],
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.protocolo.nome).toBe('Avaliação Ombro V2');
+    expect(res.body.protocolo.seccoes).toHaveLength(2);
+  });
+
+  it('PUT com área inválida → 400', async () => {
+    const res = await request(app)
+      .put(`/api/gestor/protocolos/${protocoloId}`)
+      .set('Authorization', `Bearer ${diretorF5Token}`)
+      .send({ area: 'invalida' });
+    expect(res.status).toBe(400);
+  });
+
+  it('Cria consulta COM protocolo_id → snapshot gerado', async () => {
+    // Cria paciente e sala para a consulta.
+    const Paciente = require('../models/Paciente');
+    const Propriedade = require('../models/Propriedade');
+    const HorarioFisioterapeuta = require('../models/HorarioFisioterapeuta');
+
+    const pac = await Paciente.create({ empresa_id: empresaId, nome: 'Paciente Protocolo', telefone: '+351900000000' });
+    const sala = await Propriedade.create({ empresa_id: empresaId, nome: 'Sala Protocolo', morada: 'x', tempo_limpeza_minutos: 45 });
+
+    // Cria fisio com horário para a consulta passar no motor F3.
+    const fisio = await Utilizador.findOne({ email: 'fisio.f5@teste.pt' }).lean();
+    for (let d = 1; d <= 5; d++) {
+      await HorarioFisioterapeuta.create({ empresa_id: empresaId, fisioterapeuta_id: fisio._id, tipo: 'recorrente', dia_semana: d, hora_inicio: '09:00', hora_fim: '19:00' });
+    }
+
+    // 2027-06-14 é segunda-feira.
+    const res = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${diretorF5Token}`)
+      .send({
+        fisioterapeuta_id: fisio._id,
+        sala_id: sala._id,
+        paciente_id: pac._id,
+        data_hora_inicio: '2027-06-14T10:00:00',
+        protocolo_id: protocoloId,
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.consulta.nota_clinica.protocolo_aplicado).toBeTruthy();
+    expect(res.body.consulta.nota_clinica.protocolo_aplicado.length).toBe(2); // 2 secções (após PUT)
+    // Items têm concluido=false (snapshot inicial).
+    expect(res.body.consulta.nota_clinica.protocolo_aplicado[0].items[0].concluido).toBe(false);
+
+    // Guarda IDs para limpeza.
+    const consultaId = res.body.consulta._id;
+    const Consulta = require('../models/Consulta');
+    await Consulta.deleteOne({ _id: consultaId });
+    await Paciente.deleteOne({ _id: pac._id });
+    await Propriedade.deleteOne({ _id: sala._id });
+    await HorarioFisioterapeuta.deleteMany({ fisioterapeuta_id: fisio._id });
+  });
+
+  it('Cria consulta com protocolo_id inexistente → 400', async () => {
+    const idFake = new mongoose.Types.ObjectId();
+    const Paciente = require('../models/Paciente');
+    const Propriedade = require('../models/Propriedade');
+    const HorarioFisioterapeuta = require('../models/HorarioFisioterapeuta');
+
+    const pac = await Paciente.create({ empresa_id: empresaId, nome: 'Pac Fake', telefone: '+351900000001' });
+    const sala = await Propriedade.create({ empresa_id: empresaId, nome: 'Sala Fake', morada: 'x', tempo_limpeza_minutos: 45 });
+    const fisio = await Utilizador.findOne({ email: 'fisio.f5@teste.pt' }).lean();
+    for (let d = 1; d <= 5; d++) {
+      await HorarioFisioterapeuta.create({ empresa_id: empresaId, fisioterapeuta_id: fisio._id, tipo: 'recorrente', dia_semana: d, hora_inicio: '09:00', hora_fim: '19:00' });
+    }
+
+    const res = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${diretorF5Token}`)
+      .send({
+        fisioterapeuta_id: fisio._id,
+        sala_id: sala._id,
+        paciente_id: pac._id,
+        data_hora_inicio: '2027-07-14T10:00:00',
+        protocolo_id: idFake,
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.erro).toContain('Protocolo não encontrado');
+
+    await Paciente.deleteOne({ _id: pac._id });
+    await Propriedade.deleteOne({ _id: sala._id });
+    await HorarioFisioterapeuta.deleteMany({ fisioterapeuta_id: fisio._id });
+  });
+
+  it('PATCH /nota-clinica atualiza items do protocolo (marcar concluido)', async () => {
+    // Cria consulta com protocolo.
+    const Paciente = require('../models/Paciente');
+    const Propriedade = require('../models/Propriedade');
+    const HorarioFisioterapeuta = require('../models/HorarioFisioterapeuta');
+    const Consulta = require('../models/Consulta');
+
+    const pac = await Paciente.create({ empresa_id: empresaId, nome: 'Pac Marcar', telefone: '+351900000002' });
+    const sala = await Propriedade.create({ empresa_id: empresaId, nome: 'Sala Marcar', morada: 'x', tempo_limpeza_minutos: 45 });
+    const fisio = await Utilizador.findOne({ email: 'fisio.f5@teste.pt' }).lean();
+    for (let d = 1; d <= 5; d++) {
+      await HorarioFisioterapeuta.create({ empresa_id: empresaId, fisioterapeuta_id: fisio._id, tipo: 'recorrente', dia_semana: d, hora_inicio: '09:00', hora_fim: '19:00' });
+    }
+
+    const rConsulta = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${diretorF5Token}`)
+      .send({
+        fisioterapeuta_id: fisio._id,
+        sala_id: sala._id,
+        paciente_id: pac._id,
+        data_hora_inicio: '2027-08-10T10:00:00', // segunda-feira
+        protocolo_id: protocoloId,
+      });
+    expect(rConsulta.status).toBe(201);
+    const consultaId = rConsulta.body.consulta._id;
+
+    // Marca o primeiro item do protocolo como concluido.
+    const snapshot = rConsulta.body.consulta.nota_clinica.protocolo_aplicado;
+    snapshot[0].items[0].concluido = true;
+
+    const res = await request(app)
+      .patch(`/api/gestor/consultas/${consultaId}/nota-clinica`)
+      .set('Authorization', `Bearer ${fisioF5Token}`)
+      .send({ protocolo_aplicado: snapshot });
+
+    expect(res.status).toBe(200);
+    expect(res.body.consulta.nota_clinica.protocolo_aplicado[0].items[0].concluido).toBe(true);
+
+    await Consulta.deleteOne({ _id: consultaId });
+    await Paciente.deleteOne({ _id: pac._id });
+    await Propriedade.deleteOne({ _id: sala._id });
+    await HorarioFisioterapeuta.deleteMany({ fisioterapeuta_id: fisio._id });
+  });
+
+  it('DELETE /:id (diretor) → 200 elimina protocolo', async () => {
+    const res = await request(app)
+      .delete(`/api/gestor/protocolos/${protocoloId}`)
+      .set('Authorization', `Bearer ${diretorF5Token}`);
+    expect(res.status).toBe(200);
+  });
+
+  it('DELETE /:id inexistente → 404', async () => {
+    const idFake = new mongoose.Types.ObjectId();
+    const res = await request(app)
+      .delete(`/api/gestor/protocolos/${idFake}`)
+      .set('Authorization', `Bearer ${diretorF5Token}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('sem token → 401', async () => {
+    const res = await request(app).get('/api/gestor/protocolos');
+    expect(res.status).toBe(401);
+  });
+});

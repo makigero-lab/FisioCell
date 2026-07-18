@@ -4,10 +4,11 @@
 > Este documento acompanha as fases **F0** (rename + remoção Smoobu), **F1**
 > (migração de roles + `perfil_profissional` + `config` da empresa), **F2**
 > (`Paciente` + CRUD + sanitização de dados clínicos), **F3**
-> (`HorarioFisioterapeuta` + motor de disponibilidade em 3 camadas) e **F4**
+> (`HorarioFisioterapeuta` + motor de disponibilidade em 3 camadas), **F4**
 > (`Consulta` + validação de conflitos + cédula profissional + nota clínica SOAP
-> imutável) e define o roadmap de migração F0–F9. Os esquemas Mongoose abaixo
-> são **propostas** — a implementação decorre fase a fase.
+> imutável) e **F5** (`ModeloProtocolo` + snapshot imutável na Consulta) e
+> define o roadmap de migração F0–F9. Os esquemas Mongoose abaixo são
+> **propostas** — a implementação decorre fase a fase.
 
 ---
 
@@ -101,7 +102,7 @@ const isRececionista   = requireRole('admin', 'diretor_clinico', 'rececionista')
 | `Propriedade`                         | → | `Sala`                           | F3 |
 | `Utilizador` (admin/manager/staff)    | → | `Utilizador` (admin/diretor_clinico/fisioterapeuta/rececionista) | F1 ✅ |
 | `Tarefa`                              | → | `Consulta`                       | F4 ✅ |
-| `ModeloChecklist`                     | → | `ModeloProtocolo`                | F5 |
+| `ModeloChecklist`                     | → | `ModeloProtocolo`                | F5 ✅ |
 | `TarefaArquivo`                       | → | `ConsultaArquivo`                | F4 ✅ |
 | `smoobuController.js`                 | → | ❌ **removido**                   | F0 ✅ |
 | `webhookController.js`                | → | ❌ **removido**                   | F0 ✅ |
@@ -270,9 +271,32 @@ consultaSchema.index({ empresa_id: 1, paciente_id: 1, data_hora_inicio: -1 });  
 consultaSchema.index({ estado: 1, data_hora_inicio: 1 });                        // queries operacionais
 ```
 
-> **F4 — Implementação real:** em relação à proposta v0.1 inicial houve as seguintes alterações: o campo `data_hora` (timestamp único) foi dividido em `data_hora_inicio` + `data_hora_fim` (o backend calcula `fim = inicio + duracao_minutos`) para suportar a validação de sobreposição de intervalos na função `validarConflitos`; o `duracao_minutos` default passou de `60` para `45` (alinha com `Empresa.config.duracao_consulta_padrao`); o enum `tipo` ganhou `'grupo'` (embora a marcação continue 1:1 por enquanto); o enum `estado` passou de `['agendada','confirmada','em_curso','concluida','cancelada','faltou']` para `['marcada','confirmada','em_curso','concluida','cancelada','faltou','nao_compareceu']` (`'agendada'` → `'marcada'`, adicionado `'nao_compareceu'`); foi adicionado `motivo_cancelamento` (enum `'paciente'|'clinica'|'fisio'|'outro'`); o enum `presenca` ganhou `'atrasado'` (em vez de `'justificada'`); a `nota_clinica` ganhou `tratamento_efetuado`, `protocolo_aplicado[]` (snapshot de `ModeloProtocolo` — futuro F5) e `cedula_assinante` (snapshot da cédula do fisio que assinou — auditoria legal); o array `lembretes[]` foi substituído por dois booleans simples `lembrete_24h_enviado`/`lembrete_2h_enviado` (flags para os futuros cron jobs F7); foram adicionados `criada_por` (auditoria), `cancelada_em`/`cancelada_por`. Os índices compostos foram expandidos para 4 (incluindo `{estado, data_hora_inicio}` para queries operacionais e `{empresa_id, paciente_id, data_hora_inicio: -1}` para histórico do paciente em ordem inversa). A imutabilidade da `nota_clinica` após `estado='concluida'` é enforced no controller (403 em PUT/PATCH/DELETE); a cédula do assinante é validada via `Utilizador.temCedulaValida()` em `PATCH /:id/nota-clinica` (403 sem cédula). A validação de conflitos (4 dimensões: fisio disponível + sala + fisio + paciente) é feita pela função interna `validarConflitos` no `consultaController` (não no schema), seguindo o padrão soft block (409 sem `forcar`, 200 com warning se `forcar: true`).
+> **F4 — Implementação real:** em relação à proposta v0.1 inicial houve as seguintes alterações: o campo `data_hora` (timestamp único) foi dividido em `data_hora_inicio` + `data_hora_fim` (o backend calcula `fim = inicio + duracao_minutos`) para suportar a validação de sobreposição de intervalos na função `validarConflitos`; o `duracao_minutos` default passou de `60` para `45` (alinha com `Empresa.config.duracao_consulta_padrao`); o enum `tipo` ganhou `'grupo'` (embora a marcação continue 1:1 por enquanto); o enum `estado` passou de `['agendada','confirmada','em_curso','concluida','cancelada','faltou']` para `['marcada','confirmada','em_curso','concluida','cancelada','faltou','nao_compareceu']` (`'agendada'` → `'marcada'`, adicionado `'nao_compareceu'`); foi adicionado `motivo_cancelamento` (enum `'paciente'|'clinica'|'fisio'|'outro'`); o enum `presenca` ganhou `'atrasado'` (em vez de `'justificada'`); a `nota_clinica` ganhou `tratamento_efetuado`, `protocolo_aplicado[]` (snapshot de `ModeloProtocolo` — **F5 concluído**: povoado no `criarConsulta` via `gerarSnapshotProtocolo`, atualizado via `PATCH /nota-clinica`) e `cedula_assinante` (snapshot da cédula do fisio que assinou — auditoria legal); o array `lembretes[]` foi substituído por dois booleans simples `lembrete_24h_enviado`/`lembrete_2h_enviado` (flags para os futuros cron jobs F7); foram adicionados `criada_por` (auditoria), `cancelada_em`/`cancelada_por`. Os índices compostos foram expandidos para 4 (incluindo `{estado, data_hora_inicio}` para queries operacionais e `{empresa_id, paciente_id, data_hora_inicio: -1}` para histórico do paciente em ordem inversa). A imutabilidade da `nota_clinica` após `estado='concluida'` é enforced no controller (403 em PUT/PATCH/DELETE); a cédula do assinante é validada via `Utilizador.temCedulaValida()` em `PATCH /:id/nota-clinica` (403 sem cédula). A validação de conflitos (4 dimensões: fisio disponível + sala + fisio + paciente) é feita pela função interna `validarConflitos` no `consultaController` (não no schema), seguindo o padrão soft block (409 sem `forcar`, 200 com warning se `forcar: true`).
 
-### 5.5 `Sala` — F3 (substitui `Propriedade`)
+### 5.5 `ModeloProtocolo` — ✅ F5 concluído (substitui `ModeloChecklist`)
+
+```js
+const modeloProtocoloSchema = new Schema({
+  empresa_id:   { type: ObjectId, ref: 'Empresa', required: true, index: true },
+  nome:         { type: String, required: true, trim: true, index: true },
+  descricao:    { type: String, default: '', trim: true },
+  // F5 — Área clínica (para filtrar no formulário de marcação).
+  area:         { type: String, enum: ['musculoesqueletica','neurologica','cardioresp','desporto','pediatria','outro'], default: 'musculoesqueletica', index: true },
+  seccoes: [{
+    nome:  { type: String, required: true, trim: true },
+    items: [{ type: String, required: true, trim: true }],
+  }],
+  // F5 — Permite desativar um protocolo sem apagar (preserva snapshots antigos).
+  ativo:        { type: Boolean, default: true, index: true },
+}, { timestamps: true });
+
+// Índice para listar protocolos ativos por empresa + área.
+modeloProtocoloSchema.index({ empresa_id: 1, ativo: 1, area: 1 });
+```
+
+> **F5 — Implementação real:** o `ModeloProtocolo` evolui o `ModeloChecklist` (Prompt 133) com dois campos novos: `area` (área clínica — enum de 6 valores, default `'musculoesqueletica'`, indexado individualmente e no composto) e `ativo` (soft toggle — permite desativar um protocolo sem apagar, preservando os snapshots já guardados em `Consulta.nota_clinica.protocolo_aplicado`). O `nome` é indexado individualmente para pesquisa. Cada secção tem `nome` (obrigatório) + `items` (array de strings não vazias). O índice composto `{ empresa_id, ativo, area }` otimiza a query mais frequente: listar protocolos ativos por área para o select no formulário de marcação de consulta. O controller `protocoloController.js` exporta o helper `gerarSnapshotProtocolo(protocoloId, empresaId)` (devolve array de `{ nome, items: [{ texto, concluido: false }] }` ou `null` se não existir/não pertencer à empresa) — invocado por `consultaController.criarConsulta` quando o body traz `protocolo_id`, guardando o snapshot imutável em `nota_clinica.protocolo_aplicado`. O `PATCH /:id/nota-clinica` aceita `protocolo_aplicado` para marcar items `concluido` durante a sessão. O `DELETE` é hard delete (não há soft delete — para "desativar" sem perder histórico usa-se `PUT` com `ativo: false`). Permissões: middleware custom `podeVer` (4 roles) para GET/listar/detalhe (fisio precisa de ver para aplicar; rececionista para selecionar ao marcar); `isDiretorClinico` para POST/PUT/DELETE.
+
+### 5.6 `Sala` — F3 (substitui `Propriedade`)
 
 ```js
 const salaSchema = new Schema({
@@ -286,7 +310,7 @@ const salaSchema = new Schema({
 salaSchema.index({ empresa_id: 1, nome: 1 }, { unique: true });
 ```
 
-### 5.6 `HorarioFisioterapeuta` — ✅ F3 concluído
+### 5.7 `HorarioFisioterapeuta` — ✅ F3 concluído
 
 ```js
 const horarioFisioterapeutaSchema = new Schema({
@@ -321,7 +345,7 @@ horarioFisioterapeutaSchema.index({ fisioterapeuta_id: 1, data: 1 });
 
 > **F3 — Implementação real:** em relação à proposta v0.1 inicial houve as seguintes alterações: o array `janelas: [{ inicio, fim }]` foi substituído por uma única janela por documento (`hora_inicio` + `hora_fim`) — para representar um dia com manhã+tarde criam-se dois documentos `recorrente` com o mesmo `dia_semana`; o campo `notas` (plural) passou a `nota` (singular); o default de `disponivel` (exceção) passou de `false` para `true` (na prática o controller valida o tipo e o frontend oferece o toggle); foi adicionado o campo `ativo` (soft toggle, indexado) para desativar uma regra sem a apagar. Os índices compostos também foram ajustados: `{ fisioterapeuta_id, dia_semana, ativo }` para queries de regra recorrente, `{ empresa_id, fisioterapeuta_id, tipo }` para listagens por fisioterapeuta, e `{ fisioterapeuta_id, data }` para procura de exceções por dia. A validação de coerência entre `tipo`/`dia_semana`/`data` é feita em `pre('validate')` (não em validadores de campo isolados). O motor de disponibilidade (`utils/disponibilidade.js`) consulta este modelo nas funções `obterHorarioDia`, `verificarConflitoHorario` e `verificarDisponibilidadeCompleta`.
 
-### 5.7 `Documento` — F9
+### 5.8 `Documento` — F9
 
 ```js
 const documentoSchema = new Schema({
@@ -386,7 +410,7 @@ Todos mantêm `timezone: 'Europe/Lisbon'`.
 | **F2** | Criar `Paciente` + CRUD + permissões (diretor_clinico vê todos; fisio vê só os seus; rececionista vê dados demográficos) | ✅ Concluído |
 | **F3** | `Sala` (de `Propriedade`) + `HorarioFisioterapeuta` + motor de disponibilidade (3 camadas) | ✅ Concluído\* |
 | **F4** | `Consulta` (de `Tarefa`) + CRUD de marcação + validação de conflitos (sala + fisio + paciente) + nota clínica SOAP imutável + cédula profissional | ✅ Concluído |
-| **F5** | Nota clínica SOAP + `ModeloProtocolo` (de `ModeloChecklist`) | Pendente |
+| **F5** | `ModeloProtocolo` (de `ModeloChecklist`) + CRUD + snapshot imutável na Consulta (`protocolo_id` em `criarConsulta`, `protocolo_aplicado` em `PATCH /nota-clinica`) | ✅ Concluído |
 | **F6** | Adaptar frontend: calendário FullCalendar mostra `Consultas` em vez de `Tarefas` | Pendente |
 | **F7** | Cron jobs novos (`briefingDiarioFisio`, `lembreteConsultasAmanha`, `lembrete2hConsulta`, `caoGuardaConsultas`, `arquivistaConsultas`) | Pendente |
 | **F8** | Limpeza: remover `Tarefa`, `TarefaArquivo`, `Propriedade`, `ModeloChecklist` antigos | Pendente |

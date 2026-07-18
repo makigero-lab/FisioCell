@@ -32,6 +32,7 @@ backend/
 │   ├── authController.js     # Autenticação: login (JWT) + /me
 │   ├── gestorController.js   # Painel do Gestor (dashboard, tarefas, equipa)
 │   ├── consultaController.js # CRUD de Consultas (F4) + validação de conflitos + nota clínica SOAP + cédula
+│   ├── protocoloController.js # CRUD de Modelos de Protocolo (F5) + helper gerarSnapshotProtocolo
 │   ├── horarioController.js # CRUD de HorarioFisioterapeuta (F3) + verificador de disponibilidade
 │   ├── pacienteController.js # CRUD de Pacientes (F2) — permissões por role + sanitização de dados clínicos
 │   ├── staffController.js    # Painel do Staff
@@ -52,7 +53,8 @@ backend/
 │   ├── Tarefa.js             #   Tarefa de limpeza (será migrada para Consulta em F4)
 │   ├── Paciente.js           #   Paciente da clínica (F2) — soft delete + dados clínicos sanitizados
 │   ├── HorarioFisioterapeuta.js # Limites de agenda do fisio (F3) — recorrente/excecao + motor de disponibilidade
-│   └── Consulta.js           #   Marcação/sessão de fisioterapia (F4) — substitui Tarefa; conflitos + SOAP + cédula
+│   ├── Consulta.js           #   Marcação/sessão de fisioterapia (F4) — substitui Tarefa; conflitos + SOAP + cédula
+│   └── ModeloProtocolo.js    #   Template de protocolo clínico (F5) — substitui ModeloChecklist; área + ativo + snapshot
 ├── utils/
 │   ├── loadBalancer.js       # Motor de atribuição (extraído do webhook em F0)
 │   ├── geocoding.js          # Geocoding de moradas (Nominatim)
@@ -68,6 +70,7 @@ backend/
     ├── pacienteRoutes.js     # Rotas /api/gestor/pacientes/* (F2)
     ├── horarioRoutes.js      # Rotas /api/gestor/horarios/* (F3)
     ├── consultaRoutes.js     # Rotas /api/gestor/consultas/* (F4)
+    ├── protocoloRoutes.js    # Rotas /api/gestor/protocolos/* (F5)
     ├── staffRoutes.js        # Rotas /api/staff/*
     ├── authRoutes.js         # POST /api/auth/login, GET /api/auth/me
     ├── ausenciaRoutes.js     # Rotas de ausências
@@ -97,7 +100,7 @@ O fluxo de arranque segue uma sequência segura:
 
 ## 3.1. Modelos de dados (Mongoose)
 
-O sistema gira em torno de 8 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
+O sistema gira em torno de 9 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
 
 ### `Empresa`
 Entidade principal do SaaS (multi-tenant). Cada empresa agrupa Propriedades e Utilizadores.
@@ -342,7 +345,7 @@ Marcação/sessão de fisioterapia. **F4** — substitui `Tarefa` no domínio Fi
 | `avaliacao`             | String   | Default `''`. **A** — diagnóstico clínico / hipótese diagnóstica.  |
 | `plano`                 | String   | Default `''`. **P** — plano terapêutico (exercícios, frequência, etc.). |
 | `tratamento_efetuado`   | String   | Default `''`. O que foi efetivamente feito nesta sessão.           |
-| `protocolo_aplicado`    | [Object] | Default `[]`. Snapshot do `ModeloProtocolo` aplicado (futuro F5). Cada item: `{ nome: String (obrigatório), items: [{ texto: String, concluido: Boolean }] }`. |
+| `protocolo_aplicado`    | [Object] | Default `[]`. Snapshot do `ModeloProtocolo` aplicado (F5 — gerado por `gerarSnapshotProtocolo` no `criarConsulta` quando o body traz `protocolo_id`; atualizado via `PATCH /nota-clinica` para marcar items `concluido`). Cada item: `{ nome: String (obrigatório), items: [{ texto: String, concluido: Boolean }] }`. |
 | `cedula_assinante`      | String   | Default `''`. Snapshot da cédula do fisioterapeuta que assinou a nota (auditoria legal — garante que quem assinou tinha cédula válida no momento). |
 
 **Índices compostos:**
@@ -354,6 +357,27 @@ Marcação/sessão de fisioterapia. **F4** — substitui `Tarefa` no domínio Fi
 > **Permissões (F4):** as routes (`routes/consultaRoutes.js`) usam um middleware custom `podeVer` (todos os 4 roles) para `GET /`, `GET /:id` e `GET /validar` — fisioterapeuta vê só as suas consultas (filtro `fisioterapeuta_id = req.user.id` aplicado no controller); os restantes roles vêem todas. As mutações de marcação (`POST`, `PUT`) exigem `isRececionista` (admin + diretor_clinico + rececionista — todos podem marcar). O endpoint dedicado `PATCH /:id/nota-clinica` exige `isClinico` (admin + diretor_clinico + fisioterapeuta) — SOAP. O `DELETE /:id` exige `isDiretorClinico` (admin + diretor_clinico). Auditoria registada em criar/atualizar/atualizar_nota_clinica/eliminar via `utils/auditoria.js` (`recurso: 'consulta'`).
 >
 > **Imutabilidade de concluídas (RGPD):** o `DELETE /:id` bloqueia consultas com `estado='concluida'` (403 — "Não é possível eliminar uma consulta concluída (RGPD — nota clínica é imutável). Cancela em vez de eliminar."). O `PUT /:id` rejeita `nota_clinica` no body (400 — deve ser atualizada via `PATCH /:id/nota-clinica`) e bloqueia edições de `nota_clinica` se a consulta já estiver concluída (403). O `PATCH /:id/nota-clinica` bloqueia consultas concluídas (403) e valida que o assinante tem cédula (`Utilizador.temCedulaValida()`).
+
+### `ModeloProtocolo`
+Template de protocolo clínico reutilizável. **F5** — substitui `ModeloChecklist` no domínio Fisioterapia. Cada protocolo agrupa-se em **secções** (cada uma com nome + lista de items de texto). Quando uma `Consulta` é criada com `protocolo_id`, o controller gera um **snapshot** (cópia imutável com `concluido: false` em cada item) que é guardado em `nota_clinica.protocolo_aplicado` — alterações futuras no template **não** afetam consultas antigas (RGPD/legal).
+
+> **F5:** O `ModeloProtocolo` evolui o `ModeloChecklist` (Prompt 133) com dois campos novos: `area` (área clínica — para filtrar no formulário de marcação) e `ativo` (soft toggle — permite desativar um protocolo sem apagar, preservando os snapshots já guardados em consultas antigas). O helper `gerarSnapshotProtocolo(protocoloId, empresaId)` (em `protocoloController.js`) é invocado por `consultaController.criarConsulta` quando o body traz `protocolo_id`. O `DELETE /:id` é **hard delete** (não há soft delete) — para "desativar" sem perder histórico usa-se `PUT /:id` com `ativo: false`.
+
+| Campo         | Tipo     | Notas                                                              |
+|---------------|----------|--------------------------------------------------------------------|
+| `empresa_id`  | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
+| `nome`        | String   | Obrigatório, trim, indexado. Ex.: "Avaliação Ombro", "Sessão Lombalgia", "Reabilitação Pós-Cirúrgica". |
+| `descricao`   | String   | Default `''`, trim. Descrição opcional do protocolo.               |
+| `area`        | String   | `enum: ['musculoesqueletica','neurologica','cardioresp','desporto','pediatria','outro']`, default `'musculoesqueletica'`. Indexado. Área clínica (para filtrar no formulário de marcação). |
+| `seccoes`     | [Object] | Default `[]`. Array de `{ nome: String (obrigatório, trim), items: [String] (obrigatório, ≥1 item, trim) }`. Ex.: `{ nome: "Avaliação Inicial", items: ["Inspeção","Palpação","Testes ortopédicos"] }`. |
+| `ativo`       | Boolean  | Default `true`, indexado. `false` = desativado (não aparece na seleção ao marcar consulta) mas preserva snapshots já guardados. |
+
+**Índice composto:**
+- `{ empresa_id: 1, ativo: 1, area: 1 }` — listagem de protocolos ativos por empresa + área (query mais frequente no formulário de marcação).
+
+> **Permissões (F5):** as routes (`routes/protocoloRoutes.js`) usam um middleware custom `podeVer` (todos os 4 roles — admin, diretor_clinico, fisioterapeuta, rececionista) para `GET /` e `GET /:id` — o fisioterapeuta precisa de ver os protocolos para os aplicar na consulta; a rececionista precisa de os listar para os selecionar ao marcar. As mutações (`POST`, `PUT`, `DELETE`) exigem `isDiretorClinico` (admin + diretor_clinico — só a direção clínica gere protocolos clínicos). Auditoria registada em criar/atualizar/eliminar via `utils/auditoria.js` (`recurso: 'modelo_protocolo'`).
+>
+> **Helper `gerarSnapshotProtocolo(protocoloId, empresaId)`:** exportado por `protocoloController.js` e invocado por `consultaController.criarConsulta` quando o body traz `protocolo_id`. Procura o protocolo (`_id` + `empresa_id`) e devolve um array de `{ nome, items: [{ texto, concluido: false }] }` (cópia das secções com todos os items marcados como não concluídos). Devolve `null` se o protocolo não existir ou não pertencer à empresa → o `criarConsulta` responde `400` ("Protocolo não encontrado (ou não pertence a esta empresa)."). O snapshot é guardado em `nota_clinica.protocolo_aplicado` e **não é alterado** por edições futuras no template (RGPD/legal — o protocolo aplicado numa sessão tem de refletir o template no momento da marcação).
 
 ---
 
@@ -1227,7 +1251,8 @@ Cria uma nova consulta.
   "duracao_minutos": 45,
   "tipo": "sessao",
   "observacoes": "Primeira sessão pós-avaliação.",
-  "forcar": false
+  "forcar": false,
+  "protocolo_id": "65f..."
 }
 ```
   - `fisioterapeuta_id`, `sala_id`, `paciente_id`, `data_hora_inicio` — **obrigatórios**.
@@ -1235,6 +1260,7 @@ Cria uma nova consulta.
   - `tipo` — default `'sessao'` (`enum: ['primeira_consulta','sessao','reavaliacao','alta','grupo']`).
   - `observacoes` — default `''` (string, trimmed).
   - `forcar` — default `false`. Se `true`, ignora warnings de conflito (soft block — ver secção 3.5).
+  - `protocolo_id` — default `null` (F5). Opcional. Se fornecido, o controller invoca `gerarSnapshotProtocolo(protocolo_id, empresaId)` e guarda o snapshot em `nota_clinica.protocolo_aplicado` (cópia imutável do template no momento da marcação). Se o protocolo não existir ou não pertencer à empresa → `400`.
 - **Validações:**
   - `data_hora_inicio` não pode ser no passado.
   - `fisioterapeuta_id` tem de ser fisioterapeuta/diretor_clinico ativo (não eliminado) da mesma empresa.
@@ -1245,7 +1271,7 @@ Cria uma nova consulta.
   - **`201 Created`** — `{ "consulta": { ... } }` (criada sem conflitos).
   - **`200 OK`** — `{ "consulta": { ... }, "warning": "Consulta criada com conflitos (forçado).", "conflitos": string[] }` (criada com `forcar: true` e conflitos).
 - **Auditoria:** registada (`acao: 'criar'`, `recurso: 'consulta'`, `detalhes.conflitos_forcados: true` se aplicável).
-- **Erros:** `400` campos em falta / `data_hora_inicio` no passado / `duracao_minutos < 15` / fisio/sala/paciente não encontrados / `ValidationError`; `401` não autenticado; `403` role sem permissão; `409` conflitos e `forcar: false` (`{ "erro": "Conflitos detetados. Confirma com forcar=true para ignorar.", "conflitos": string[] }`); `500` erro.
+- **Erros:** `400` campos em falta / `data_hora_inicio` no passado / `duracao_minutos < 15` / fisio/sala/paciente não encontrados / `protocolo_id` não encontrado ou não pertence à empresa (F5) / `ValidationError`; `401` não autenticado; `403` role sem permissão; `409` conflitos e `forcar: false` (`{ "erro": "Conflitos detetados. Confirma com forcar=true para ignorar.", "conflitos": string[] }`); `500` erro.
 
 #### `PUT /api/gestor/consultas/:id`
 Atualiza uma consulta (marcações: data, duração, tipo, estado, presenca, observacoes). Re-valida conflitos se algum campo temporal mudar.
@@ -1277,9 +1303,21 @@ Atualiza a nota clínica SOAP de uma consulta. **Endpoint separado** do `PUT` ge
   "objetivo": "ROM reduzida em flexão.",
   "avaliacao": "Lombalgia mecânica.",
   "plano": "Exercícios de Mobility + sessões 2x/sem.",
-  "tratamento_efetuado": "Mobilização lombar + stretching."
+  "tratamento_efetuado": "Mobilização lombar + stretching.",
+  "protocolo_aplicado": [
+    {
+      "nome": "Avaliação Inicial",
+      "items": [
+        { "texto": "Inspeção", "concluido": true },
+        { "texto": "Palpação", "concluido": true },
+        { "texto": "Testes ortopédicos", "concluido": false }
+      ]
+    }
+  ]
 }
 ```
+  - `subjetivo`, `objetivo`, `avaliacao`, `plano`, `tratamento_efetuado` — campos SOAP (string).
+  - `protocolo_aplicado` (F5) — array de `{ nome, items: [{ texto, concluido }] }`. **Substitui** o snapshot guardado no `criarConsulta` — usado pelo fisioterapeuta durante a sessão para marcar items do protocolo como `concluido: true` à medida que os vai executando. O controller normaliza cada item (`texto` → String, `concluido` → Boolean). Não é possível adicionar/remover secções via este endpoint — apenas marcar items existentes (a estrutura do snapshot é preservada).
 - **Snapshot da cédula:** ao guardar, `nota_clinica.cedula_assinante` é preenchida com `perfil_profissional.cedula` do assinante (auditoria legal — garante rastreabilidade de quem assinou).
 - **Resposta (200 OK):** `{ "consulta": { ... } }` (com `nota_clinica` atualizada e `cedula_assinante` preenchida).
 - **Auditoria:** registada (`acao: 'atualizar_nota_clinica'`, `recurso: 'consulta'`).
@@ -1293,6 +1331,103 @@ Atualiza a nota clínica SOAP de uma consulta. **Endpoint separado** do `PUT` ge
 - **Resposta (200 OK):** `{ "message": "Consulta eliminada." }`.
 - **Auditoria:** registada (`acao: 'eliminar'`, `recurso: 'consulta'`, `descricao: "Consulta eliminada (estado anterior: X)"`).
 - **Erros:** `400` ID inválido; `401` não autenticado; `403` role sem permissão / consulta concluída (RGPD); `404` não encontrada; `500` erro.
+
+### 6.15. Protocolos Clínicos (`/api/gestor/protocolos`) — F5
+
+> **Auth:** JWT (strito, sem fallback legacy). Todas as rotas protegidas por `auth` (em `protocoloRoutes.js`).
+>
+> **Permissões (F5):**
+> - `podeVer` (middleware custom) — todos os 4 roles (`admin`, `diretor_clinico`, `fisioterapeuta`, `rececionista`) podem aceder a `GET /` (listar) e `GET /:id` (detalhe). O fisioterapeuta precisa de ver os protocolos para os aplicar na consulta; a rececionista precisa de os listar para os selecionar no formulário de marcação (com `protocolo_id`). Não há filtro por fisioterapeuta (os protocolos são partilhados por toda a clínica).
+> - `isDiretorClinico` (admin + diretor_clinico) — `POST`, `PUT`, `DELETE`. Só a direção clínica gere protocolos clínicos (templates que afetam todas as notas SOAP da clínica).
+>
+> **Snapshot imutável (RGPD):** quando uma `Consulta` é criada com `protocolo_id`, o `criarConsulta` (em `consultaController.js`) invoca o helper `gerarSnapshotProtocolo(protocolo_id, empresaId)` (exportado por `protocoloController.js`) e guarda a cópia em `nota_clinica.protocolo_aplicado`. Alterações futuras no template (via `PUT /:id`) **não** afetam consultas antigas — o protocolo aplicado numa sessão tem de refletir o template no momento da marcação. O campo `ativo: false` permite retirar um protocolo da seleção sem apagar (preserva snapshots).
+>
+> **Auditoria:** todas as mutações registam em `utils/auditoria.js` (`recurso: 'modelo_protocolo'`, `acao: 'criar' | 'atualizar' | 'eliminar'`).
+
+#### `GET /api/gestor/protocolos`
+Lista os protocolos da empresa do utilizador autenticado.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Query params (opcionais):**
+  - `area` — filtra por área clínica (`musculoesqueletica`/`neurologica`/`cardioresp`/`desporto`/`pediatria`/`outro`). Ignorado se não pertencer ao enum.
+  - `ativo` — `true` filtra só ativos; `false` filtra só inativos; sem o param devolve ambos.
+- **Ordenação:** `area` (asc) + `nome` (asc).
+- **Populate:** nenhum (o protocolo só tem `empresa_id`, sem referências a outras coleções).
+- **Resposta (200 OK):**
+```json
+{
+  "protocolos": [
+    {
+      "_id": "...",
+      "empresa_id": "...",
+      "nome": "Avaliação Ombro",
+      "descricao": "Protocolo de avaliação inicial do ombro",
+      "area": "musculoesqueletica",
+      "seccoes": [
+        { "nome": "Avaliação Inicial", "items": ["Inspeção", "Palpação", "Testes ortopédicos"] }
+      ],
+      "ativo": true,
+      "createdAt": "...",
+      "updatedAt": "..."
+    }
+  ],
+  "total": 3
+}
+```
+- **Erros:** `401` não autenticado; `403` role sem permissão; `500` erro interno.
+
+#### `GET /api/gestor/protocolos/:id`
+Devolve o detalhe de um protocolo.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Resposta (200 OK):** `{ "protocolo": { ... } }`.
+- **Erros:** `400` ID inválido; `401` não autenticado; `404` não encontrado / não pertence à empresa; `500` erro.
+
+#### `POST /api/gestor/protocolos`
+Cria um novo protocolo clínico.
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Body:**
+```json
+{
+  "nome": "Avaliação Ombro",
+  "descricao": "Protocolo de avaliação inicial do ombro",
+  "area": "musculoesqueletica",
+  "seccoes": [
+    { "nome": "Avaliação Inicial", "items": ["Inspeção", "Palpação", "Testes ortopédicos"] },
+    { "nome": "Tratamento", "items": ["Mobilização", "Fortalecimento"] }
+  ],
+  "ativo": true
+}
+```
+  - `nome` — **obrigatório** (string, trimmed).
+  - `descricao` — default `''` (string, trimmed).
+  - `area` — default `'musculoesqueletica'` (`enum: ['musculoesqueletica','neurologica','cardioresp','desporto','pediatria','outro']`).
+  - `seccoes` — **obrigatório** (array, ≥1 secção). Cada secção tem de ter `nome` (string não vazia) e `items` (array de strings, ≥1 item). Items vazios são filtrados.
+  - `ativo` — default `true` (boolean).
+- **Validações:** `400` se `nome` em falta; `400` se `area` inválida; `400` se `seccoes` não for array ou estiver vazio; `400` se alguma secção não tiver `nome` ou tiver `items` vazio.
+- **Resposta (201 Created):** `{ "protocolo": { ... } }`.
+- **Auditoria:** registada (`acao: 'criar'`, `recurso: 'modelo_protocolo'`, `descricao: "Protocolo \"<nome>\" criado (<area>)"`).
+- **Erros:** `400` validações acima; `401` não autenticado; `403` role sem permissão; `500` erro.
+
+#### `PUT /api/gestor/protocolos/:id`
+Atualiza um protocolo (todos os campos opcionais, mas pelo menos um). Permite desativar (`ativo: false`) sem apagar — preserva snapshots já guardados em consultas antigas.
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Body (todos opcionais, mas pelo menos um):** `nome`, `descricao`, `area`, `seccoes`, `ativo`.
+  - Se `seccoes` vier, é revalidada (cada secção tem de ter `nome` não vazio; items vazios são filtrados).
+  - `ativo` é normalizado para boolean (`!!ativo`).
+- **Resposta (200 OK):** `{ "protocolo": { ... } }` (documento atualizado, `new: true`).
+- **Auditoria:** registada (`acao: 'atualizar'`, `recurso: 'modelo_protocolo'`, `descricao: "Protocolo \"<nome>\" atualizado"`).
+- **Erros:** `400` ID inválido / `area` inválida / `seccoes` não for array / secção sem `nome`; `401` não autenticado; `403` role sem permissão; `404` não encontrado; `500` erro.
+
+#### `DELETE /api/gestor/protocolos/:id`
+**Hard delete** do protocolo (o `ModeloProtocolo` não tem soft delete — para "desativar" sem perder histórico usa-se `PUT /:id` com `ativo: false`).
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Resposta (200 OK):** `{ "message": "Protocolo apagado com sucesso." }`.
+- **Auditoria:** registada (`acao: 'eliminar'`, `recurso: 'modelo_protocolo'`, `descricao: "Protocolo eliminado"`).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` role sem permissão; `404` não encontrado (ou `deletedCount === 0`); `500` erro.
 
 ---
 
@@ -1327,6 +1462,7 @@ Atualiza a nota clínica SOAP de uma consulta. **Endpoint separado** do `PUT` ge
 
 | Data       | Versão | Alteração                                                            |
 |------------|--------|----------------------------------------------------------------------|
+| **F5**     | —      | **Protocolos Clínicos + snapshot na Consulta:** (1) Novo modelo `models/ModeloProtocolo.js` (evolução do `ModeloChecklist`) — `empresa_id`, `nome`, `descricao`, `area` (`enum ['musculoesqueletica','neurologica','cardioresp','desporto','pediatria','outro']` default `'musculoesqueletica'`), `seccoes[{nome, items[]}]`, `ativo` (boolean default `true`). Índice composto `{empresa_id, ativo, area}` + índices individuais em `empresa_id`/`nome`/`area`/`ativo`. (2) Novo `controllers/protocoloController.js` — 5 funções CRUD (`listarProtocolos` com filtros `area`/`ativo` ordenado por `area`+`nome`, `obterProtocolo`, `criarProtocolo` com validação de `nome` obrigatório + `area` válida + `seccoes` array não vazio + cada secção com `nome` e `items` não vazios, `atualizarProtocolo` com normalização de `ativo`/`seccoes`, `apagarProtocolo` hard delete) + helper exportado `gerarSnapshotProtocolo(protocoloId, empresaId)` (devolve array de `{nome, items:[{texto, concluido:false}]}` ou `null` se não existir/não pertencer à empresa); auditoria registada (`recurso: 'modelo_protocolo'`). (3) Novas `routes/protocoloRoutes.js` montadas em `/api/gestor/protocolos` — middleware custom `podeVer` (4 roles: admin/diretor_clinico/fisioterapeuta/rececionista) para `GET /` e `GET /:id` (fisio precisa de ver para aplicar; rececionista para selecionar ao marcar); `isDiretorClinico` para POST/PUT/DELETE (só direção clínica gere protocolos). (4) `server.js` — mount `app.use('/api/gestor/protocolos', protocoloRoutes)`. (5) Integração na Consulta — `consultaController.criarConsulta` aceita `protocolo_id` opcional no body → invoca `gerarSnapshotProtocolo` e guarda em `nota_clinica.protocolo_aplicado` (400 se protocolo não encontrado/não pertence à empresa); `consultaController.atualizarNotaClinica` (`PATCH /:id/nota-clinica`) aceita `protocolo_aplicado` para marcar items como `concluido` durante a sessão (substitui o snapshot, normaliza `texto`/`concluido`). Snapshot imutável por edições futuras no template (RGPD/legal). 192/192 testes ✓ (+16 testes: CRUD de protocolos, validações de `nome`/`area`/`seccoes`, permissões `podeVer`/`isDiretorClinico`, snapshot na criação de consulta com `protocolo_id`, marcação de items concluídos via PATCH, protocolo inexistente → 400). |
 | **F4**     | —      | **Consultas + validação de conflitos + cédula profissional:** (1) Novo modelo `models/Consulta.js` — `empresa_id`, `sala_id` (`ref: 'Propriedade'` alias Sala até F8), `fisioterapeuta_id` (`ref: 'Utilizador'`), `paciente_id` (`ref: 'Paciente'`), `data_hora_inicio`/`data_hora_fim` (Date), `duracao_minutos` (default `45`, `min: 15`), `tipo` (`enum ['primeira_consulta','sessao','reavaliacao','alta','grupo']` default `'sessao'`), `estado` (`enum ['marcada','confirmada','em_curso','concluida','cancelada','faltou','nao_compareceu']` default `'marcada'`), `motivo_cancelamento` (`enum ['paciente','clinica','fisio','outro']`), `presenca` (`enum ['pendente','presente','ausente','atrasado']`), `nota_clinica` (`{subjetivo, objetivo, avaliacao, plano, tratamento_efetuado, protocolo_aplicado[], cedula_assinante}` — imutável após `estado='concluida'`), `criada_por`, `concluida_em`, `cancelada_em`, `cancelada_por`, `lembrete_24h_enviado`, `lembrete_2h_enviado`, `observacoes`. Índices compostos `{empresa_id, fisioterapeuta_id, data_hora_inicio}`, `{empresa_id, sala_id, data_hora_inicio}`, `{empresa_id, paciente_id, data_hora_inicio (-1)}`, `{estado, data_hora_inicio}`. (2) `models/Utilizador.js` — adicionado método de instância `temCedulaValida()` (devolve `true` para admin/rececionista; para fisio/diretor_clinico exige `perfil_profissional.cedula` preenchido). (3) Novo `controllers/consultaController.js` — função interna `validarConflitos` (4 verificações em simultâneo: fisio disponível via motor F3 + sala sem sobreposição + fisio sem sobreposição + paciente sem sobreposição, devolve `{ok, warnings, horario}`); 7 funções exportadas (`listarConsultas` com filtros fisioterapeuta_id/sala_id/paciente_id/estado/inicio/fim + fisio vê só as suas, `obterConsulta`, `criarConsulta` com `forcar` para soft block 409/200, `atualizarConsulta` com re-validação temporal + `excluirConsultaId`, `atualizarNotaClinica` endpoint separado com `isClinico` + validação de cédula + snapshot de `cedula_assinante`, `eliminarConsulta` bloqueia concluídas RGPD, `validarConflitosEndpoint` GET para o frontend validar em tempo real); auditoria registada (`recurso: 'consulta'`). (4) Novas `routes/consultaRoutes.js` montadas em `/api/gestor/consultas` — middleware custom `podeVer` (4 roles) para GET/listar/validar/detalhe, `isRececionista` para POST/PUT, `isClinico` para `PATCH /:id/nota-clinica`, `isDiretorClinico` para DELETE. (5) `server.js` — mount `app.use('/api/gestor/consultas', consultaRoutes)`. 176/176 testes ✓ (+25 testes de Consulta: CRUD, validação de conflitos fisio/sala/paciente, soft block com `forcar`, nota clínica SOAP com cédula, imutabilidade de concluídas, RGPD no delete). |
 | **F3**     | —      | **Horários de Fisioterapeuta + motor de disponibilidade:** (1) Novo modelo `models/HorarioFisioterapeuta.js` — `empresa_id`, `fisioterapeuta_id`, `tipo` (`enum ['recorrente','excecao']` default `'recorrente'`), `dia_semana` (0-6, `null` se `excecao`), `hora_inicio`/`hora_fim` (formato `HH:mm` validado por regex), `data` (Date, `null` se `recorrente`), `disponivel` (boolean default `true` — para `excecao`), `ativo` (boolean default `true` indexado — soft toggle), `nota` (string). Validação `pre('validate')`: `recorrente` exige `dia_semana` e força `data=null`; `excecao` exige `data` e força `dia_semana=null`. Índices compostos `{fisioterapeuta_id, dia_semana, ativo}`, `{empresa_id, fisioterapeuta_id, tipo}`, `{fisioterapeuta_id, data}`. (2) `utils/disponibilidade.js` expandido — adicionadas `horaLisboa(instante)` (devolve `HH:mm` no fuso de Lisboa via `Intl.DateTimeFormat`), `compararHoras(a, b)` (compara `HH:mm` em minutos), `obterHorarioDia(fisioId, data)` (3 sub-camadas: exceção do dia → regra recorrente → sem horário), `verificarConflitoHorario(fisioId, dataHoraInicio, duracaoMin)` (valida se a consulta cabe no bloco de trabalho), `verificarDisponibilidadeCompleta(utilizador, dataHoraInicio, duracaoMin)` (ausência aprovada → folga fixa semanal → horário de trabalho, com falha cedo). (3) Novo `controllers/horarioController.js` — CRUD completo (`listarHorarios`, `obterHorario`, `criarHorario`, `atualizarHorario`, `eliminarHorario` hard delete, `verificarDisponibilidade`); valida `fisioterapeuta_id` como fisio/diretor_clinico ativo da empresa; fisioterapeuta vê só os seus; auditoria registada. (4) Novas `routes/horarioRoutes.js` montadas em `/api/gestor/horarios` — middleware custom `podeVer` (4 roles) para GET/listar/disponibilidade, `isDiretorClinico` para POST/PUT/DELETE. (5) `server.js` — mount `app.use('/api/gestor/horarios', horarioRoutes)`. 151/151 testes ✓ (+21 testes de Horário: CRUD, permissões, motor de disponibilidade com exceções, conflitos de horário, dia sem regra). |
 | **F2**     | —      | **Pacientes (Fisioterapia):** (1) Novo modelo `models/Paciente.js` — `empresa_id`, `nome`, `data_nascimento`, `genero` (`enum ['M','F','Outro','NA']` default `'NA'`), `num_utente` (SNS), `nif`, `telefone` (obrigatório), `email`, `morada`, `contacto_emergencia` (`{nome, telefone, relacao}`), `historico_medico`, `alergias` (`[String]`), `consentimento_dados` (`{concedido, data, versao_termos}`), `ativo`, `eliminado_em` (soft delete), `observacoes`, `origem` (`enum ['walk_in','referenciacao','online','outro']` default `'walk_in'`). Índices compostos `{empresa_id, nome}`, `{empresa_id, num_utente}`, `{empresa_id, ativo, eliminado_em}`. (2) Novo `controllers/pacienteController.js` — CRUD completo (`listarPacientes`, `obterPaciente`, `criarPaciente`, `atualizarPaciente`, `eliminarPaciente` soft delete, `alternarEstadoPaciente`) + helpers `temAcessoClinico` e `sanitizarParaNaoClinico` (remove `historico_medico`/`alergias`/`contacto_emergencia` para rececionistas) + auditoria via `utils/auditoria.js`. (3) Novas `routes/pacienteRoutes.js` montadas em `/api/gestor/pacientes` — middleware custom `podeVer` (4 roles) para GET/POST/PUT, `isRececionista` para `PATCH /:id/estado`, `isDiretorClinico` para `DELETE /:id` (soft delete). (4) `server.js` — mount `app.use('/api/gestor/pacientes', pacienteRoutes)`. Respostas incluem flag `dados_clinicos: boolean`. 130/130 testes ✓ (+19 testes de Paciente). |
