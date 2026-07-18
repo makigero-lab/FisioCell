@@ -255,6 +255,35 @@ export interface PacienteListResponse {
   dados_clinicos: boolean;
 }
 
+// F3 — Horário de Fisioterapeuta
+export interface HorarioFisioterapeutaDTO {
+  _id: string;
+  empresa_id: string;
+  fisioterapeuta_id: string | { _id: string; nome: string; email: string; role: Role };
+  tipo: "recorrente" | "excecao";
+  dia_semana: number | null; // 0-6 (null se excecao)
+  hora_inicio: string; // HH:mm
+  hora_fim: string; // HH:mm
+  data: string | null; // ISO (null se recorrente)
+  disponivel: boolean;
+  ativo: boolean;
+  nota: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface HorarioListResponse {
+  horarios: HorarioFisioterapeutaDTO[];
+  total: number;
+}
+
+export interface DisponibilidadeResponse {
+  disponivel: boolean;
+  horario: { hora_inicio: string; hora_fim: string } | null;
+  motivo: string | null;
+  origem: "excecao" | "recorrente" | null;
+}
+
 export interface AusenciaDTO {
   _id: string;
   utilizador_id: string;

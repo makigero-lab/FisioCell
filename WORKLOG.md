@@ -1080,3 +1080,100 @@ Stage Summary:
 - **130/130 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
 - **Nota**: o filtro "fisioterapeuta vê só os seus pacientes" será implementado em F4 (Consulta com paciente_id + fisioterapeuta_id). Por agora, todos os clínicos vêem todos os pacientes ativos da empresa.
 - **Próximo passo:** F3 (Sala de Propriedade + HorarioFisioterapeuta + motor de disponibilidade).
+
+
+---
+Task ID: DOC-F3
+Agent: general-purpose
+Task: Atualização de documentação para F3 (Horários de Fisioterapeuta + motor de disponibilidade)
+
+Work Log:
+- Lido `WORKLOG.md` (1082 linhas, últimas entradas DOC-F2/F2) e `docs/ARQUITETURA.md` (375 linhas) para contexto.
+- Confirmado estado pós-F3 no código: `backend/models/HorarioFisioterapeuta.js` (empresa_id, fisioterapeuta_id, tipo enum ['recorrente','excecao'] default 'recorrente', dia_semana 0-6 default null, hora_inicio/hora_fim com regex HH:mm, data Date default null, disponivel boolean default true, ativo boolean default true index, nota string; pre('validate') recorrente↔dia_semana/excecao↔data; índices {fisioterapeuta_id, dia_semana, ativo}, {empresa_id, fisioterapeuta_id, tipo}, {fisioterapeuta_id, data}); `backend/utils/disponibilidade.js` (expandido com `horaLisboa`, `compararHoras`, `obterHorarioDia` 3 sub-camadas, `verificarConflitoHorario`, `verificarDisponibilidadeCompleta` 3 camadas ausência→folga→horário); `backend/controllers/horarioController.js` (6 funções: listarHorarios, obterHorario, criarHorario, atualizarHorario, eliminarHorario hard delete, verificarDisponibilidade; valida fisio/diretor_clinico ativo da empresa; auditoria); `backend/routes/horarioRoutes.js` (middleware `podeVer` 4 roles para GET/disponibilidade; `isDiretorClinico` para POST/PUT/DELETE); `backend/server.js` mount `/api/gestor/horarios`; `frontend/src/app/gestor/equipa/horarios/page.tsx` (verificador de disponibilidade + lista agrupada por fisio + modal criar/editar + hard delete); `frontend/src/lib/api.ts` (HorarioFisioterapeutaDTO, HorarioListResponse, DisponibilidadeResponse); `frontend/src/components/gestor/gestor-sidebar.tsx` (item Horários, ícone Clock).
+
+- **docs/ARQUITETURA.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Banner topo: "acompanha as fases F0, F1 e F2" → "acompanha as fases F0, F1, F2 e F3" (com descrição "`HorarioFisioterapeuta` + motor de disponibilidade em 3 camadas").
+  - Secção 4 (Mapa de Migração): linha do `HorarioFisioterapeuta` marcada com "F3 ✅" (era "F3").
+  - Secção 5.6 `HorarioFisioterapeuta`: título "F3" → "✅ F3 concluído"; schema reescrito para refletir a implementação real (campos `hora_inicio`/`hora_fim` em vez de `janelas: [{inicio, fim}]`; `nota` singular em vez de `notas`; `disponivel` default `true` em vez de `false`; novo campo `ativo` indexado; `tipo` default 'recorrente' indexado; índices compostos `{fisioterapeuta_id, dia_semana, ativo}`, `{empresa_id, fisioterapeuta_id, tipo}`, `{fisioterapeuta_id, data}`). Adicionada nota "F3 — Implementação real" listando as divergências face à proposta v0.1.
+  - Secção 7 (Decisões de Design), decisão #8 ("3 camadas de disponibilidade"): reescrita para refletir o motor real (`verificarDisponibilidadeCompleta`: 1. Ausência aprovada → 2. Folga fixa semanal → 3. Horário de trabalho com `obterHorarioDia` que tem sub-camadas exceção→recorrente→sem horário, e `verificarConflitoHorario` que valida se a consulta cabe no bloco). Nota de que a 4.ª camada (conflito com consultas já marcadas) será adicionada em F4.
+  - Secção 8 (Roadmap): F3 marcado como "✅ Concluído\*" (era "Pendente") com nota explicativa que a migração `Propriedade` → `Sala` foi adiada para uma fase posterior (será retomada em F4 quando `Consulta` exigir `sala_id`); o `HorarioFisioterapeuta` + motor + endpoints + página estão concluídos.
+
+- **docs/BACKEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 2 (Estrutura): adicionado `horarioController.js` à árvore de controllers; `HorarioFisioterapeuta.js` à árvore de models; `horarioRoutes.js` à árvore de routes. Atualizada descrição de `utils/disponibilidade.js` para incluir "motor de disponibilidade F3 (horários)". Atualizada contagem "6 coleções" → "7 coleções" na secção 3.1.
+  - Secção 3.1: nova subsecção `HorarioFisioterapeuta` (após `Paciente`) — nota F3 sobre dois tipos de regra (recorrente/excecao) e coerência validada em pre('validate'); tabela completa de campos (empresa_id, fisioterapeuta_id, tipo, dia_semana, hora_inicio, hora_fim, data, disponivel, ativo, nota); bloco de validação pre('validate'); lista de índices compostos; nota de permissões (podeVer 4 roles para GET, isDiretorClinico para mutações, validação de fisio/diretor_clinico ativo da empresa, auditoria).
+  - Secção 3.4 (nova) — Motor de Disponibilidade — F3: documentação das 3 camadas verificadas por `verificarDisponibilidadeCompleta` (ausência aprovada → folga fixa semanal → horário de trabalho via verificarConflitoHorario); documentação das 3 sub-camadas de `obterHorarioDia` (exceção do dia → regra recorrente → sem horário); helpers de fuso e horas (`dataLisboa`, `horaLisboa`, `compararHoras`); nota de robustez de fuso herdada do Prompt 113; nota que a 4.ª camada (conflito com consultas) será adicionada em F4.
+  - Secção 6 (API): nova secção 6.13 — Horários (`/api/gestor/horarios`). Bloco de permissões (podeVer para GET/disponibilidade, isDiretorClinico para mutações), bloco de validação do fisioterapeuta, nota de auditoria. Documentados 6 endpoints: GET / (lista com query params fisioterapeuta_id/tipo/ativo, populate, exemplo JSON), GET /disponibilidade (verificador com query params fisioterapeuta_id/data/duracao_minutos, resposta com disponivel/horario/motivo/origem, nota de ordem de registo antes de /:id), GET /:id (detalhe), POST / (criar com body exemplo + validações), PUT /:id (atualizar), DELETE /:id (hard delete). Cada um com auth, body, resposta, erros, auditoria.
+  - Secção 9 (Histórico): nova entrada F3 no topo do changelog descrevendo os 5 grupos de alterações (modelo HorarioFisioterapeuta + validações + índices; utils/disponibilidade.js expandido com 5 funções; horarioController.js com 6 funções; horarioRoutes.js com middlewares; mount em server.js). 151/151 testes ✓ (+21 testes de Horário).
+
+- **docs/FRONTEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 3 (Rotas): adicionada linha `/gestor/equipa/horarios` à tabela (Horários de Fisioterapeuta F3 — verificador de disponibilidade, lista agrupada por fisio, modais criar/editar, soft toggle via DELETE).
+  - Secção 11 (`lib/api.ts`): adicionado bullet `HorarioFisioterapeutaDTO`/`HorarioListResponse`/`DisponibilidadeResponse` (F3) — espelham o modelo `HorarioFisioterapeuta` do backend + resposta do verificador; `fisioterapeuta_id` é `string | { _id, nome, email, role }` (populate); `dia_semana`/`data` como `number | null`/`string | null` conforme o tipo; `DisponibilidadeResponse` com `disponivel`/`horario`/`motivo`/`origem`.
+  - Secção 11: nova subsecção `/gestor/equipa/horarios (Client Component) — F3` (após `/gestor/pacientes`). Nota sobre item de sidebar (gestor-sidebar.tsx, href /gestor/equipa/horarios, ícone Clock do lucide-react, entre Equipa e Ausências / Férias). Documentação do verificador de disponibilidade (fisio + data + hora + duração → CheckCircle2/XCircle + motivo + janela), lista agrupada por fisioterapeuta (badges recorrente/excecao, dia_semana/data, janelas, nota, botões Pencil/Trash2 para diretor_clinico/admin), filtro por fisio, modal criar/editar (tipo recorrente/excecao, dia_semana/data condicional, horas, disponivel só se excecao, nota), hard delete via adminDelete, permissões client-side, estados visuais (loading/erro/vazio), tipos F3.
+  - Secção 13 (Histórico): nova entrada F3 no topo do changelog descrevendo os 3 grupos de alterações (página /gestor/equipa/horarios; tipos HorarioFisioterapeutaDTO/HorarioListResponse/DisponibilidadeResponse em lib/api.ts; item Horários no gestor-sidebar com ícone Clock). Lint + tsc + build ✓ (rota /gestor/equipa/horarios = 4.35 kB).
+
+Stage Summary:
+- **docs/BACKEND.md**: nova subsecção do modelo HorarioFisioterapeuta (tabela completa + validações pre-validate + índices + nota de permissões); nova secção 3.4 com o motor de disponibilidade (3 camadas + sub-camadas de obterHorarioDia + helpers de fuso); nova secção 6.13 com 6 endpoints documentados (GET listagem, GET /disponibilidade, GET /:id, POST, PUT, DELETE hard delete) + blocos de permissões, validação do fisioterapeuta e auditoria; árvore de ficheiros atualizada (horarioController.js, HorarioFisioterapeuta.js, horarioRoutes.js); contagem "7 coleções"; entrada F3 no histórico. 151/151 testes ✓ referenciado.
+- **docs/FRONTEND.md**: rota /gestor/equipa/horarios na tabela; subsecção completa da página (verificador, lista agrupada, modais criar/editar, hard delete, permissões, estados visuais); tipos HorarioFisioterapeutaDTO/HorarioListResponse/DisponibilidadeResponse documentados; item de sidebar (Clock) documentado; entrada F3 no histórico. Lint + tsc + build ✓ (4.35 kB).
+- **docs/ARQUITETURA.md**: F3 marcado ✅ Concluído\* no roadmap (secção 8) e no mapa de migração (secção 4) com nota explicativa que a migração Propriedade→Sala foi adiada; schema de HorarioFisioterapeuta (secção 5.6) alinhado com a implementação real + nota de divergências face à proposta v0.1; decisão de design #8 reescrita para refletir o motor real; banner topo atualizado.
+- **WORKLOG.md**: esta entrada DOC-F3 adicionada em append.
+- **Finding (não resolvido por escopo):** a matriz de permissões da secção 3.1 de ARQUITETURA.md indica `admin` ❌ para "Horários fisio", mas a implementação F3 inclui `admin` no middleware `podeVer` (e na validação `isDiretorClinico` para mutações). Esta divergência foi deixada intacta por estar fora do escopo pedido (a task pedia apenas marcar F3 como ✅ e atualizar o schema e as camadas de disponibilidade) e por ser coerente com a mesma divergência já registada em DOC-F2 para Pacientes — fica como assunto a clarificar numa futura revisão (ou o `admin` deve ser removido do `podeVer`/`isDiretorClinico`, ou a matriz + decisão #6 devem ser atualizadas para refletir que o admin plataforma tem acesso total por conveniência operacional).
+
+---
+Task ID: F3
+Agent: Z.ai Code
+Task: Criar HorarioFisioterapeuta + motor de disponibilidade (3 camadas: folga fixa / horário recorrente / exceção / ausência) + CRUD + frontend.
+
+Work Log:
+
+### F3-A — Modelo HorarioFisioterapeuta
+- Criado `backend/models/HorarioFisioterapeuta.js` com: empresa_id, fisioterapeuta_id, tipo ('recorrente'|'excecao'), dia_semana (0-6), hora_inicio/fim (HH:mm), data (Date), disponivel (boolean), ativo (boolean), nota.
+- Validação `pre('validate')`: recorrente exige dia_semana, excecao exige data.
+- Índices: {fisioterapeuta_id, dia_semana, ativo}, {empresa_id, fisioterapeuta_id, tipo}, {fisioterapeuta_id, data}.
+
+### F3-B — Motor de disponibilidade (utils/disponibilidade.js expandido)
+- Adicionadas funções:
+  - `horaLisboa(instante)` — devolve "HH:mm" no fuso de Lisboa (via Intl.DateTimeFormat).
+  - `compararHoras(a, b)` — compara duas horas HH:mm.
+  - `obterHorarioDia(fisioterapeutaId, data)` — consulta 3 camadas: exceções do dia → regra recorrente → sem horário.
+  - `verificarConflitoHorario(fisioterapeutaId, dataHoraInicio, duracaoMinutos)` — verifica se a consulta cabe no bloco de trabalho.
+  - `verificarDisponibilidadeCompleta(utilizador, dataHoraInicio, duracaoMinutos)` — ausências aprovadas + folga fixa + horários (3 camadas por ordem de prioridade).
+- Mantidas as funções existentes (verificarDisponibilidadeUtilizador, mensagemIndisponivel, dataLisboa).
+
+### F3-C — Controller + Routes
+- Criado `backend/controllers/horarioController.js` com 6 funções: listarHorarios, obterHorario, criarHorario, atualizarHorario, eliminarHorario, verificarDisponibilidade. Valida fisioterapeuta (role fisioterapeuta/diretor_clinico ativo da empresa). Auditoria registada.
+- Criado `backend/routes/horarioRoutes.js` montado em `/api/gestor/horarios`. Middleware `podeVer` (4 roles) para GET/listar/disponibilidade; `isDiretorClinico` para POST/PUT/DELETE.
+- `server.js`: montado `app.use('/api/gestor/horarios', horarioRoutes)`.
+
+### F3-D — Testes (151/151 ✓)
+- Adicionados 21 testes no bloco "F3 — Horários (CRUD + disponibilidade)":
+  - CRUD completo (criar recorrente/excecao, listar, detalhe, atualizar, eliminar).
+  - Validações (400): sem fisioterapeuta_id, recorrente sem dia_semana, excecao sem data, fisioterapeuta inexistente.
+  - Permissões (403): rececionista e fisioterapeuta não podem criar.
+  - Motor de disponibilidade: fisio disponível no horário recorrente, indisponível antes/depois do bloco, indisponível no dia de exceção (formação), sem horário definido (domingo).
+  - Fisioterapeuta vê só os seus horários.
+  - 401 sem token.
+- **Resultado: 151/151 testes a passar ✓** (+21).
+
+### F3-E — Frontend (/gestor/equipa/horarios)
+- Criada página `frontend/src/app/gestor/equipa/horarios/page.tsx`:
+  - **Verificador de disponibilidade**: fisio + data + hora + duração → resultado (disponível/indisponível com motivo).
+  - **Lista agrupada por fisioterapeuta**: badges recorrente/excecao, horários, notas, indisponível.
+  - **Modal criar/editar**: tipo recorrente/excecao, dia_semana/data, horas, disponivel, nota.
+  - **Eliminar** (hard delete com confirm).
+- `HorarioFisioterapeutaDTO`, `HorarioListResponse`, `DisponibilidadeResponse` adicionados a `lib/api.ts`.
+- Item "Horários" (ícone Clock) adicionado ao sidebar do gestor (entre Equipa e Ausências).
+- **Lint ✓, tsc ✓, build ✓** (rota /gestor/equipa/horarios = 4.35 kB).
+
+### F3-F — Documentação (Task DOC-F3 por subagent)
+- `docs/BACKEND.md`: modelo HorarioFisioterapeuta documentado, motor de disponibilidade (3 camadas), 6 endpoints, entrada F3 no histórico.
+- `docs/FRONTEND.md`: rota /gestor/equipa/horarios, tipos DTO, página documentada, entrada F3 no histórico.
+- `docs/ARQUITETURA.md`: F3 marcado ✅ no roadmap, schema de HorarioFisioterapeuta alinhado, decisão de design #8 atualizada com o motor real.
+
+Stage Summary:
+- **HorarioFisioterapeuta criado** com 2 tipos: recorrente (regra semanal) e excecao (dia específico, disponível ou bloqueio).
+- **Motor de disponibilidade** com 3 camadas por ordem de prioridade: ausência aprovada → folga fixa semanal → horário de trabalho (exceção > recorrente). Verifica também se a consulta cabe dentro do bloco de trabalho.
+- **Timezone blindado**: usa `Intl.DateTimeFormat` com `Europe/Lisbon` para calcular data e hora local (robusto a DST).
+- **151/151 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
+- **Nota**: a 4.ª camada (conflito com consultas já marcadas) será implementada em F4 (Consulta). Por agora, o motor valida disponibilidade do fisioterapeuta mas não conflitos de sala/paciente.
+- **Nota**: Propriedade→Sala foi adiada (o modelo Propriedade mantém-se, será renomeado em F8 de limpeza). O foco da F3 foi o motor de disponibilidade.
+- **Próximo passo:** F4 (Consulta de Tarefa + CRUD de marcação + validação de conflitos sala+fisio+paciente).

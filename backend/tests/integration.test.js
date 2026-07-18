@@ -3094,3 +3094,245 @@ describe('F2 — Pacientes (CRUD + permissões)', () => {
     expect(res.status).toBe(401);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* F3 — Horários de Fisioterapeuta (CRUD + motor de disponibilidade)  */
+/* ------------------------------------------------------------------ */
+
+describe('F3 — Horários (CRUD + disponibilidade)', () => {
+  let fisioF3Token, diretorF3Token, rececionistaF3Token;
+  let fisioF3Id, diretorF3Id;
+  let horarioRecorrenteId, horarioExcecaoId;
+
+  beforeAll(async () => {
+    const hash = await bcrypt.hash(PASSWORD, 10);
+
+    const fisio = await Utilizador.create({
+      nome: 'Fisio F3', email: 'fisio.f3@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'fisioterapeuta', ativo: true,
+    });
+    fisioF3Id = String(fisio._id);
+
+    const diretor = await Utilizador.create({
+      nome: 'Diretor F3', email: 'diretor.f3@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'diretor_clinico', ativo: true,
+    });
+    diretorF3Id = String(diretor._id);
+
+    const rececionista = await Utilizador.create({
+      nome: 'Rece F3', email: 'rece.f3@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'rececionista', ativo: true,
+    });
+
+    const [rFisio, rDir, rRec] = await Promise.all([
+      request(app).post('/api/auth/login').send({ email: 'fisio.f3@teste.pt', password: PASSWORD }),
+      request(app).post('/api/auth/login').send({ email: 'diretor.f3@teste.pt', password: PASSWORD }),
+      request(app).post('/api/auth/login').send({ email: 'rece.f3@teste.pt', password: PASSWORD }),
+    ]);
+    fisioF3Token = rFisio.body.token;
+    diretorF3Token = rDir.body.token;
+    rececionistaF3Token = rRec.body.token;
+  });
+
+  afterAll(async () => {
+    await Utilizador.deleteMany({ email: { $in: ['fisio.f3@teste.pt', 'diretor.f3@teste.pt', 'rece.f3@teste.pt'] } });
+    const HorarioFisioterapeuta = require('../models/HorarioFisioterapeuta');
+    await HorarioFisioterapeuta.deleteMany({ empresa_id: empresaId });
+  });
+
+  it('POST /api/gestor/horarios (diretor) → 201 cria horário recorrente', async () => {
+    const res = await request(app)
+      .post('/api/gestor/horarios')
+      .set('Authorization', `Bearer ${diretorF3Token}`)
+      .send({
+        fisioterapeuta_id: fisioF3Id,
+        tipo: 'recorrente',
+        dia_semana: 1, // Segunda
+        hora_inicio: '09:00',
+        hora_fim: '13:00',
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.horario).toHaveProperty('_id');
+    expect(res.body.horario.tipo).toBe('recorrente');
+    expect(res.body.horario.dia_semana).toBe(1);
+    expect(res.body.horario.hora_inicio).toBe('09:00');
+    horarioRecorrenteId = res.body.horario._id;
+  });
+
+  it('POST sem fisioterapeuta_id → 400', async () => {
+    const res = await request(app)
+      .post('/api/gestor/horarios')
+      .set('Authorization', `Bearer ${diretorF3Token}`)
+      .send({ tipo: 'recorrente', dia_semana: 1 });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST recorrente sem dia_semana → 400', async () => {
+    const res = await request(app)
+      .post('/api/gestor/horarios')
+      .set('Authorization', `Bearer ${diretorF3Token}`)
+      .send({ fisioterapeuta_id: fisioF3Id, tipo: 'recorrente' });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST excecao sem data → 400', async () => {
+    const res = await request(app)
+      .post('/api/gestor/horarios')
+      .set('Authorization', `Bearer ${diretorF3Token}`)
+      .send({ fisioterapeuta_id: fisioF3Id, tipo: 'excecao' });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST com fisioterapeuta inexistente → 400', async () => {
+    const idFake = new mongoose.Types.ObjectId();
+    const res = await request(app)
+      .post('/api/gestor/horarios')
+      .set('Authorization', `Bearer ${diretorF3Token}`)
+      .send({ fisioterapeuta_id: idFake, tipo: 'recorrente', dia_semana: 2 });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST cria horário excecao (indisponível — formação)', async () => {
+    const res = await request(app)
+      .post('/api/gestor/horarios')
+      .set('Authorization', `Bearer ${diretorF3Token}`)
+      .send({
+        fisioterapeuta_id: fisioF3Id,
+        tipo: 'excecao',
+        data: '2026-12-15',
+        disponivel: false,
+        nota: 'Formação em Pilates Clínico',
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.horario.tipo).toBe('excecao');
+    expect(res.body.horario.disponivel).toBe(false);
+    horarioExcecaoId = res.body.horario._id;
+  });
+
+  it('rececionista NÃO pode criar horários (403)', async () => {
+    const res = await request(app)
+      .post('/api/gestor/horarios')
+      .set('Authorization', `Bearer ${rececionistaF3Token}`)
+      .send({ fisioterapeuta_id: fisioF3Id, tipo: 'recorrente', dia_semana: 3 });
+    expect(res.status).toBe(403);
+  });
+
+  it('fisioterapeuta NÃO pode criar horários (403)', async () => {
+    const res = await request(app)
+      .post('/api/gestor/horarios')
+      .set('Authorization', `Bearer ${fisioF3Token}`)
+      .send({ fisioterapeuta_id: fisioF3Id, tipo: 'recorrente', dia_semana: 4 });
+    expect(res.status).toBe(403);
+  });
+
+  it('GET /api/gestor/horarios (diretor) → 200 lista todos', async () => {
+    const res = await request(app)
+      .get('/api/gestor/horarios')
+      .set('Authorization', `Bearer ${diretorF3Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBeGreaterThanOrEqual(2);
+  });
+
+  it('GET (fisio) → 200 lista só os seus', async () => {
+    const res = await request(app)
+      .get('/api/gestor/horarios')
+      .set('Authorization', `Bearer ${fisioF3Token}`);
+    expect(res.status).toBe(200);
+    // Todos os horários devolvidos pertencem ao fisio.
+    expect(res.body.horarios.every((h) => String(h.fisioterapeuta_id?._id) === fisioF3Id)).toBe(true);
+  });
+
+  it('GET com filtro fisioterapeuta_id → filtra', async () => {
+    const res = await request(app)
+      .get(`/api/gestor/horarios?fisioterapeuta_id=${fisioF3Id}`)
+      .set('Authorization', `Bearer ${diretorF3Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.horarios.length).toBeGreaterThanOrEqual(2);
+    expect(res.body.horarios.every((h) => String(h.fisioterapeuta_id?._id) === fisioF3Id)).toBe(true);
+  });
+
+  it('PUT /:id (diretor) → 200 atualiza hora_fim', async () => {
+    const res = await request(app)
+      .put(`/api/gestor/horarios/${horarioRecorrenteId}`)
+      .set('Authorization', `Bearer ${diretorF3Token}`)
+      .send({ hora_fim: '18:00' });
+    expect(res.status).toBe(200);
+    expect(res.body.horario.hora_fim).toBe('18:00');
+  });
+
+  it('GET /disponibilidade — fisio disponível no horário recorrente', async () => {
+    // 2026-11-16 é uma segunda-feira.
+    const res = await request(app)
+      .get(`/api/gestor/horarios/disponibilidade?fisioterapeuta_id=${fisioF3Id}&data=2026-11-16T10:00:00&duracao_minutos=45`)
+      .set('Authorization', `Bearer ${diretorF3Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.disponivel).toBe(true);
+    expect(res.body.horario).toBeTruthy();
+    expect(res.body.origem).toBe('recorrente');
+  });
+
+  it('GET /disponibilidade — indisponível antes do horário', async () => {
+    // 2026-11-16 segunda às 07:00 (antes das 09:00).
+    const res = await request(app)
+      .get(`/api/gestor/horarios/disponibilidade?fisioterapeuta_id=${fisioF3Id}&data=2026-11-16T07:00:00&duracao_minutos=45`)
+      .set('Authorization', `Bearer ${diretorF3Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.disponivel).toBe(false);
+    expect(res.body.motivo).toContain('09:00');
+  });
+
+  it('GET /disponibilidade — indisponível após horário', async () => {
+    // 2026-11-16 segunda às 17:30 + 45min = 18:15 (depois das 18:00 atualizado).
+    const res = await request(app)
+      .get(`/api/gestor/horarios/disponibilidade?fisioterapeuta_id=${fisioF3Id}&data=2026-11-16T17:30:00&duracao_minutos=45`)
+      .set('Authorization', `Bearer ${diretorF3Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.disponivel).toBe(false);
+  });
+
+  it('GET /disponibilidade — indisponível no dia de exceção (formação)', async () => {
+    // 2026-12-15 tem exceção indisponível.
+    const res = await request(app)
+      .get(`/api/gestor/horarios/disponibilidade?fisioterapeuta_id=${fisioF3Id}&data=2026-12-15T10:00:00&duracao_minutos=45`)
+      .set('Authorization', `Bearer ${diretorF3Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.disponivel).toBe(false);
+    expect(res.body.origem).toBe('excecao');
+  });
+
+  it('GET /disponibilidade — sem horário definido (domingo)', async () => {
+    // 2026-11-15 é domingo (sem regra recorrente).
+    const res = await request(app)
+      .get(`/api/gestor/horarios/disponibilidade?fisioterapeuta_id=${fisioF3Id}&data=2026-11-15T10:00:00&duracao_minutos=45`)
+      .set('Authorization', `Bearer ${diretorF3Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.disponivel).toBe(false);
+  });
+
+  it('GET /disponibilidade sem fisioterapeuta_id → 400', async () => {
+    const res = await request(app)
+      .get(`/api/gestor/horarios/disponibilidade?data=2026-11-16T10:00:00`)
+      .set('Authorization', `Bearer ${diretorF3Token}`);
+    expect(res.status).toBe(400);
+  });
+
+  it('DELETE /:id (diretor) → 200 elimina', async () => {
+    const res = await request(app)
+      .delete(`/api/gestor/horarios/${horarioRecorrenteId}`)
+      .set('Authorization', `Bearer ${diretorF3Token}`);
+    expect(res.status).toBe(200);
+  });
+
+  it('DELETE /:id inexistente → 404', async () => {
+    const idFake = new mongoose.Types.ObjectId();
+    const res = await request(app)
+      .delete(`/api/gestor/horarios/${idFake}`)
+      .set('Authorization', `Bearer ${diretorF3Token}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('sem token → 401', async () => {
+    const res = await request(app).get('/api/gestor/horarios');
+    expect(res.status).toBe(401);
+  });
+});

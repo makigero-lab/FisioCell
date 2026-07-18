@@ -97,6 +97,7 @@ A aplicação tem **três áreas privadas** (cada uma com layout próprio), uma 
 | `/admin/relatorios`   | Relatórios/Analytics com gráficos (recharts: linha, barras, pie) | Desktop-first |
 | `/gestor`       | Painel operacional da clínica — **protegido** (F1: roles `diretor_clinico` + `rececionista` partilham a área via `RouteGuard role={["diretor_clinico", "rececionista"]}`; permissões diferenciadas no backend via `isDiretorClinico`/`isRececionista`) | Desktop-first |
 | `/gestor/pacientes` | **CRUD de Pacientes** (F2) — grid de cartões, busca, modais criar/editar/detalhe, soft delete; permissões por role | Desktop-first |
+| `/gestor/equipa/horarios` | **Horários de Fisioterapeuta** (F3) — verificador de disponibilidade, lista agrupada por fisio, modais criar/editar, soft toggle (DELETE) | Desktop-first |
 | `/staff`        | Área do Fisioterapeuta (executante) — **protegida** (F1: role `fisioterapeuta`) | Mobile-first |
 | `/staff/ausencias` | Pedidos de ausência do fisioterapeuta (férias/doença/outro) — criar + histórico + cancelar pendentes | Mobile-first |
 | `/staff/tarefas/[id]` | Detalhe da Tarefa (checklist + concluir)      | Mobile-first |
@@ -317,6 +318,7 @@ Isto força o framework para `nextjs`, pelo que o output directory passa a `.nex
 - `UtilizadorDTO` / `Role` — tipos que espelham o modelo `Utilizador` do backend (F1: `Role = "admin" | "diretor_clinico" | "fisioterapeuta" | "rececionista"`).
 - `AusenciaDTO` / `TipoAusencia` — tipos que espelham o modelo `Ausencia` do backend.
 - `PacienteDTO` / `PacienteListResponse` (F2) — tipos que espelham o modelo `Paciente` do backend. `PacienteDTO` inclui os campos clínicos (`contacto_emergencia`, `historico_medico`, `alergias`) como opcionais — só estão presentes quando o backend devolve `dados_clinicos: true` (isClinico). `PacienteListResponse` = `{ pacientes: PacienteDTO[]; total: number; dados_clinicos: boolean }`.
+- `HorarioFisioterapeutaDTO` / `HorarioListResponse` / `DisponibilidadeResponse` (F3) — tipos que espelham o modelo `HorarioFisioterapeuta` do backend e a resposta do verificador de disponibilidade. `HorarioFisioterapeutaDTO.fisioterapeuta_id` é `string | { _id, nome, email, role }` (populate do backend); `dia_semana` é `number | null` (null se exceção); `data` é `string | null` (ISO, null se recorrente). `HorarioListResponse` = `{ horarios: HorarioFisioterapeutaDTO[]; total: number }`. `DisponibilidadeResponse` = `{ disponivel: boolean; horario: { hora_inicio, hora_fim } | null; motivo: string | null; origem: 'excecao' | 'recorrente' | null }`.
 
 ### `/login` (Client Component)
 Ecrã minimalista premium centrado:
@@ -369,6 +371,29 @@ Página de gestão de pacientes da clínica. Consome `GET/POST/PUT/PATCH/DELETE 
 - **Eliminar** (botão `Trash2`, só para `diretor_clinico`/`admin`): abre modal de confirmação → `adminDelete('/:id')` (soft delete). O botão só é renderizado quando o role do utilizador permite eliminar.
 - Estados visuais: loading (`Loader2` spinner), erro (`AlertCircle` cartão vermelho + botão `RefreshCw` para tentar de novo), vazio (call-to-action).
 - Tipo `PacienteDTO` + `PacienteListResponse` em `lib/api.ts` (F2).
+
+### `/gestor/equipa/horarios` (Client Component) — F3
+Página de gestão dos limites de agenda dos fisioterapeutas. Consome `GET/POST/PUT/DELETE /api/gestor/horarios` e `GET /api/gestor/horarios/disponibilidade` via `adminGet`/`adminPost`/`adminPut`/`adminDelete`.
+
+> **Item de sidebar (F3):** o `components/gestor/gestor-sidebar.tsx` inclui o item **Horários** (`href: "/gestor/equipa/horarios"`, ícone `Clock` do `lucide-react`), posicionado entre **Equipa** e **Ausências / Férias**.
+
+- **Verificador de disponibilidade** (cartão no topo): formulário com Fisioterapeuta (select), Data (input date), Hora (input time, default `10:00`), Duração (input number, default `45` min) e botão "Verificar". Ao submeter, monta um ISO string (data + hora) e chama `adminGet('/api/gestor/horarios/disponibilidade?fisioterapeuta_id=...&data=...&duracao_minutos=...')`. O resultado é apresentado num cartão com ícone `CheckCircle2` (verde, "Disponível") ou `XCircle` (vermelho, "Indisponível") + o `motivo` devolvido pelo backend e a janela de trabalho (`hora_inicio`–`hora_fim`, origem `excecao`/`recorrente`).
+- **Lista agrupada por fisioterapeuta:** `useEffect` chama `adminGet('/api/gestor/horarios')` ao montar; o resultado é agrupado em JS por `fisioterapeuta_id` (ou pelo `_id` do populate). Para cada fisioterapeuta, mostra-se um cartão com:
+  - Nome do fisioterapeuta (e badge de role).
+  - Lista de regras desse fisio, cada uma com:
+    - **Badge `tipo`** (`recorrente` em azul, `excecao` em âmbar).
+    - Para `recorrente`: nome do dia da semana (`nomeDia(dia_semana)` — Domingo…Sábado).
+    - Para `excecao`: data formatada (pt-PT) + badge verde (`disponivel: true` — "Extra") ou vermelha (`disponivel: false` — "Bloqueio").
+    - Janela de trabalho `hora_inicio`–`hora_fim`.
+    - `nota` (se preenchida) com ícone `CalendarOff`/`Calendar`.
+    - Botões de ação (só para `diretor_clinico`/`admin`): `Pencil` (editar) e `Trash2` (eliminar).
+  - Badges com `ativo: false` são destacadas (estilo "desativado").
+- **Filtro** por fisioterapeuta (select no topo da lista) — quando aplicado, mostra só as regras desse fisio.
+- **Modal criar/editar** (`Dialog`): formulário com Fisioterapeuta (select populado da lista de fisios), Tipo (`recorrente`/`excecao` — radio/toggle), Dia da Semana (select 0–6, só visível se `recorrente`), Data (input date, só visível se `excecao`), Hora de Início + Hora de Fim (input time), Disponível (checkbox, só visível se `excecao` — para distinguir horário extra de bloqueio), Nota (textarea). Ao submeter: `adminPost('/api/gestor/horarios', body)` (criar) ou `adminPut('/api/gestor/horarios/:id', body)` (editar). Após sucesso, a lista recarrega.
+- **Eliminar** (botão `Trash2`, só para `diretor_clinico`/`admin`): `adminDelete('/api/gestor/horarios/:id')` (hard delete — o backend não usa soft delete para horários).
+- **Permissões:** o backend limita as mutações a `isDiretorClinico` (admin + diretor_clinico); o fisioterapeuta e a rececionista conseguem ver a lista e usar o verificador, mas os botões de criar/editar/eliminar são escondidos no cliente quando o role do utilizador não os permite.
+- Estados visuais: loading (`Loader2` spinner), erro (`AlertCircle` cartão vermelho + botão `RefreshCw`), vazio (call-to-action com botão "Criar primeiro horário").
+- Tipos `HorarioFisioterapeutaDTO` + `HorarioListResponse` + `DisponibilidadeResponse` em `lib/api.ts` (F3).
 
 ---
 
@@ -423,6 +448,7 @@ O token passou a ser guardado num **cookie** (`fisiocell_token`, SameSite=Lax, 7
 
 | Data    | Versão | Alteração                                                                       |
 |---------|--------|---------------------------------------------------------------------------------|
+| **F3**  | —      | **Horários de Fisioterapeuta:** (1) Nova página `app/gestor/equipa/horarios/page.tsx` — Client Component com verificador de disponibilidade (fisio + data + hora + duração → resultado `DisponibilidadeResponse`), lista agrupada por fisioterapeuta com badges `recorrente`/`excecao`, janelas de trabalho, notas, modal criar/editar (`Dialog`) com tipo recorrente/excecao (dia_semana/data, horas, disponivel, nota), e hard delete (`adminDelete`, só diretor_clinico/admin). (2) `lib/api.ts` — novos tipos `HorarioFisioterapeutaDTO`, `HorarioListResponse`, `DisponibilidadeResponse` (espelham o modelo `HorarioFisioterapeuta` + resposta do verificador do backend). (3) `components/gestor/gestor-sidebar.tsx` — novo item **Horários** (`href: "/gestor/equipa/horarios"`, ícone `Clock` do `lucide-react`), posicionado entre Equipa e Ausências / Férias. Lint + tsc + build ✓ (rota `/gestor/equipa/horarios` = 4.35 kB). |
 | **F2**  | —      | **Pacientes:** (1) Nova página `app/gestor/pacientes/page.tsx` — Client Component com grid de cartões, busca server-side (`?busca=`), modal criar/editar (`Dialog`), modal de detalhe, toggle de estado (`adminPatch`), soft delete (`adminDelete`, só diretor_clinico/admin). Campos clínicos visíveis/editáveis apenas quando `dados_clinicos === true` (isClinico). (2) `lib/api.ts` — novos tipos `PacienteDTO` e `PacienteListResponse` (campos clínicos opcionais, espelham a sanitização do backend). (3) `components/gestor/gestor-sidebar.tsx` — novo item **Pacientes** (`href: "/gestor/pacientes"`, ícone `UserRound` do `lucide-react`), posicionado entre Propriedades e Equipa. Lint + tsc + build ✓. |
 | **F1**  | —      | **Migração de roles (Fisioterapia):** (1) `middleware.ts` — tipo `Role` atualizado para `"admin" \| "diretor_clinico" \| "fisioterapeuta" \| "rececionista"`; `rotaPorRole` mapeia `rececionista` → `/gestor` (partilhado); validação de rota errada aceita `diretor_clinico`+`rececionista` em `/gestor/*`. (2) `lib/auth.ts` + `lib/api.ts` — tipo `Role` atualizado. (3) `components/auth/route-guard.tsx` — prop `role` passou a aceitar `Role \| Role[]` para suportar áreas partilhadas. (4) `app/gestor/layout.tsx` — `RouteGuard role={["diretor_clinico", "rececionista"]}`. (5) `app/gestor/equipa/page.tsx` — `ROLE_LABEL` e `ROLE_VARIANT` atualizados (Diretor Clínico/Fisioterapeuta/Rececionista); formulário de criar/editar usa `role: "fisioterapeuta"` por defeito. (6) `app/admin/page.tsx` — labels de role no modal de utilizadores (`diretor_clinico` → "Diretor Clínico", `fisioterapeuta` → "Fisioterapeuta", `rececionista` → "Rececionista"); botão "Criar Novo Gestor" passa a criar com `role: "diretor_clinico"`. Lint + tsc + build ✓. |
 | Inicial | 1.0.0  | Scaffold Next.js 14 + TS + Tailwind + shadcn; rotas `/admin` (sidebar + dashboard + placeholders) e `/staff` (mobile-first com cartões de tarefas); mock data. Build validado. |

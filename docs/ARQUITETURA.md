@@ -2,8 +2,9 @@
 
 > **Proposta de arquitetura v0.1** para o SaaS FisioCell (Clínicas de Fisioterapia).
 > Este documento acompanha as fases **F0** (rename + remoção Smoobu), **F1**
-> (migração de roles + `perfil_profissional` + `config` da empresa) e **F2**
-> (`Paciente` + CRUD + sanitização de dados clínicos) e define o
+> (migração de roles + `perfil_profissional` + `config` da empresa), **F2**
+> (`Paciente` + CRUD + sanitização de dados clínicos) e **F3**
+> (`HorarioFisioterapeuta` + motor de disponibilidade em 3 camadas) e define o
 > roadmap de migração F0–F9. Os esquemas Mongoose abaixo são **propostas** — a
 > implementação decorre fase a fase.
 
@@ -105,7 +106,7 @@ const isRececionista   = requireRole('admin', 'diretor_clinico', 'rececionista')
 | `webhookController.js`                | → | ❌ **removido**                   | F0 ✅ |
 | `routes/webhookRoutes.js`             | → | ❌ **removido**                   | F0 ✅ |
 | — (novo)                              | → | `Paciente`                       | F2 ✅ |
-| — (novo)                              | → | `HorarioFisioterapeuta`          | F3 |
+| — (novo)                              | → | `HorarioFisioterapeuta`          | F3 ✅ |
 | — (novo)                              | → | `Documento`                      | F9 |
 
 ---
@@ -263,28 +264,40 @@ const salaSchema = new Schema({
 salaSchema.index({ empresa_id: 1, nome: 1 }, { unique: true });
 ```
 
-### 5.6 `HorarioFisioterapeuta` — F3
+### 5.6 `HorarioFisioterapeuta` — ✅ F3 concluído
 
 ```js
-const horarioSchema = new Schema({
+const horarioFisioterapeutaSchema = new Schema({
   empresa_id:        { type: ObjectId, ref: 'Empresa', required: true, index: true },
   fisioterapeuta_id: { type: ObjectId, ref: 'Utilizador', required: true, index: true },
-  tipo:              { type: String, enum: ['recorrente', 'excecao'], required: true },
-  // Recorrente: dia da semana + janelas de disponibilidade
-  dia_semana:        { type: Number, min: 0, max: 6 },  // 0=Dom…6=Sáb (só tipo 'recorrente')
-  janelas: [{
-    inicio: { type: String },  // "09:00"
-    fim:    { type: String },  // "13:00"
-  }],
-  // Exceção: data específica (feriado, formação, indisponibilidade pontual)
-  data:              { type: Date },                     // só tipo 'excecao'
-  disponivel:        { type: Boolean, default: false },  // false = bloqueado (feriado), true = extra
-  notas:             { type: String, default: '' },
+  tipo:              { type: String, enum: ['recorrente', 'excecao'], required: true, default: 'recorrente', index: true },
+  // Para tipo='recorrente': dia da semana (0=Dom…6=Sáb). Null se 'excecao'.
+  dia_semana:        { type: Number, min: 0, max: 6, default: null },
+  // Janela de trabalho (formato "HH:mm", validado por regex).
+  hora_inicio:       { type: String, default: '09:00' },  // /^([01]\d|2[0-3]):([0-5]\d)$/
+  hora_fim:          { type: String, default: '19:00' },
+  // Para tipo='excecao': data específica do dia. Null se 'recorrente'.
+  data:              { type: Date, default: null },
+  // Excecao: true = horário extra disponível; false = bloqueio (formação, feriado).
+  disponivel:        { type: Boolean, default: true },
+  // Soft toggle: permite desativar uma regra sem a apagar.
+  ativo:             { type: Boolean, default: true, index: true },
+  // Nota interna livre (ex.: "Formação em Pilates Clínico").
+  nota:              { type: String, default: '', trim: true },
 }, { timestamps: true });
 
-horarioSchema.index({ empresa_id: 1, fisioterapeuta_id: 1, dia_semana: 1 });
-horarioSchema.index({ empresa_id: 1, fisioterapeuta_id: 1, data: 1 });
+// Validação pre('validate'):
+//   - tipo='recorrente' → dia_semana obrigatório (0-6) e data=null.
+//   - tipo='excecao'    → data obrigatória e dia_semana=null.
+horarioFisioterapeutaSchema.pre('validate', function (next) { /* … */ });
+
+// Índices compostos.
+horarioFisioterapeutaSchema.index({ fisioterapeuta_id: 1, dia_semana: 1, ativo: 1 });
+horarioFisioterapeutaSchema.index({ empresa_id: 1, fisioterapeuta_id: 1, tipo: 1 });
+horarioFisioterapeutaSchema.index({ fisioterapeuta_id: 1, data: 1 });
 ```
+
+> **F3 — Implementação real:** em relação à proposta v0.1 inicial houve as seguintes alterações: o array `janelas: [{ inicio, fim }]` foi substituído por uma única janela por documento (`hora_inicio` + `hora_fim`) — para representar um dia com manhã+tarde criam-se dois documentos `recorrente` com o mesmo `dia_semana`; o campo `notas` (plural) passou a `nota` (singular); o default de `disponivel` (exceção) passou de `false` para `true` (na prática o controller valida o tipo e o frontend oferece o toggle); foi adicionado o campo `ativo` (soft toggle, indexado) para desativar uma regra sem a apagar. Os índices compostos também foram ajustados: `{ fisioterapeuta_id, dia_semana, ativo }` para queries de regra recorrente, `{ empresa_id, fisioterapeuta_id, tipo }` para listagens por fisioterapeuta, e `{ fisioterapeuta_id, data }` para procura de exceções por dia. A validação de coerência entre `tipo`/`dia_semana`/`data` é feita em `pre('validate')` (não em validadores de campo isolados). O motor de disponibilidade (`utils/disponibilidade.js`) consulta este modelo nas funções `obterHorarioDia`, `verificarConflitoHorario` e `verificarDisponibilidadeCompleta`.
 
 ### 5.7 `Documento` — F9
 
@@ -336,7 +349,7 @@ Todos mantêm `timezone: 'Europe/Lisbon'`.
 | 5 | **Horário do fisio = modelo dedicado** (`HorarioFisioterapeuta`) | O horário recorrente (seg–sex, 09–13, 14–19) é diferente do `dias_folga` legacy. As exceções (feriados, formação) precisam de data específica. Um modelo dedicado suporta ambos (`tipo: 'recorrente'` vs `'excecao'`). |
 | 6 | **`admin` não vê dados clínicos** | RGPD: o Super Admin da plataforma gere infraestrutura (empresas, planos, sistema), mas dados clínicos (pacientes, notas SOAP) são do tenant. O `admin` nunca tem acesso a `Paciente`, `Consulta.nota_clinica`, `Documento`. Separação no middleware `requireRole`. |
 | 7 | **Soft delete em tudo** | Pacientes eliminados podem ter consultas históricas. Fisioterapeutas eliminados podem ter notas SOAP. O soft delete (`eliminado_em`) preserva integridade referencial e permite auditoria. |
-| 8 | **3 camadas de disponibilidade** | (1) Horário base do fisio (`HorarioFisioterapeuta` recorrente). (2) Exceções (feriados, formação, férias via `Ausencia`). (3) Consultas já marcadas (conflito de horário). O motor de disponibilidade cruza as 3 camadas para calcular slots livres. |
+| 8 | **3 camadas de disponibilidade** | O motor de disponibilidade (`utils/disponibilidade.js` — `verificarDisponibilidadeCompleta`) cruza por ordem de prioridade: (1) **Ausência aprovada** (`Ausencia` com `estado: 'aprovada'` que cubra o dia) — se houver, o fisioterapeuta está indisponível. (2) **Folga fixa semanal** (`Utilizador.dias_folga`) — se o dia da semana estiver no array, está indisponível. (3) **Horário de trabalho** (`HorarioFisioterapeuta`): `obterHorarioDia` consulta primeiro as **exceções do dia** (`tipo='excecao'` com `data` = dia; se `disponivel: false` → bloqueio; se `disponivel: true` → janela extra); se não houver exceção, consulta a **regra recorrente** (`tipo='recorrente'` com `dia_semana`); se não houver regra, o fisioterapeuta não trabalha nesse dia. Por fim, `verificarConflitoHorario` valida se a consulta proposta cabe dentro do bloco de trabalho. O conflito com **consultas já marcadas** será adicionado em F4 (Consulta). |
 
 ---
 
@@ -347,13 +360,15 @@ Todos mantêm `timezone: 'Europe/Lisbon'`.
 | **F0** | Rename Autocell→FisioCell + remoção Smoobu + `ARQUITETURA.md` | ✅ Concluído |
 | **F1** | Adaptar `Empresa` (já tem `morada`/`telefone`/`email`) + `Utilizador` (novos roles + `perfil_profissional`) | ✅ Concluído |
 | **F2** | Criar `Paciente` + CRUD + permissões (diretor_clinico vê todos; fisio vê só os seus; rececionista vê dados demográficos) | ✅ Concluído |
-| **F3** | `Sala` (de `Propriedade`) + `HorarioFisioterapeuta` + motor de disponibilidade (3 camadas) | Pendente |
+| **F3** | `Sala` (de `Propriedade`) + `HorarioFisioterapeuta` + motor de disponibilidade (3 camadas) | ✅ Concluído\* |
 | **F4** | `Consulta` (de `Tarefa`) + CRUD de marcação + validação de conflitos (sala + fisio + paciente) | Pendente |
 | **F5** | Nota clínica SOAP + `ModeloProtocolo` (de `ModeloChecklist`) | Pendente |
 | **F6** | Adaptar frontend: calendário FullCalendar mostra `Consultas` em vez de `Tarefas` | Pendente |
 | **F7** | Cron jobs novos (`briefingDiarioFisio`, `lembreteConsultasAmanha`, `lembrete2hConsulta`, `caoGuardaConsultas`, `arquivistaConsultas`) | Pendente |
 | **F8** | Limpeza: remover `Tarefa`, `TarefaArquivo`, `Propriedade`, `ModeloChecklist` antigos | Pendente |
 | **F9** | `Documento` (anexos + fotografias clínicas) com storage S3/Cloudinary + consentimento RGPD | Pendente |
+
+> *\*F3 — Implementação efetiva:* o modelo `HorarioFisioterapeuta` + motor de disponibilidade (3 camadas) + endpoints `/api/gestor/horarios` + página `/gestor/equipa/horarios` estão concluídos. A migração `Propriedade` → `Sala` foi adiada (continua em `Propriedade`) — será retomada numa fase posterior quando o modelo `Consulta` exigir o `sala_id` (F4).
 
 ---
 

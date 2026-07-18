@@ -31,6 +31,7 @@ backend/
 │   ├── adminController.js    # Painel de Administração + setup Cliente Zero
 │   ├── authController.js     # Autenticação: login (JWT) + /me
 │   ├── gestorController.js   # Painel do Gestor (dashboard, tarefas, equipa)
+│   ├── horarioController.js # CRUD de HorarioFisioterapeuta (F3) + verificador de disponibilidade
 │   ├── pacienteController.js # CRUD de Pacientes (F2) — permissões por role + sanitização de dados clínicos
 │   ├── staffController.js    # Painel do Staff
 │   ├── tarefaController.js   # CRUD de tarefas + atribuição manual
@@ -48,12 +49,13 @@ backend/
 │   ├── Utilizador.js         #   Admin / Staff de uma empresa (email + password_hash)
 │   ├── Ausencia.js           #   Indisponibilidade de Staff num dia
 │   ├── Tarefa.js             #   Tarefa de limpeza (será migrada para Consulta em F4)
-│   └── Paciente.js           #   Paciente da clínica (F2) — soft delete + dados clínicos sanitizados
+│   ├── Paciente.js           #   Paciente da clínica (F2) — soft delete + dados clínicos sanitizados
+│   └── HorarioFisioterapeuta.js # Limites de agenda do fisio (F3) — recorrente/excecao + motor de disponibilidade
 ├── utils/
 │   ├── loadBalancer.js       # Motor de atribuição (extraído do webhook em F0)
 │   ├── geocoding.js          # Geocoding de moradas (Nominatim)
 │   ├── scheduler.js          # Scheduler sequencial de horas
-│   ├── disponibilidade.js    # Filtros de ausência/folga
+│   ├── disponibilidade.js    # Filtros de ausência/folga + motor de disponibilidade F3 (horários)
 │   ├── distancia.js          # Haversine (tempo de viagem)
 │   ├── notificar.js          # Notificações in-app + push
 │   ├── push.js               # Web Push (VAPID)
@@ -62,6 +64,7 @@ backend/
     ├── adminRoutes.js        # Rotas /api/admin/*
     ├── gestorRoutes.js       # Rotas /api/gestor/*
     ├── pacienteRoutes.js     # Rotas /api/gestor/pacientes/* (F2)
+    ├── horarioRoutes.js      # Rotas /api/gestor/horarios/* (F3)
     ├── staffRoutes.js        # Rotas /api/staff/*
     ├── authRoutes.js         # POST /api/auth/login, GET /api/auth/me
     ├── ausenciaRoutes.js     # Rotas de ausências
@@ -91,7 +94,7 @@ O fluxo de arranque segue uma sequência segura:
 
 ## 3.1. Modelos de dados (Mongoose)
 
-O sistema gira em torno de 6 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
+O sistema gira em torno de 7 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
 
 ### `Empresa`
 Entidade principal do SaaS (multi-tenant). Cada empresa agrupa Propriedades e Utilizadores.
@@ -262,6 +265,40 @@ Paciente de uma clínica (empresa). **F2** — novo modelo do domínio Fisiotera
 
 > **Permissões (F2):** o controller `pacienteController` exporta o helper `temAcessoClinico(req)` (true para admin/diretor_clinico/fisioterapeuta) e `sanitizarParaNaoClinico(p)` (remove `historico_medico`, `alergias` e `contacto_emergencia`). Todas as respostas incluem a flag `dados_clinicos: boolean` para o frontend saber se pode mostrar os campos clínicos. As rotas usam um middleware custom `podeVer` (todos os 4 roles) para GET/POST/PUT, `isRececionista` para `PATCH /:id/estado` e `isDiretorClinico` para `DELETE /:id` (soft delete).
 
+### `HorarioFisioterapeuta`
+Limites de agenda de cada fisioterapeuta. **F3** — novo modelo do domínio Fisioterapia, suporta dois tipos de regra:
+
+- `tipo: 'recorrente'` — regra semanal (ex.: segundas 09:00–13:00, terças 14:00–19:00).
+- `tipo: 'excecao'` — dia específico (ex.: "26/12 só manhã" ou "15/12 bloqueado por formação").
+
+> **F3:** O modelo distingue-se do `dias_folga` (legacy em `Utilizador`, folga fixa semanal) por permitir definir janelas de trabalho em vez de apenas dia completo. Para um dia com manhã+tarde criam-se **dois** documentos `recorrente` com o mesmo `dia_semana` (ex.: 09:00–13:00 e 14:00–19:00). A coerência `tipo`/`dia_semana`/`data` é validada em `pre('validate')`. As exceções têm prioridade sobre a regra recorrente quando ambas existem no mesmo dia (ver `obterHorarioDia` em `utils/disponibilidade.js`).
+
+| Campo                | Tipo     | Notas                                                              |
+|----------------------|----------|--------------------------------------------------------------------|
+| `empresa_id`         | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
+| `fisioterapeuta_id`  | ObjectId | `ref: 'Utilizador'`. Obrigatório, indexado. Validado no controller como fisio/diretor_clinico ativo da empresa. |
+| `tipo`               | String   | `enum: ['recorrente','excecao']`, default `'recorrente'`. Indexado. |
+| `dia_semana`         | Number   | `min: 0, max: 6, default null`. 0=Dom…6=Sáb. **Obrigatório se `tipo='recorrente'`**; `null` se `tipo='excecao'` (forçado em `pre('validate')`). |
+| `hora_inicio`        | String   | Default `'09:00'`. Formato `HH:mm` validado por regex `/^([01]\d|2[0-3]):([0-5]\d)$/`. Início da janela de trabalho. |
+| `hora_fim`           | String   | Default `'19:00'`. Formato `HH:mm` (mesma regex). Fim da janela de trabalho. |
+| `data`               | Date     | Default `null`. **Obrigatória se `tipo='excecao'`**; `null` se `tipo='recorrente'` (forçado em `pre('validate')`). |
+| `disponivel`         | Boolean  | Default `true`. Só relevante para `tipo='excecao'`: `true` = horário extra disponível; `false` = bloqueio (formação, feriado, indisponibilidade pontual). |
+| `ativo`              | Boolean  | Default `true`, indexado. Soft toggle: permite desativar uma regra sem a apagar (preserva histórico e facilita reativação). |
+| `nota`               | String   | Default `''`, trim. Nota interna livre (ex.: "Formação em Pilates Clínico"). |
+
+**Validação `pre('validate')`:**
+- Se `tipo='recorrente'` → `dia_semana` obrigatório (0–6); `data` forçada a `null`.
+- Se `tipo='excecao'` → `data` obrigatória; `dia_semana` forçada a `null`.
+
+**Índices compostos:**
+- `{ fisioterapeuta_id: 1, dia_semana: 1, ativo: 1 }` — lookup da regra recorrente de um fisio num dia da semana.
+- `{ empresa_id: 1, fisioterapeuta_id: 1, tipo: 1 }` — listagens por fisioterapeuta filtradas por tipo.
+- `{ fisioterapeuta_id: 1, data: 1 }` — procura de exceções de um fisio num dia específico.
+
+> **Permissões (F3):** as routes (`routes/horarioRoutes.js`) usam um middleware custom `podeVer` (todos os 4 roles) para `GET /`, `GET /:id` e `GET /disponibilidade` — fisioterapeuta vê só os seus horários (filtro aplicado no controller), diretor_clinico/admin/rececionista vêem todos. As mutações (`POST`, `PUT`, `DELETE`) exigem `isDiretorClinico` (admin + diretor_clinico). O controller valida que `fisioterapeuta_id` corresponde a um utilizador com role `fisioterapeuta` ou `diretor_clinico` ativo (não eliminado) da mesma empresa. Auditoria registada em criar/atualizar/eliminar via `utils/auditoria.js` (`recurso: 'horario_fisioterapeuta'`).
+>
+> **Motor de disponibilidade:** este modelo é consultado pelo motor em `utils/disponibilidade.js` (funções `obterHorarioDia`, `verificarConflitoHorario`, `verificarDisponibilidadeCompleta` — ver secção 3.4).
+
 ---
 
 ## 3.2. Lógica central — Atribuição de tarefas
@@ -325,6 +362,41 @@ Executa **duas fases** todos os dias às 18:00 (Europe/Lisbon):
 5. Devolve `{ processados, notificados, tarefas }` (estatísticas para testes/logs).
 
 > **Timezone:** o `Cão de Guarda` e o `Agenda de Amanhã` usam a opção `timezone: 'Europe/Lisbon'` do node-cron, pelo que os horários são estáveis mesmo que o servidor esteja em UTC (caso do Render) — acompanham automaticamente as mudanças legais de horário de Verão/Inverno de Portugal. O `Daily Briefing` usa o fuso do servidor (definir `TZ=Europe/Lisbon` no ambiente para alinhar).
+
+---
+
+## 3.4. Motor de Disponibilidade — F3
+
+O utilitário `utils/disponibilidade.js` implementa o motor de disponibilidade que valida se um fisioterapeuta pode receber uma consulta numa dada data/hora. É consultado por `horarioController.verificarDisponibilidade` (endpoint `GET /api/gestor/horarios/disponibilidade`) e será reutilizado em F4 pela marcação de `Consulta`.
+
+### 3 camadas (verificadas por ordem de prioridade)
+
+A função `verificarDisponibilidadeCompleta(utilizador, dataHoraInicio, duracaoMinutos)` percorre as 3 camadas por ordem e **falha cedo** (devolve `{ ok: false, motivo }` assim que uma camada bloqueia):
+
+1. **Ausência aprovada** — `verificarDisponibilidadeUtilizador(utilizador_id, data)` consulta `Ausencia` com `estado: 'aprovada'` que cubra o dia (intervalo `[data_inicio, data_fim]` em data de calendário de Lisboa). A janela de pesquisa é alargada ±1 dia para tolerar diferenças de fuso (UTC midnight vs local midnight); a comparação final é feita em JS pela data de Lisboa (`dataLisboa(instante)` via `Intl.DateTimeFormat` com `timeZone: 'Europe/Lisbon'`). Se houver ausência → indisponível, com mensagem humanizada ("Férias de YYYY-MM-DD a YYYY-MM-DD." via `mensagemIndisponivel`).
+2. **Folga fixa semanal** — verifica `utilizador.dias_folga` (array de 0–6, legado do `Utilizador`). Se o dia da semana (calculado em Lisboa) estiver no array → indisponível ("Folga fixa semanal (Terça)."). Esta camada mantém-se por retrocompatibilidade — a médio prazo será substituída por regras `HorarioFisioterapeuta` recorrentes.
+3. **Horário de trabalho** — `verificarConflitoHorario(fisioterapeuta_id, dataHoraInicio, duracaoMinutos)` chama `obterHorarioDia` para descobrir a janela de trabalho do dia (ver abaixo) e depois valida se a consulta proposta (`dataHoraInicio` + `duracaoMinutos`) cabe dentro do bloco `[hora_inicio, hora_fim]` (comparações via `compararHoras(a, b)` que converte `HH:mm` para minutos). Se a consulta começar antes de `hora_inicio` ou acabar depois de `hora_fim` → conflito.
+
+> **Nota F3:** a 4.ª camada (conflito com **consultas já marcadas**) será adicionada em F4 quando o modelo `Consulta` existir. Atualmente a verificação só cobre "o fisioterapeuta trabalha neste dia e a esta hora?" — não valida sobreposição com outras consultas.
+
+### `obterHorarioDia(fisioterapeutaId, data)` — 3 sub-camadas por prioridade
+
+A função `obterHorarioDia` consulta o modelo `HorarioFisioterapeuta` para um dia específico e devolve `{ disponivel, horario: { hora_inicio, hora_fim } | null, origem: 'excecao' | 'recorrente' | null, motivo? }`:
+
+1. **Exceções do dia** (`tipo='excecao'` com `data` = dia, `ativo: true`):
+   - Se houver uma exceção com `disponivel: false` (bloqueio) → `{ disponivel: false, origem: 'excecao', motivo: nota || 'Indisponível neste dia (exceção).' }`.
+   - Se houver exceção com `disponivel: true` (horário extra) → usa essas horas (`origem: 'excecao'`). Primeira encontrada vence.
+2. **Regra recorrente** (`tipo='recorrente'` com `dia_semana` = dia da semana em Lisboa, `ativo: true`):
+   - Devolve as horas da regra (`origem: 'recorrente'`).
+3. **Sem regra** → `{ disponivel: false, origem: null, motivo: 'Sem horário definido para este dia.' }` (o fisioterapeuta não trabalha nesse dia).
+
+### Helpers de fuso e horas
+
+- `dataLisboa(instante)` — devolve `"YYYY-MM-DD"` no fuso de Lisboa (via `Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Lisbon' })`). Robusto a horário de Verão/Inverno.
+- `horaLisboa(instante)` — devolve `"HH:mm"` no fuso de Lisboa (via `Intl.DateTimeFormat('pt-PT', { timeZone: 'Europe/Lisbon', hour12: false })`).
+- `compararHoras(a, b)` — compara duas strings `"HH:mm"` (devolve `-1/0/1`); converte para minutos totais.
+
+> **Robustez de fuso (herdada do Prompt 113):** todas as comparações de data usam a **data de calendário de Lisboa** (não o instante UTC midnight). Isto garante que uma tarefa/consulta criada às 00:00 local (23:00Z do dia anterior em UTC) conta como "mesmo dia" para efeitos de ausências/horários — mesmo quando o `Ausencia.data_inicio` está armazenado em UTC midnight.
 
 ---
 
@@ -835,6 +907,134 @@ Alterna o estado `ativo` do paciente (ativa ↔ desativa). Útil para pacientes 
 
 ---
 
+### 6.13. Horários de Fisioterapeuta (`/api/gestor/horarios`) — F3
+
+> **Auth:** JWT (strito, sem fallback legacy). Todas as rotas protegidas por `auth` (em `horarioRoutes.js`).
+>
+> **Permissões (F3):**
+> - `podeVer` (middleware custom) — todos os 4 roles (`admin`, `diretor_clinico`, `fisioterapeuta`, `rececionista`) podem aceder a `GET /` (listar), `GET /:id` (detalhe) e `GET /disponibilidade` (verificador). Como o Express não tem middleware "OR" nativo entre `isClinico` e `isRececionista`, define-se um `podeVer` inline que valida `req.user.role` contra o conjunto dos 4 roles. O fisioterapeuta vê apenas os seus próprios horários (filtro `fisioterapeuta_id = req.user.id` aplicado no controller); os restantes roles vêem todos os horários da empresa.
+> - `isDiretorClinico` (admin + diretor_clinico) — `POST`, `PUT`, `DELETE` (mutações). Só o diretor clínico/admin gerem horários; o fisioterapeuta não pode criar/editar/eliminar horários (nem os seus).
+>
+> **Validação do fisioterapeuta:** em `POST` e no verificador de disponibilidade, o controller valida que `fisioterapeuta_id` corresponde a um utilizador com role `fisioterapeuta` ou `diretor_clinico`, `ativo: true`, `eliminado_em: null` e pertencente à mesma empresa. Isto permite definir horários tanto para fisioterapeutas como para diretores clínicos que também atendem pacientes.
+>
+> **Auditoria:** todas as mutações (`POST`/`PUT`/`DELETE`) registam em `utils/auditoria.js` (`recurso: 'horario_fisioterapeuta'`, `acao: 'criar' | 'atualizar' | 'eliminar'`).
+
+#### `GET /api/gestor/horarios`
+Lista horários de fisioterapeutas da empresa.
+
+- **Auth:** JWT + `podeVer` (4 roles). Fisioterapeuta vê só os seus.
+- **Query params (opcionais):**
+  - `fisioterapeuta_id` — filtra por fisioterapeuta (ignorado se o `req.user.role === 'fisioterapeuta'`, que vê só os seus).
+  - `tipo` — `'recorrente'` ou `'excecao'`.
+  - `ativo` — `'true'`/`'false'` filtra por `ativo`.
+- **Ordenação:** `fisioterapeuta_id`, `tipo`, `dia_semana`, `data` (asc).
+- **Populate:** `fisioterapeuta_id` → `{ nome, email, role }`.
+- **Resposta (200 OK):**
+```json
+{
+  "horarios": [
+    {
+      "_id": "...",
+      "empresa_id": "...",
+      "fisioterapeuta_id": { "_id": "...", "nome": "João Fisioterapeuta", "email": "joao.fisio@fisiocell.pt", "role": "fisioterapeuta" },
+      "tipo": "recorrente",
+      "dia_semana": 1,
+      "hora_inicio": "09:00",
+      "hora_fim": "13:00",
+      "data": null,
+      "disponivel": true,
+      "ativo": true,
+      "nota": "",
+      "createdAt": "...",
+      "updatedAt": "..."
+    }
+  ],
+  "total": 7
+}
+```
+- **Erros:** `401` não autenticado; `403` role sem permissão; `500` erro interno.
+
+#### `GET /api/gestor/horarios/disponibilidade`
+Verifica se um fisioterapeuta está disponível para uma consulta numa dada data/hora. Não invoca `verificarDisponibilidadeCompleta` (que exige o documento `Utilizador` completo) — usa diretamente `obterHorarioDia` + `verificarConflitoHorario`. **Nota:** esta rota está registada **antes** de `GET /:id` para não ser apanhada como path param.
+
+- **Auth:** JWT + `podeVer` (4 roles). Útil sobretudo para rececionista marcar consultas.
+- **Query params (obrigatórios):**
+  - `fisioterapeuta_id` — ObjectId do fisioterapeuta.
+  - `data` — ISO string (instante de início da consulta).
+- **Query params (opcionais):**
+  - `duracao_minutos` — default `45`. Duração prevista da consulta.
+- **Resposta (200 OK):**
+```json
+{
+  "disponivel": true,
+  "horario": { "hora_inicio": "09:00", "hora_fim": "13:00" },
+  "motivo": null,
+  "origem": "recorrente"
+}
+```
+  - `disponivel: false` com `motivo` explicativo quando o fisioterapeuta não trabalha nesse dia (sem regra), está bloqueado por exceção (`disponivel: false`), ou a consulta não cabe dentro do bloco de trabalho (começa antes de `hora_inicio` ou acaba depois de `hora_fim`).
+  - `origem` — `'excecao'` (janela extra do dia), `'recorrente'` (regra semanal) ou `null` (sem horário definido).
+- **Erros:** `400` `fisioterapeuta_id`/`data` em falta ou `data` inválida; `401` não autenticado; `404` fisioterapeuta não encontrado; `500` erro.
+
+#### `GET /api/gestor/horarios/:id`
+Devolve o detalhe de um horário.
+
+- **Auth:** JWT + `podeVer` (4 roles). Fisioterapeuta só vê os seus (403 caso contrário).
+- **Resposta (200 OK):** `{ "horario": { ... } }` (com `fisioterapeuta_id` populado).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` fisioterapeuta a tentar ver horário de outro; `404` não encontrado / não pertence à empresa; `500` erro.
+
+#### `POST /api/gestor/horarios`
+Cria um novo horário (recorrente ou exceção).
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Body:**
+```json
+{
+  "fisioterapeuta_id": "65f...",
+  "tipo": "recorrente",
+  "dia_semana": 1,
+  "hora_inicio": "09:00",
+  "hora_fim": "13:00",
+  "nota": "Manhãs de segunda"
+}
+```
+  - `fisioterapeuta_id` (obrigatório).
+  - `tipo` — `'recorrente'` (default) ou `'excecao'`.
+  - `dia_semana` — 0–6, **obrigatório se `tipo='recorrente'`**.
+  - `hora_inicio` / `hora_fim` — default `'09:00'`/`'19:00'`, formato `HH:mm`.
+  - `data` — **obrigatória se `tipo='excecao'`** (ISO string).
+  - `disponivel` — boolean, default `true` (só relevante para `excecao`).
+  - `nota` — string, default `''`.
+  - `ativo` — boolean, default `true`.
+- **Validações:**
+  - `fisioterapeuta_id` tem de ser fisioterapeuta/diretor_clinico ativo (não eliminado) da mesma empresa.
+  - `hora_inicio`/`hora_fim` validados por regex `/^([01]\d|2[0-3]):([0-5]\d)$/`.
+  - `tipo='recorrente'` exige `dia_semana` inteiro 0–6; `data` é rejeitada (forçada a `null` pelo `pre('validate')`).
+  - `tipo='excecao'` exige `data` válida; `dia_semana` é rejeitado (forçado a `null`).
+- **Resposta (201 Created):** `{ "horario": { ... } }`.
+- **Auditoria:** registada (`acao: 'criar'`).
+- **Erros:** `400` campos em falta / `tipo` inválido / `dia_semana` fora de 0–6 / `data` inválida / `hora_inicio`/`hora_fim` mal formatados / fisioterapeuta não encontrado / `ValidationError` do `pre('validate')`; `401` não autenticado; `403` role sem permissão; `500` erro.
+
+#### `PUT /api/gestor/horarios/:id`
+Atualiza um horário existente.
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Body (todos opcionais, mas pelo menos um):** `dia_semana`, `hora_inicio`, `hora_fim`, `data`, `disponivel`, `nota`, `ativo`. Pode enviar `null` para limpar `dia_semana`/`data`.
+- **Regras:** `hora_inicio`/`hora_fim` validadas por regex; `dia_semana` inteiro 0–6 (ou `null`); `data` válida (ou `null`).
+- **Resposta (200 OK):** `{ "horario": { ... } }`.
+- **Auditoria:** registada (`acao: 'atualizar'`).
+- **Erros:** `400` ID inválido / `hora_inicio`/`hora_fim` inválidas / `dia_semana`/`data` inválidas; `401` não autenticado; `403` role sem permissão; `404` não encontrado; `500` erro.
+
+#### `DELETE /api/gestor/horarios/:id`
+**Hard delete** do horário (ao contrário do `Paciente`, os horários não usam soft delete — não há necessidade de preservar histórico de regras de agenda).
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Resposta (200 OK):** `{ "message": "Horário eliminado." }`.
+- **Auditoria:** registada (`acao: 'eliminar'`).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` role sem permissão; `404` não encontrado; `500` erro.
+
+---
+
 ## 7. Deploy no Render
 
 | Definição        | Valor                        |
@@ -866,6 +1066,7 @@ Alterna o estado `ativo` do paciente (ativa ↔ desativa). Útil para pacientes 
 
 | Data       | Versão | Alteração                                                            |
 |------------|--------|----------------------------------------------------------------------|
+| **F3**     | —      | **Horários de Fisioterapeuta + motor de disponibilidade:** (1) Novo modelo `models/HorarioFisioterapeuta.js` — `empresa_id`, `fisioterapeuta_id`, `tipo` (`enum ['recorrente','excecao']` default `'recorrente'`), `dia_semana` (0-6, `null` se `excecao`), `hora_inicio`/`hora_fim` (formato `HH:mm` validado por regex), `data` (Date, `null` se `recorrente`), `disponivel` (boolean default `true` — para `excecao`), `ativo` (boolean default `true` indexado — soft toggle), `nota` (string). Validação `pre('validate')`: `recorrente` exige `dia_semana` e força `data=null`; `excecao` exige `data` e força `dia_semana=null`. Índices compostos `{fisioterapeuta_id, dia_semana, ativo}`, `{empresa_id, fisioterapeuta_id, tipo}`, `{fisioterapeuta_id, data}`. (2) `utils/disponibilidade.js` expandido — adicionadas `horaLisboa(instante)` (devolve `HH:mm` no fuso de Lisboa via `Intl.DateTimeFormat`), `compararHoras(a, b)` (compara `HH:mm` em minutos), `obterHorarioDia(fisioId, data)` (3 sub-camadas: exceção do dia → regra recorrente → sem horário), `verificarConflitoHorario(fisioId, dataHoraInicio, duracaoMin)` (valida se a consulta cabe no bloco de trabalho), `verificarDisponibilidadeCompleta(utilizador, dataHoraInicio, duracaoMin)` (ausência aprovada → folga fixa semanal → horário de trabalho, com falha cedo). (3) Novo `controllers/horarioController.js` — CRUD completo (`listarHorarios`, `obterHorario`, `criarHorario`, `atualizarHorario`, `eliminarHorario` hard delete, `verificarDisponibilidade`); valida `fisioterapeuta_id` como fisio/diretor_clinico ativo da empresa; fisioterapeuta vê só os seus; auditoria registada. (4) Novas `routes/horarioRoutes.js` montadas em `/api/gestor/horarios` — middleware custom `podeVer` (4 roles) para GET/listar/disponibilidade, `isDiretorClinico` para POST/PUT/DELETE. (5) `server.js` — mount `app.use('/api/gestor/horarios', horarioRoutes)`. 151/151 testes ✓ (+21 testes de Horário: CRUD, permissões, motor de disponibilidade com exceções, conflitos de horário, dia sem regra). |
 | **F2**     | —      | **Pacientes (Fisioterapia):** (1) Novo modelo `models/Paciente.js` — `empresa_id`, `nome`, `data_nascimento`, `genero` (`enum ['M','F','Outro','NA']` default `'NA'`), `num_utente` (SNS), `nif`, `telefone` (obrigatório), `email`, `morada`, `contacto_emergencia` (`{nome, telefone, relacao}`), `historico_medico`, `alergias` (`[String]`), `consentimento_dados` (`{concedido, data, versao_termos}`), `ativo`, `eliminado_em` (soft delete), `observacoes`, `origem` (`enum ['walk_in','referenciacao','online','outro']` default `'walk_in'`). Índices compostos `{empresa_id, nome}`, `{empresa_id, num_utente}`, `{empresa_id, ativo, eliminado_em}`. (2) Novo `controllers/pacienteController.js` — CRUD completo (`listarPacientes`, `obterPaciente`, `criarPaciente`, `atualizarPaciente`, `eliminarPaciente` soft delete, `alternarEstadoPaciente`) + helpers `temAcessoClinico` e `sanitizarParaNaoClinico` (remove `historico_medico`/`alergias`/`contacto_emergencia` para rececionistas) + auditoria via `utils/auditoria.js`. (3) Novas `routes/pacienteRoutes.js` montadas em `/api/gestor/pacientes` — middleware custom `podeVer` (4 roles) para GET/POST/PUT, `isRececionista` para `PATCH /:id/estado`, `isDiretorClinico` para `DELETE /:id` (soft delete). (4) `server.js` — mount `app.use('/api/gestor/pacientes', pacienteRoutes)`. Respostas incluem flag `dados_clinicos: boolean`. 130/130 testes ✓ (+19 testes de Paciente). |
 | **F1**     | —      | **Migração de roles (Fisioterapia):** (1) Modelo `Utilizador` — enum migrado de `['admin','manager','staff']` para `['admin','diretor_clinico','fisioterapeuta','rececionista']` (default `'rececionista'`); adicionado bloco `perfil_profissional` (`cedula`, `especialidades`, `biografia`, `cor_calendario` default `'#3b82f6'`, `ativo_clinico` default `true`). (2) Modelo `Empresa` — adicionado `logo_url` e bloco `config` (`horario_padrao`, `duracao_consulta_padrao` default `45`/min `15`, `tolerancia_atraso_min` default `10`, `fuso_horario` default `'Europe/Lisbon'`). (3) `middleware/requireRole.js` — removidos `isGestor`/`requireStaff`/`requireManager`/`requireAdmin` (legacy); adicionados `isAdmin` (só admin), `isDiretorClinico` (admin+diretor_clinico), `isClinico` (admin+diretor_clinico+fisioterapeuta), `isRececionista` (admin+diretor_clinico+rececionista). (4) `utils/loadBalancer.js` + controllers — queries de role: `'staff'` → `'fisioterapeuta'`; `'gestor'` → `'diretor_clinico'`; `['staff','gestor']` → `['fisioterapeuta','diretor_clinico']`; `isGestor` → `isDiretorClinico` em todas as routes (`gestorRoutes.js`, `ausenciaRoutes.js`). (5) `setupClienteZero` atualizado: 3 utilizadores (`admin@fisiocell.pt` admin, `gestor@fisiocell.pt` diretor_clinico, `joao.fisio@fisiocell.pt` fisioterapeuta). 111/111 testes ✓. |
 | Inicial    | 1.0.0  | Criação da estrutura base: `package.json`, `server.js`, `.env.example`, `.gitignore`. Ligação ao MongoDB e rota de teste `GET /`. |
