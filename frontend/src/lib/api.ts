@@ -210,6 +210,14 @@ export interface UtilizadorDTO {
   ativo: boolean;
   dias_folga?: number[];
   telefone?: string;
+  // F1 — Perfil profissional (fisioterapeuta/diretor_clinico).
+  perfil_profissional?: {
+    cedula?: string;
+    especialidades?: string[];
+    biografia?: string;
+    cor_calendario?: string;
+    ativo_clinico?: boolean;
+  };
   createdAt?: string;
   updatedAt?: string;
 }

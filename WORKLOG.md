@@ -1417,3 +1417,67 @@ Stage Summary:
 - **Items marcáveis** durante a sessão via PATCH /nota-clinica (protocolo_aplicado com concluido boolean).
 - **192/192 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
 - **Próximo passo:** F6 (adaptar frontend — calendário FullCalendar mostra Consultas em vez de Tarefas).
+
+---
+Task ID: DOC-F6
+Agent: general-purpose
+Task: Atualização de documentação para F6 (calendário FullCalendar com Consultas)
+
+Work Log:
+- Lido `WORKLOG.md` (1419 linhas, últimas entradas DOC-F5/F5) e `docs/ARQUITETURA.md` (437 linhas) para contexto.
+- Lidos os ficheiros de implementação F6 para extrair detalhes exatos: `frontend/src/app/gestor/calendario-consultas/page.tsx` (página FullCalendar), `frontend/src/lib/api.ts` (expansão do `UtilizadorDTO` com `perfil_profissional`) e `frontend/src/components/gestor/gestor-sidebar.tsx` (item "Agenda Consultas").
+- `docs/ARQUITETURA.md`:
+  - Cabeçalho: parágrafo de abertura alargado para mencionar **F6** (calendário FullCalendar com Consultas) após F5.
+  - Secção 8 (Roadmap de Migração): linha **F6** marcada `✅ Concluído` com escopo reescrito para refletir a implementação real (nova rota `/gestor/calendario-consultas` com cores por fisioterapeuta, filtros, legenda e modal de detalhe).
+- `docs/FRONTEND.md`:
+  - Secção 3 (Sistema de rotas): adicionada a rota `/gestor/calendario-consultas` à tabela (após `/gestor/protocolos`) com nota "FullCalendar com Consultas (substitui `/gestor/calendario` que será removido em F8)".
+  - Secção 11 (`lib/api.ts`): o bullet de `UtilizadorDTO` / `Role` foi alargado com nota **F6** — `UtilizadorDTO` expandido com `perfil_profissional?` (`cedula`, `especialidades`, `biografia`, `cor_calendario`, `ativo_clinico`), necessário para a legenda de cores.
+  - Nova subsecção `### /gestor/calendario-consultas (Client Component) — F6` (após `/gestor/protocolos`) com: item de sidebar **Agenda Consultas** (ícone `CalendarPlus`, entre **Calendário** e **Consultas**); nota de substituição progressiva (`/gestor/calendario` mantém-se até F8); documentação do FullCalendar v6 (plugins, locale `pt`, vista inicial `timeGridWeek`, `headerToolbar`, `slotMinTime` 08:00, `slotMaxTime` 20:00, `nowIndicator`, `allDaySlot: false`); blocos com duração real (`data_hora_inicio` → `data_hora_fim`); cores por fisioterapeuta (`perfil_profissional.cor_calendario` + fallback por estado); filtros por fisioterapeuta e estado (período via `datesSet`); legenda de cores por fisioterapeuta (até 8); render customizado de eventos (hora + paciente + fisio na vista semanal); modal de detalhe (paciente, fisio, sala, data/hora, duração, tipo, estado, presença, nota clínica SOAP resumida S/A/Tratamento, observações); estados visuais.
+  - Secção 13 (Histórico): adicionada entrada `**F6**` no topo da tabela (antes de `**F5**`) com a nova página, expansão do `UtilizadorDTO`, item de sidebar (lint/tsc/build ✓, rota 5.36 kB).
+
+Stage Summary:
+- **ARQUITETURA.md**: F6 marcado `✅ Concluído` no roadmap; cabeçalho atualizado para mencionar F6.
+- **FRONTEND.md**: nova rota `/gestor/calendario-consultas` na tabela; nova subsecção de página (FullCalendar v6, cores por fisioterapeuta, filtros, legenda, render customizado, modal de detalhe); `UtilizadorDTO.perfil_profissional` documentado; item de sidebar **Agenda Consultas**; entrada F6 no histórico.
+- **Linguagem pt-pt** preservada; formatação Markdown mantida; sem informação inventada (todos os detalhes foram extraídos dos ficheiros de implementação F6 — `calendario-consultas/page.tsx`, `lib/api.ts` e `gestor-sidebar.tsx`).
+- **Nota de escopo:** a rota antiga `/gestor/calendario` (Tarefas) não foi removida da documentação — mantém-se até F8 (fase de limpeza), conforme decidido na implementação F6 para não quebrar funcionalidade existente.
+
+---
+Task ID: F6
+Agent: Z.ai Code
+Task: Adaptar frontend — calendário FullCalendar mostra Consultas em vez de Tarefas, com cores por fisioterapeuta e blocos de duração real.
+
+Work Log:
+
+### F6-A — Análise do calendário atual
+- `/gestor/calendario/page.tsx` (1836 linhas) usa Tarefas com FullCalendar v6.
+- Decisão: criar nova página `/gestor/calendario-consultas` em vez de modificar a antiga (a antiga mantém-se até F8 de limpeza para não quebrar funcionalidade existente).
+
+### F6-B — Nova página /gestor/calendario-consultas
+- Criada `frontend/src/app/gestor/calendario-consultas/page.tsx`:
+  - FullCalendar v6 com plugins dayGrid, timeGrid, interaction.
+  - Vista semanal (default), diária, mensal.
+  - **Cores por fisioterapeuta** — usa `perfil_profissional.cor_calendario`, fallback por estado.
+  - **Blocos com duração real** (data_hora_inicio → data_hora_fim).
+  - Filtros por fisioterapeuta e estado.
+  - Legenda de cores por fisioterapeuta (até 8 fisios visíveis).
+  - Modal de detalhe ao clicar (paciente, fisio, sala, data/hora, tipo, estado, presença, nota clínica SOAP resumida).
+  - Render customizado de eventos (hora + nome do paciente + fisio na vista semanal).
+  - nowIndicator, slotMinTime 08:00, slotMaxTime 20:00, allDaySlot false.
+  - Carrega consultas via GET /api/gestor/consultas?inicio=&fim= (datasSet do FullCalendar).
+
+### F6-C — Sidebar + tipos
+- Adicionado item "Agenda Consultas" (ícone CalendarPlus) ao sidebar do gestor, entre "Calendário" (antigo) e "Consultas".
+- `UtilizadorDTO` em lib/api.ts expandido com `perfil_profissional` (cedula, especialidades, biografia, cor_calendario, ativo_clinico) — necessário para a legenda de cores.
+
+### F6-D — Validação
+- **Lint ✓, tsc ✓, build ✓** (rota /gestor/calendario-consultas = 5.36 kB).
+
+### F6-E — Documentação (Task DOC-F6 por subagent)
+- `docs/FRONTEND.md`: rota /gestor/calendario-consultas, página documentada (cores por fisio, filtros, legenda, modal, render customizado), UtilizadorDTO expandido, entrada F6 no histórico.
+- `docs/ARQUITETURA.md`: F6 marcado ✅ no roadmap.
+
+Stage Summary:
+- **Calendário de Consultas criado** com FullCalendar v6, mostrando Consultas com cores por fisioterapeuta e blocos de duração real.
+- **Coexistência**: a página antiga `/gestor/calendario` (Tarefas) mantém-se até F8 (limpeza) — não quebra funcionalidade existente.
+- **Lint ✓, tsc ✓, build ✓**.
+- **Próximo passo:** F7 (cron jobs — briefing fisio, lembretes paciente, arquivista de consultas).

@@ -6,9 +6,10 @@
 > (`Paciente` + CRUD + sanitização de dados clínicos), **F3**
 > (`HorarioFisioterapeuta` + motor de disponibilidade em 3 camadas), **F4**
 > (`Consulta` + validação de conflitos + cédula profissional + nota clínica SOAP
-> imutável) e **F5** (`ModeloProtocolo` + snapshot imutável na Consulta) e
-> define o roadmap de migração F0–F9. Os esquemas Mongoose abaixo são
-> **propostas** — a implementação decorre fase a fase.
+> imutável) e **F5** (`ModeloProtocolo` + snapshot imutável na Consulta),
+> **F6** (calendário FullCalendar com Consultas) e define o roadmap de migração
+> F0–F9. Os esquemas Mongoose abaixo são **propostas** — a implementação decorre
+> fase a fase.
 
 ---
 
@@ -411,7 +412,7 @@ Todos mantêm `timezone: 'Europe/Lisbon'`.
 | **F3** | `Sala` (de `Propriedade`) + `HorarioFisioterapeuta` + motor de disponibilidade (3 camadas) | ✅ Concluído\* |
 | **F4** | `Consulta` (de `Tarefa`) + CRUD de marcação + validação de conflitos (sala + fisio + paciente) + nota clínica SOAP imutável + cédula profissional | ✅ Concluído |
 | **F5** | `ModeloProtocolo` (de `ModeloChecklist`) + CRUD + snapshot imutável na Consulta (`protocolo_id` em `criarConsulta`, `protocolo_aplicado` em `PATCH /nota-clinica`) | ✅ Concluído |
-| **F6** | Adaptar frontend: calendário FullCalendar mostra `Consultas` em vez de `Tarefas` | Pendente |
+| **F6** | Adaptar frontend: calendário FullCalendar mostra `Consultas` em vez de `Tarefas` (nova rota `/gestor/calendario-consultas` com cores por fisioterapeuta, filtros, legenda e modal de detalhe) | ✅ Concluído |
 | **F7** | Cron jobs novos (`briefingDiarioFisio`, `lembreteConsultasAmanha`, `lembrete2hConsulta`, `caoGuardaConsultas`, `arquivistaConsultas`) | Pendente |
 | **F8** | Limpeza: remover `Tarefa`, `TarefaArquivo`, `Propriedade`, `ModeloChecklist` antigos | Pendente |
 | **F9** | `Documento` (anexos + fotografias clínicas) com storage S3/Cloudinary + consentimento RGPD | Pendente |
