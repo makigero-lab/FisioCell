@@ -362,7 +362,7 @@ exports.criarTarefa = async (req, res) => {
       const user = await Utilizador.findOne({
         _id: utilizador_id,
         empresa_id: empresaId,
-        role: { $in: ['staff', 'gestor'] },
+        role: { $in: ['fisioterapeuta', 'diretor_clinico'] },
         ativo: true,
         eliminado_em: null,
       });
@@ -560,7 +560,7 @@ exports.atribuirTarefa = async (req, res) => {
       const user = await Utilizador.findOne({
         _id: utilizador_id,
         empresa_id: empresaId,
-        role: { $in: ['staff', 'gestor'] },
+        role: { $in: ['fisioterapeuta', 'diretor_clinico'] },
         ativo: true,
         eliminado_em: null,
       });
@@ -736,7 +736,7 @@ exports.reatribuirTarefa = async (req, res) => {
     const novoUser = await Utilizador.findOne({
       _id: utilizador_id,
       empresa_id: empresaId,
-      role: { $in: ['staff', 'gestor'] },
+      role: { $in: ['fisioterapeuta', 'diretor_clinico'] },
       ativo: true,
       eliminado_em: null,
     }).lean();
@@ -1125,7 +1125,7 @@ exports.autoAtribuirTarefas = async (req, res) => {
             const Utilizador = require('../models/Utilizador');
             const temStaffAtivo = await Utilizador.exists({
               empresa_id: empresaId,
-              role: 'staff',
+              role: 'fisioterapeuta',
               ativo: true,
               eliminado_em: null,
             });

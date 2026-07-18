@@ -6,8 +6,12 @@ import { Loader2 } from "lucide-react";
 import { fazerLogout, lerUtilizador, limparCacheAuth, type Role } from "@/lib/auth";
 
 interface RouteGuardProps {
-  /** Role exigida para esta área ("admin" | "gestor" | "staff"). */
-  role: Role;
+  /**
+   * Role (ou roles) exigida para esta área.
+   * F1 — pode ser um array para áreas partilhadas (ex.: /gestor aceita
+   * diretor_clinico e rececionista).
+   */
+  role: Role | Role[];
   children: React.ReactNode;
 }
 
@@ -59,11 +63,13 @@ export function RouteGuard({ role, children }: RouteGuardProps) {
       }
 
       // Role errado → redirect HARD para o painel certo desse role.
-      if (user.role !== role) {
+      // F1 — suporta múltiplos roles permitidos (array).
+      const rolesPermitidos = Array.isArray(role) ? role : [role];
+      if (!rolesPermitidos.includes(user.role)) {
         const destino =
           user.role === "admin"
             ? "/admin"
-            : user.role === "gestor"
+            : user.role === "diretor_clinico" || user.role === "rececionista"
             ? "/gestor"
             : "/staff";
         window.location.href = destino;

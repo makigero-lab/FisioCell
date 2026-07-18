@@ -175,7 +175,7 @@ describe('POST /api/auth/login', () => {
       email: 'inativo@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: false,
     });
     const res = await request(app)
@@ -343,7 +343,7 @@ describe('GET /api/gestor/calendario/dados', () => {
       email: 'cal-staff1@teste.pt',
       password_hash: hash,
       empresa_id: new mongoose.Types.ObjectId(empresaId),
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
     staff2 = await Utilizador.create({
@@ -351,7 +351,7 @@ describe('GET /api/gestor/calendario/dados', () => {
       email: 'cal-staff2@teste.pt',
       password_hash: hash,
       empresa_id: new mongoose.Types.ObjectId(empresaId),
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -631,7 +631,7 @@ describe('Fluxo de aprovação de ausências', () => {
       email: 'staff.ausencia@teste.pt',
       password_hash: hash,
       empresa_id: new mongoose.Types.ObjectId(empresaId),
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
     staffId = String(staff._id);
@@ -694,7 +694,7 @@ describe('Fluxo de aprovação de ausências', () => {
   });
 
   it('staff não pode aceder a endpoints de gestão (/api/gestor/ausencias) → 403', async () => {
-    // O staff tem token válido, mas role 'staff' não tem permissão de gestor/admin.
+    // O staff tem token válido, mas role 'fisioterapeuta' não tem permissão de diretor_clinico/admin.
     const res = await request(app)
       .get('/api/gestor/ausencias')
       .set('Authorization', `Bearer ${staffToken}`);
@@ -898,7 +898,7 @@ describe('Super Admin (rotas exclusivas /api/admin)', () => {
       email: 'gestor.rbac@teste.pt',
       password_hash: hash,
       empresa_id: new mongoose.Types.ObjectId(empresaId),
-      role: 'gestor',
+      role: 'diretor_clinico',
       ativo: true,
     });
     const gestorLogin = await request(app)
@@ -937,14 +937,14 @@ describe('Super Admin (rotas exclusivas /api/admin)', () => {
       email: 'gestor.impersonar@teste.pt',
       password_hash: hash,
       empresa_id: new mongoose.Types.ObjectId(empresaId),
-      role: 'gestor',
+      role: 'diretor_clinico',
       ativo: true,
     });
 
     const res = await authPost(`/api/admin/empresas/${empresaId}/impersonar`, {});
     expect(res.status).toBe(200);
     expect(res.body.token).toBeTruthy();
-    expect(res.body.utilizador.role).toBe('gestor');
+    expect(res.body.utilizador.role).toBe('diretor_clinico');
     expect(res.body.utilizador.empresa_id).toBe(empresaId);
     expect(res.body.impersonado).toBe(true);
     expect(res.body.empresa).toBeTruthy();
@@ -955,7 +955,7 @@ describe('Super Admin (rotas exclusivas /api/admin)', () => {
       .get('/api/auth/me')
       .set('Authorization', `Bearer ${res.body.token}`);
     expect(verifyRes.status).toBe(200);
-    expect(verifyRes.body.utilizador.role).toBe('gestor');
+    expect(verifyRes.body.utilizador.role).toBe('diretor_clinico');
   });
 
   it('POST /api/admin/empresas/:id/impersonar com gestor → 403', async () => {
@@ -965,7 +965,7 @@ describe('Super Admin (rotas exclusivas /api/admin)', () => {
       email: 'gestor.block@teste.pt',
       password_hash: hash,
       empresa_id: new mongoose.Types.ObjectId(empresaId),
-      role: 'gestor',
+      role: 'diretor_clinico',
       ativo: true,
     });
     const gestorLogin = await request(app)
@@ -997,7 +997,7 @@ describe('Super Admin (rotas exclusivas /api/admin)', () => {
       email: 'staff.semgestor@teste.pt',
       password_hash: hash,
       empresa_id: empSemGestor._id,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -1009,9 +1009,9 @@ describe('Super Admin (rotas exclusivas /api/admin)', () => {
     expect(res.body.impersonado).toBe(true);
     expect(res.body.empresa.id).toBe(String(empSemGestor._id));
     // O utilizador no token é o admin (que fez o pedido), mas com
-    // empresa_id da empresa alvo e role 'gestor' (impersonação).
+    // empresa_id da empresa alvo e role 'diretor_clinico' (impersonação).
     expect(res.body.utilizador.empresa_id).toBe(String(empSemGestor._id));
-    expect(res.body.utilizador.role).toBe('gestor');
+    expect(res.body.utilizador.role).toBe('diretor_clinico');
     expect(res.body.utilizador.id).toBe(adminId); // o próprio admin
 
     // Verifica que o token funciona (autentica).
@@ -1047,7 +1047,7 @@ describe('Super Admin (rotas exclusivas /api/admin)', () => {
         email: 'gestor.p101@teste.pt',
         password_hash: hash,
         empresa_id: emp._id,
-        role: 'gestor',
+        role: 'diretor_clinico',
         ativo: true,
       },
       {
@@ -1055,7 +1055,7 @@ describe('Super Admin (rotas exclusivas /api/admin)', () => {
         email: 'staff.p101@teste.pt',
         password_hash: hash,
         empresa_id: emp._id,
-        role: 'staff',
+        role: 'fisioterapeuta',
         ativo: true,
       },
     ]);
@@ -1073,8 +1073,8 @@ describe('Super Admin (rotas exclusivas /api/admin)', () => {
     expect(res.body.utilizadores.every((u) => !u.password_hash)).toBe(true);
     // Contém os 2 utilizadores.
     const roles = res.body.utilizadores.map((u) => u.role);
-    expect(roles).toContain('gestor');
-    expect(roles).toContain('staff');
+    expect(roles).toContain('diretor_clinico');
+    expect(roles).toContain('fisioterapeuta');
   });
 
   it('Prompt 101 — POST /api/admin/empresas/:empresaId/utilizadores → cria gestor (empresa sem gestor)', async () => {
@@ -1084,11 +1084,11 @@ describe('Super Admin (rotas exclusivas /api/admin)', () => {
       nome: 'Novo Gestor P101',
       email: 'novo.gestor.p101@teste.pt',
       password: 'senha123',
-      role: 'gestor',
+      role: 'diretor_clinico',
     });
     expect(res.status).toBe(201);
     expect(res.body.utilizador.nome).toBe('Novo Gestor P101');
-    expect(res.body.utilizador.role).toBe('gestor');
+    expect(res.body.utilizador.role).toBe('diretor_clinico');
     expect(String(res.body.utilizador.empresa_id)).toBe(String(emp._id));
     expect(res.body.utilizador.ativo).toBe(true);
     expect(res.body.utilizador.password_hash).toBeUndefined();
@@ -1096,7 +1096,7 @@ describe('Super Admin (rotas exclusivas /api/admin)', () => {
     // Confirma que ficou na BD associado à empresa certa.
     const naBd = await Utilizador.findById(res.body.utilizador._id).lean();
     expect(String(naBd.empresa_id)).toBe(String(emp._id));
-    expect(naBd.role).toBe('gestor');
+    expect(naBd.role).toBe('diretor_clinico');
   });
 
   it('Prompt 101 — POST criação rejeita role admin (403) e email duplicado (409)', async () => {
@@ -1116,7 +1116,7 @@ describe('Super Admin (rotas exclusivas /api/admin)', () => {
       nome: 'Gestor Dup',
       email: 'dup.p101@teste.pt',
       password: 'senha123',
-      role: 'gestor',
+      role: 'diretor_clinico',
     });
 
     // Mesmo email → 409.
@@ -1124,7 +1124,7 @@ describe('Super Admin (rotas exclusivas /api/admin)', () => {
       nome: 'Outro',
       email: 'dup.p101@teste.pt',
       password: 'senha123',
-      role: 'gestor',
+      role: 'diretor_clinico',
     });
     expect(resDup.status).toBe(409);
   });
@@ -1137,7 +1137,7 @@ describe('Super Admin (rotas exclusivas /api/admin)', () => {
       email: 'toggle.p101@teste.pt',
       password_hash: hash,
       empresa_id: emp._id,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -1175,7 +1175,7 @@ describe('Super Admin (rotas exclusivas /api/admin)', () => {
       email: 'outra.p101@teste.pt',
       password_hash: hash,
       empresa_id: outraEmp._id,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -1203,7 +1203,7 @@ describe('PATCH /api/staff/tarefas/:id/concluir', () => {
       email: 'staff.concluir@teste.pt',
       password_hash: hash,
       empresa_id: new mongoose.Types.ObjectId(empresaId),
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
     staffConcluirId = String(staffConcluir._id);
@@ -1298,7 +1298,7 @@ describe('POST /api/staff/tarefas/:id/avaria', () => {
       email: 'staff.avaria@teste.pt',
       password_hash: hash,
       empresa_id: new mongoose.Types.ObjectId(empresaId),
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
     staffAvariaId = String(staffAvaria._id);
@@ -1458,7 +1458,7 @@ describe('Cron Job: Agenda de Amanhã (Prompt 94)', () => {
       email: 'staff.ag1@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
     const staff2 = await Utilizador.create({
@@ -1466,7 +1466,7 @@ describe('Cron Job: Agenda de Amanhã (Prompt 94)', () => {
       email: 'staff.ag2@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -1541,7 +1541,7 @@ describe('Cron Job: Agenda de Amanhã (Prompt 94)', () => {
       email: 'staff.ag1@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -1622,7 +1622,7 @@ describe('Cron Job: Agenda de Amanhã (Prompt 94)', () => {
       email: 'staff.ag-inativo@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: false, // inativo
     });
 
@@ -1691,7 +1691,7 @@ describe('Cron Job: Cão de Guarda (Prompt 96)', () => {
       email: 'staff.cg1@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
     const staff2 = await Utilizador.create({
@@ -1699,7 +1699,7 @@ describe('Cron Job: Cão de Guarda (Prompt 96)', () => {
       email: 'staff.cg2@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -1780,7 +1780,7 @@ describe('Cron Job: Cão de Guarda (Prompt 96)', () => {
       email: 'staff.cg1@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -1868,7 +1868,7 @@ describe('Cron Job: Cão de Guarda (Prompt 96)', () => {
       email: 'staff.cg-inativo@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: false, // inativo
     });
 
@@ -1929,7 +1929,7 @@ describe('Prompt 97 — Desligar a Histeria Automática', () => {
       email: 'staff.p97@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -1973,7 +1973,7 @@ describe('Prompt 97 — Desligar a Histeria Automática', () => {
       email: 'staff.falta.p97@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
     const outro = await Utilizador.create({
@@ -1981,7 +1981,7 @@ describe('Prompt 97 — Desligar a Histeria Automática', () => {
       email: 'staff.outro.p97@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -2032,7 +2032,7 @@ describe('Prompt 97 — Desligar a Histeria Automática', () => {
       email: 'staff.baixa.p97@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
     const outro = await Utilizador.create({
@@ -2040,7 +2040,7 @@ describe('Prompt 97 — Desligar a Histeria Automática', () => {
       email: 'staff.outro.baixa.p97@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -2122,7 +2122,7 @@ describe('Cão de Guarda / Fail-Safe: Auto-Atribuição de Emergência (Prompt 9
       email: 'staff.failsafe@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -2200,7 +2200,7 @@ describe('Cão de Guarda / Fail-Safe: Auto-Atribuição de Emergência (Prompt 9
     // Garante que NÃO há staff ativo nesta empresa (desativa todos os staff
     // que testes anteriores possam ter deixado na empresaId).
     await Utilizador.updateMany(
-      { empresa_id: empresaId, role: 'staff' },
+      { empresa_id: empresaId, role: 'fisioterapeuta' },
       { $set: { ativo: false } }
     );
 
@@ -2247,7 +2247,7 @@ describe('Cão de Guarda / Fail-Safe: Auto-Atribuição de Emergência (Prompt 9
       email: 'staff.failsafe@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -2327,7 +2327,7 @@ describe('Correções: Calendário + Importar Propriedades', () => {
       email: 'staff.elim@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
       eliminado_em: new Date(),
     });
@@ -2338,7 +2338,7 @@ describe('Correções: Calendário + Importar Propriedades', () => {
       email: 'staff.ativo@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -2417,7 +2417,7 @@ describe('Prompt 114 — Centro de Notificações + Haversine', () => {
       email: 'staff.notif@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -2476,7 +2476,7 @@ describe('Prompt 114 — Centro de Notificações + Haversine', () => {
       email: 'staff.sino@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -2537,7 +2537,7 @@ describe('Prompt 114 — Centro de Notificações + Haversine', () => {
       email: 'staff.dist@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -2647,7 +2647,7 @@ describe('Prompt 116 — Fundação SaaS + Lógica de Negócio', () => {
       email: 'staff.empresa.inativa@teste.pt',
       password_hash: hash,
       empresa_id: emp._id,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -2669,7 +2669,7 @@ describe('Prompt 116 — Fundação SaaS + Lógica de Negócio', () => {
       email: 'staff.sobreposicao@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
 
@@ -2712,7 +2712,7 @@ describe('Prompt 116 — Fundação SaaS + Lógica de Negócio', () => {
       email: 'staff.ativo.equipa@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
     // Staff inativo — NÃO deve aparecer.
@@ -2721,7 +2721,7 @@ describe('Prompt 116 — Fundação SaaS + Lógica de Negócio', () => {
       email: 'staff.inativo.equipa@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: false,
     });
     // Gestor ativo — deve aparecer.
@@ -2730,7 +2730,7 @@ describe('Prompt 116 — Fundação SaaS + Lógica de Negócio', () => {
       email: 'gestor.equipa@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'gestor',
+      role: 'diretor_clinico',
       ativo: true,
     });
 
@@ -2800,7 +2800,7 @@ describe('Prompt 116 — Fundação SaaS + Lógica de Negócio', () => {
       email: 'staff.hora.test@teste.pt',
       password_hash: hash,
       empresa_id: empresaId,
-      role: 'staff',
+      role: 'fisioterapeuta',
       ativo: true,
     });
     const prop = await Propriedade.create({

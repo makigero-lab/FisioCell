@@ -13,7 +13,9 @@ import { ImpersonationBanner } from "@/components/gestor/impersonation-banner";
  *   O gestor vê apenas: Dashboard, Calendário, Tarefas, Propriedades,
  *   Equipa, Ausências, Relatórios, Configurações + Sino de Notificações.
  *
- * Protegido por RouteGuard (role "gestor").
+ * Protegido por RouteGuard (roles "diretor_clinico" e "rececionista").
+ * F1 — /gestor é partilhado por diretor_clinico (acesso total) e rececionista
+ * (acesso limitado via isRececionista no backend).
  *
  * Prompt 110.3 / 113 — Banner de impersonação: se o admin impersonou um
  * gestor, mostra um botão VERMELHO "Voltar a Admin" no topo.
@@ -24,7 +26,7 @@ export default function GestorLayout({
   children: React.ReactNode;
 }) {
   return (
-    <RouteGuard role="gestor">
+    <RouteGuard role={["diretor_clinico", "rececionista"]}>
       <div className="flex min-h-screen flex-col bg-muted/30 lg:flex-row">
         <GestorSidebar />
         <main className="flex-1 lg:overflow-x-hidden">

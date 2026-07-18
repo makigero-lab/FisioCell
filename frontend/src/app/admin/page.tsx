@@ -64,7 +64,7 @@ interface UtilizadorEmpresaDTO {
   _id: string;
   nome: string;
   email: string;
-  role: "admin" | "gestor" | "staff";
+  role: "admin" | "diretor_clinico" | "fisioterapeuta" | "rececionista";
   ativo: boolean;
   createdAt?: string;
 }
@@ -343,7 +343,7 @@ export default function SuperAdminPage() {
           nome: formGestor.nome.trim(),
           email: formGestor.email.trim(),
           password: formGestor.password,
-          role: "gestor",
+          role: "diretor_clinico",
         }),
       });
       const data = await res.json();
@@ -780,9 +780,9 @@ export default function SuperAdminPage() {
                       <td className="px-3 py-2 text-muted-foreground">{u.email}</td>
                       <td className="px-3 py-2">
                         <Badge
-                          variant={u.role === "gestor" ? "default" : "secondary"}
+                          variant={u.role === "diretor_clinico" ? "default" : "secondary"}
                         >
-                          {u.role === "gestor" ? "Gestor" : u.role === "staff" ? "Staff" : u.role}
+                          {u.role === "diretor_clinico" ? "Diretor Clínico" : u.role === "fisioterapeuta" ? "Fisioterapeuta" : u.role === "rececionista" ? "Rececionista" : u.role}
                         </Badge>
                       </td>
                       <td className="px-3 py-2">

@@ -140,7 +140,7 @@ exports.registarAusencia = async (req, res) => {
     const utilizador = await Utilizador.findOne({
       _id: utilizador_id,
       empresa_id: empresaId,
-      role: { $in: ['staff', 'gestor'] },
+      role: { $in: ['fisioterapeuta', 'diretor_clinico'] },
     });
     if (!utilizador) {
       return res.status(400).json({
@@ -439,7 +439,7 @@ exports.aprovarRejeitarAusencia = async (req, res) => {
  * Regras:
  *   - Só pode cancelar ausências com estado 'pendente', 'pendente_emergencia'
  *     ou 'aprovada' (NÃO pode cancelar 'rejeitada' nem 'cancelada').
- *   - Staff (role 'staff') só pode cancelar as SUAS ausências
+ *   - Staff (role 'fisioterapeuta') só pode cancelar as SUAS ausências
  *     (valida utilizador_id === req.user.id).
  *   - Gestor/admin pode cancelar qualquer ausência da sua empresa
  *     (valida empresa_id).
@@ -467,7 +467,7 @@ exports.cancelarAusencia = async (req, res) => {
     const empresaId = req.user && req.user.empresa_id;
 
     const filtro = { _id: id };
-    if (role === 'staff') {
+    if (role === 'fisioterapeuta') {
       if (!userId) {
         return res.status(401).json({ erro: 'Não autenticado.' });
       }
@@ -517,7 +517,7 @@ exports.cancelarAusencia = async (req, res) => {
       .lean();
     registarAuditoria({
       utilizador_id: userId,
-      utilizador_nome: req.user.nome || (role === 'staff' ? 'Staff' : 'Admin'),
+      utilizador_nome: req.user.nome || (role === 'fisioterapeuta' ? 'Staff' : 'Admin'),
       empresa_id: ausencia.empresa_id,
       acao: 'cancelar_ausencia',
       recurso: 'ausencia',
@@ -534,8 +534,8 @@ exports.cancelarAusencia = async (req, res) => {
       },
     });
 
-    // Notificação push ao staff dono da ausência (se não for ele a cancelar).
-    if (role !== 'staff' && String(ausencia.utilizador_id) !== String(userId)) {
+    // Notificação push ao fisioterapeuta dono da ausência (se não for ele a cancelar).
+    if (role !== 'fisioterapeuta' && String(ausencia.utilizador_id) !== String(userId)) {
       const { notificarUtilizador } = require('../utils/notificar');
       const dataInicioFmt = new Date(ausencia.data_inicio).toLocaleDateString('pt-PT');
       const dataFimFmt = new Date(ausencia.data_fim).toLocaleDateString('pt-PT');

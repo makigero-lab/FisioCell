@@ -1,7 +1,8 @@
 # Arquitetura — FisioCell (v0.1)
 
 > **Proposta de arquitetura v0.1** para o SaaS FisioCell (Clínicas de Fisioterapia).
-> Este documento acompanha a fase **F0** (rename + remoção Smoobu) e define o
+> Este documento acompanha as fases **F0** (rename + remoção Smoobu) e **F1**
+> (migração de roles + `perfil_profissional` + `config` da empresa) e define o
 > roadmap de migração F0–F9. Os esquemas Mongoose abaixo são **propostas** — a
 > implementação decorre fase a fase.
 
@@ -95,7 +96,7 @@ const isRececionista   = requireRole('admin', 'diretor_clinico', 'rececionista')
 |---------------------------------------|---|----------------------------------|------|
 | `Empresa`                             | → | `Empresa` (Clínica) — adiciona `morada`, `telefone`, `email` | F0 ✅ |
 | `Propriedade`                         | → | `Sala`                           | F3 |
-| `Utilizador` (admin/manager/staff)    | → | `Utilizador` (admin/diretor_clinico/fisioterapeuta/rececionista) | F1 |
+| `Utilizador` (admin/manager/staff)    | → | `Utilizador` (admin/diretor_clinico/fisioterapeuta/rececionista) | F1 ✅ |
 | `Tarefa`                              | → | `Consulta`                       | F4 |
 | `ModeloChecklist`                     | → | `ModeloProtocolo`                | F5 |
 | `TarefaArquivo`                       | → | `ConsultaArquivo`                | F4 |
@@ -114,23 +115,34 @@ const isRececionista   = requireRole('admin', 'diretor_clinico', 'rececionista')
 > modelos atuais (`Propriedade`, `Tarefa`, etc.) continuam em produção até
 > serem migrados.
 
-### 5.1 `Empresa` (Clínica) — ✅ F0 concluído
+### 5.1 `Empresa` (Clínica) — ✅ F0 + F1 concluídos
 
 ```js
 const empresaSchema = new Schema({
   nome:        { type: String, required: true, trim: true, index: true },
   nif:         { type: String, trim: true },
-  morada:      { type: String, trim: true },           // F0
-  telefone:    { type: String, trim: true },           // F0
-  email:       { type: String, trim: true },           // F0
+  morada:      { type: String, trim: true, default: '' },     // F0
+  telefone:    { type: String, trim: true, default: '' },     // F0
+  email:       { type: String, trim: true, default: '' },     // F0
+  logo_url:    { type: String, trim: true, default: '' },     // F1 — URL do logótipo da clínica
   plano_ativo: { type: Boolean, default: true },
-  ativa:       { type: Boolean, default: true },
-  apagada:     { type: Boolean, default: false },
-  config:      { type: Schema.Types.Mixed, default: {} }, // F1: duração padrão consulta, lembretes, etc.
+  ativa:       { type: Boolean, default: true, index: true },
+  apagada:     { type: Boolean, default: false, index: true },
+  // F1 — Configuração operacional da clínica (sub-documento estruturado)
+  config: {
+    horario_padrao: [{
+      dia_semana: { type: Number, min: 0, max: 6, required: true },  // 0=Dom…6=Sáb
+      abertura:   { type: String, default: '09:00' },
+      fecho:      { type: String, default: '19:00' },
+    }],
+    duracao_consulta_padrao: { type: Number, default: 45, min: 15 },
+    tolerancia_atraso_min:    { type: Number, default: 10, min: 0 },
+    fuso_horario:             { type: String, default: 'Europe/Lisbon' },
+  },
 }, { timestamps: true });
 ```
 
-### 5.2 `Utilizador` — F1
+### 5.2 `Utilizador` — ✅ F1 concluído
 
 ```js
 const utilizadorSchema = new Schema({
@@ -138,18 +150,21 @@ const utilizadorSchema = new Schema({
   email:           { type: String, required: true, lowercase: true, trim: true, unique: true, index: true },
   password_hash:   { type: String },  // bcrypt (opcional — utilizador migrado sem password)
   empresa_id:      { type: ObjectId, ref: 'Empresa', required: true, index: true },
-  role:            { type: String, enum: ['admin', 'diretor_clinico', 'fisioterapeuta', 'rececionista'], default: 'fisioterapeuta' },
+  role:            { type: String, enum: ['admin', 'diretor_clinico', 'fisioterapeuta', 'rececionista'], default: 'rececionista', index: true },
+  responsavel_id:  { type: ObjectId, ref: 'Utilizador', default: null, index: true },
   ativo:           { type: Boolean, default: true },
-  eliminado_em:    { type: Date, default: null },  // soft delete
-  telefone:        { type: String, trim: true },
-  dias_folga:      [{ type: Number, min: 0, max:6 }],  // 0=Dom…6=Sáb (legacy, será substituído por HorarioFisioterapeuta em F3)
+  telefone:        { type: String, trim: true, default: '' },
+  dias_folga:      [{ type: Number, min: 0, max: 6 }],  // 0=Dom…6=Sáb (legacy, será substituído por HorarioFisioterapeuta em F3)
+  eliminado_em:    { type: Date, default: null, index: true },  // soft delete
+  pushSubscription: { type: Schema.Types.Mixed, default: null },  // Web Push (VAPID)
   // Perfil profissional (F1) — só para fisioterapeuta/diretor_clinico
   perfil_profissional: {
-    cedula:           { type: String, trim: true },           // nº de cédula profissional (APIF/Ordem)
-    especialidades:   [{ type: String }],                      // ex.: 'Desporto', 'Neurologia', 'Pediatria'
-    cor_calendario:   { type: String, default: '#3b82f6' },   // cor no FullCalendar
+    cedula:           { type: String, trim: true, default: '' },  // nº de cédula da Ordem dos Fisioterapeutas
+    especialidades:   [{ type: String }],                          // ex.: 'Desporto', 'Neurologia', 'Pediatria'
+    biografia:        { type: String, trim: true, default: '' },   // bio curta (futuro portal paciente)
+    cor_calendario:   { type: String, default: '#3b82f6' },        // cor no FullCalendar
+    ativo_clinico:    { type: Boolean, default: true },            // false = impede novas marcações, mantém histórico
   },
-  responsavel_id:  { type: ObjectId, ref: 'Utilizador', default: null, index: true },
 }, { timestamps: true });
 ```
 
@@ -312,7 +327,7 @@ Todos mantêm `timezone: 'Europe/Lisbon'`.
 | Fase | Escopo | Estado |
 |------|--------|--------|
 | **F0** | Rename Autocell→FisioCell + remoção Smoobu + `ARQUITETURA.md` | ✅ Concluído |
-| **F1** | Adaptar `Empresa` (já tem `morada`/`telefone`/`email`) + `Utilizador` (novos roles + `perfil_profissional`) | Pendente |
+| **F1** | Adaptar `Empresa` (já tem `morada`/`telefone`/`email`) + `Utilizador` (novos roles + `perfil_profissional`) | ✅ Concluído |
 | **F2** | Criar `Paciente` + CRUD + permissões (diretor_clinico vê todos; fisio vê só os seus; rececionista vê dados demográficos) | Pendente |
 | **F3** | `Sala` (de `Propriedade`) + `HorarioFisioterapeuta` + motor de disponibilidade (3 camadas) | Pendente |
 | **F4** | `Consulta` (de `Tarefa`) + CRUD de marcação + validação de conflitos (sala + fisio + paciente) | Pendente |

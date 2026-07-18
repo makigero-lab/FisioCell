@@ -76,7 +76,7 @@ async function determinarUtilizadorAtribuido(empresaId, range, coordenadasNovaPr
   // Procurar todos os Staff ativos da empresa.
   const staff = await Utilizador.find({
     empresa_id: empresaId,
-    role: 'staff',
+    role: 'fisioterapeuta',
     ativo: true,
     eliminado_em: null,
   }).lean();

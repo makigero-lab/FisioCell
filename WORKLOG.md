@@ -862,3 +862,119 @@ Stage Summary:
 - **Documentação:** `docs/ARQUITETURA.md` criado com a proposta v0.1 + modelo `Documento` (Q4). README/BACKEND/FRONTEND limpos de Smoobu.
 - **Commit + push:** Esta reexecução garante que o trabalho chega ao remote (a execução anterior não teve commit).
 - **Próximo passo:** F1 (adaptar Empresa + Utilizador com novos roles + perfil profissional).
+
+---
+Task ID: DOC-F1
+Agent: general-purpose
+Task: Atualização de documentação para F1 (migração de roles)
+
+Work Log:
+- Lido `WORKLOG.md` (864 linhas, última entrada F0) e `docs/ARQUITETURA.md` (342 linhas) para contexto.
+- Confirmado estado pós-F1 no código: `backend/middleware/requireRole.js` (isAdmin/isDiretorClinico/isClinico/isRececionista, sem isGestor/requireStaff/requireManager/requireAdmin); `backend/models/Utilizador.js` (enum novo + `perfil_profissional` com cedula/especialidades/biografia/cor_calendario/ativo_clinico, default role 'rececionista'); `backend/models/Empresa.js` (logo_url + bloco config estruturado com horario_padrao/duracao_consulta_padrao/tolerancia_atraso_min/fuso_horario); `backend/utils/loadBalancer.js` (query `role: 'fisioterapeuta'`); `frontend/src/middleware.ts` (Role type + rotaPorRole com rececionista → /gestor); `frontend/src/components/auth/route-guard.tsx` (aceita `Role | Role[]`); `frontend/src/app/gestor/layout.tsx` (`role={["diretor_clinico", "rececionista"]}`); `frontend/src/lib/auth.ts` + `frontend/src/lib/api.ts` (Role type atualizado).
+
+- **docs/BACKEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 2 (Estrutura): adicionado `middleware/requireRole.js` à árvore de diretórios.
+  - Secção 3.1 `Empresa`: adicionado `logo_url` (F1) e bloco `config` (F1) como sub-tabela própria (horario_padrao, duracao_consulta_padrao, tolerancia_atraso_min, fuso_horario); adicionados campos `ativa`/`apagada` que estavam em falta; nota F1 explicativa.
+  - Secção 3.1 `Utilizador`: roles migradas de admin/manager/staff para admin/diretor_clinico/fisioterapeuta/rececionista (com descrições RGPD de cada uma); enum atualizado para `['admin','diretor_clinico','fisioterapeuta','rececionista']` default `'rececionista'`; `responsavel_id` agora referencia admin/diretor_clinico; adicionados campos `telefone`/`dias_folga`/`eliminado_em`/`pushSubscription` que estavam em falta; novo sub-bloco `perfil_profissional` (cedula, especialidades, biografia, cor_calendario, ativo_clinico); nota F1 sobre migração de middleware (isGestor→isDiretorClinico, etc.); novo parágrafo "Middlewares RBAC (F1)" documentando isAdmin/isDiretorClinico/isClinico/isRececionista; regra de segurança atualizada (admin/manager → admin/diretor_clinico).
+  - Secção 3.2 (load balancer): passo 1 "Procurar Staff" → "Procurar Fisioterapeutas" com query `role: 'fisioterapeuta'`.
+  - Secção 6.1 GET /api/admin/equipa: exemplo JSON atualizado (João Fisioterapeuta / joao.fisio@fisiocell.pt / role fisioterapeuta).
+  - Secção 6.1 POST /api/admin/equipa: body exemplo `role: "fisioterapeuta"`; descrição do campo role atualizada (enum + default 'rececionista' no modelo, 'fisioterapeuta' no controller).
+  - Secção 6.1 PUT /api/admin/equipa: body exemplo `role: "diretor_clinico"` (era "manager").
+  - Secção 6.1 setup Cliente Zero: descrição dos 3 utilizadores atualizada (admin/gestor@fisiocell.pt/joao.fisio@fisiocell.pt com roles admin/diretor_clinico/fisioterapeuta); resposta JSON atualizada (nomes "Diretor FisioCell"/"Responsável Clínico"/"João Fisioterapeuta"); nota F1 sobre o email `gestor@fisiocell.pt` ser mantido por compatibilidade; credenciais de teste atualizadas.
+  - Secção 6.2 POST /api/auth/login: body e resposta JSON atualizados (joao.fisio@fisiocell.pt, nome "João Fisioterapeuta", role "fisioterapeuta").
+  - Secção 6.3 GET /api/admin/ausencias: resposta JSON atualizada (João Fisioterapeuta / role fisioterapeuta).
+  - Secção 6.3 POST /api/admin/ausencias: constraints de role atualizadas (fisioterapeuta/diretor_clinico em vez de staff/manager).
+  - Secção 6.3 "Integração com o webhook": corrigida ref legacy (webhookController → utils/loadBalancer.js, staff → fisioterapeutas).
+  - Secção 9 (Histórico): nota F0 expandida para "F0 + F1 — Notas históricas" cobrindo roles antigos e middleware legacy; nova entrada F1 no topo do changelog descrevendo os 5 grupos de alterações (modelo Utilizador, modelo Empresa, middleware/requireRole.js, load balancer + controllers, setupClienteZero).
+
+- **docs/FRONTEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 3 (Rotas): tabela atualizada — adicionada linha `/gestor` (área partilhada diretor_clinico+rececionista via RouteGuard); `/staff` agora descrito como "Área do Fisioterapeuta" com `role fisioterapeuta` (era "role staff").
+  - Secção 11 (`lib/auth.ts`): `rotaPorRole` atualizada (admin → /admin, diretor_clinico/rececionista → /gestor partilhado, fisioterapeuta → /staff); nota F1 sobre o tipo Role.
+  - Secção 11 (`lib/api.ts`): nota F1 sobre o tipo Role = admin/diretor_clinico/fisioterapeuta/rececionista.
+  - Secção 11 `/login`: redirect pós-login atualizado (admin → /admin, diretor_clinico/rececionista → /gestor, fisioterapeuta → /staff).
+  - Secção 11 `/admin/equipa`: "Responsável select populado com admin+diretor_clinico" (era admin+manager); nota F1.
+  - Secção 11 `/admin/calendario`: "filtrado a fisioterapeuta+diretor_clinico" (era staff+manager); nota F1.
+  - Secção 12.1 (`middleware.ts`): exemplo "staff tenta aceder a /admin" → "fisioterapeuta tenta aceder a /admin"; nova nota F1 sobre Role type e rotaPorRole (incl. validação de rota errada que aceita diretor_clinico+rececionista em /gestor/*).
+  - Secção 12.2 (`route-guard.tsx`): nova nota F1 sobre a prop `role` aceitar `Role | Role[]` para áreas partilhadas; menção explícita de `gestor/layout.tsx` com `role={["diretor_clinico", "rececionista"]}` e `staff/layout.tsx` agora com `role="fisioterapeuta"`.
+  - Secção 12.4: `rotaPorRole` atualizada para o mapeamento F1.
+  - Secção 13 (Histórico): nota F0 expandida para "F0 + F1 — Notas históricas" cobrindo roles antigos, área /manager removida, e área /gestor partilhada; nova entrada F1 no topo do changelog descrevendo os 6 grupos de alterações (middleware.ts, lib/auth.ts+api.ts, route-guard.tsx, gestor/layout.tsx, gestor/equipa/page.tsx, admin/page.tsx).
+
+- **docs/ARQUITETURA.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Banner topo: "acompanha a fase F0" → "acompanha as fases F0 e F1".
+  - Secção 4 (Mapa de Migração): linha do `Utilizador` marcada com "F1 ✅" (era "F1").
+  - Secção 5.1 `Empresa`: título "✅ F0 concluído" → "✅ F0 + F1 concluídos"; schema atualizado para refletir a implementação real (logo_url, bloco config estruturado com horario_padrao/duracao_consulta_padrao/tolerancia_atraso_min/fuso_horario, ativa/apagada com index).
+  - Secção 5.2 `Utilizador`: título "F1" → "✅ F1 concluído"; schema atualizado para refletir a implementação real (default role 'rececionista' em vez de 'fisioterapeuta'; perfil_profissional completo com biografia e ativo_clinico; pushSubscription; ordem dos campos alinhada com o modelo real).
+  - Secção 8 (Roadmap): F1 marcado como "✅ Concluído" (era "Pendente").
+
+Stage Summary:
+- **docs/BACKEND.md**: 0 refs ativas a `'staff'`/`'gestor'`/`'manager'`/`isGestor` (3 notas F1 explicativas + 4 entradas de changelog histórico cobertas pela nota F1 no topo da secção 9). Modelo `Utilizador` com 4 roles + `perfil_profissional`; modelo `Empresa` com `logo_url` + bloco `config`; load balancer referencia `role: 'fisioterapeuta'`; setupClienteZero com 3 utilizadores novos; entrada F1 adicionada ao histórico.
+- **docs/FRONTEND.md**: 0 refs ativas a `'staff'`/`'gestor'`/`'manager'`/`isGestor` (2 entradas de changelog histórico cobertas pela nota F1 no topo da secção 13). middleware.ts e route-guard.tsx documentados com a prop `Role | Role[]`; /gestor marcado como área partilhada diretor_clinico+rececionista; /staff marcado como área do fisioterapeuta; entrada F1 adicionada ao histórico.
+- **docs/ARQUITETURA.md**: F1 marcado como ✅ Concluído no roadmap (secção 8) e no mapa de migração (secção 4); schemas de Empresa e Utilizador alinhados com a implementação real; banner topo atualizado.
+- **Validação `rg -c "'staff'|'gestor'|isGestor"`**: BACKEND.md 7 (3 F1 explicativas + 4 histórico) · FRONTEND.md 2 (2 histórico). Objetivo "0 refs ativas" atingido — todas as refs restantes são notas F1 explicativas ou registos históricos de changelog cobertos pela nota F1 no topo das secções 9 (BACKEND) e 13 (FRONTEND).
+- **WORKLOG.md**: esta entrada DOC-F1 adicionada em append.
+
+---
+Task ID: F1
+Agent: Z.ai Code
+Task: Adaptar Empresa + Utilizador para o domínio Fisioterapia — novos roles (admin/diretor_clinico/fisioterapeuta/rececionista), perfil profissional embutido, config da clínica, middleware RBAC atualizado, propagação para load balancer/controllers/routes/testes/frontend.
+
+Work Log:
+
+### F1-A — Modelo Utilizador
+- Enum de roles migrado: `['admin', 'gestor', 'staff']` → `['admin', 'diretor_clinico', 'fisioterapeuta', 'rececionista']` (default `rececionista`, indexado).
+- Adicionado bloco `perfil_profissional`: `cedula` (Ordem dos Fisioterapeutas), `especialidades` (array), `biografia`, `cor_calendario` (default `#3b82f6`), `ativo_clinico` (default true).
+- Cabeçalho reescrito com a nova hierarquia e regra RGPD (admin não vê dados clínicos).
+
+### F1-B — Modelo Empresa
+- Adicionado `logo_url`.
+- Adicionado bloco `config`: `horario_padrao` (array de {dia_semana, abertura, fecho}), `duracao_consulta_padrao` (default 45, min 15), `tolerancia_atraso_min` (default 10), `fuso_horario` (default 'Europe/Lisbon').
+
+### F1-C — Middleware requireRole.js
+- Removidos `isGestor`, `requireStaff`, `requireManager`, `requireAdmin` (legacy).
+- Adicionados: `isAdmin` (só admin), `isDiretorClinico` (admin+diretor_clinico), `isClinico` (admin+diretor_clinico+fisioterapeuta), `isRececionista` (admin+diretor_clinico+rececionista).
+
+### F1-D — Load balancer + controllers (substituições em massa)
+- `role: 'staff'` → `role: 'fisioterapeuta'` (load balancer, gestorController, tarefaController, ausenciaController, caoGuarda).
+- `role: 'gestor'` → `role: 'diretor_clinico'`.
+- `['staff', 'gestor']` → `['fisioterapeuta', 'diretor_clinico']`.
+- `isGestor` → `isDiretorClinico` em todas as routes.
+- `gestorController.criarMembroEquipa` / `atualizarMembroEquipa`: validações de role atualizadas para os 3 novos roles (diretor_clinico, fisioterapeuta, rececionista).
+- `superAdminController.criarUtilizadorEmpresa`: mesma atualização.
+- `superAdminController.impersonarGestor`: query e token geram role 'diretor_clinico'.
+- `staffController.faltaHoje`: notificação push envia para 'diretor_clinico' + 'admin'.
+- `ausenciaController.cancelarAusencia`: condição de role atualizada.
+
+### F1-E — setupClienteZero
+- Roles dos utilizadores de teste: admin → admin, gestor → diretor_clinico, staff → fisioterapeuta.
+- (Já tinha sido renomeado em F0, mas os roles internos precisavam de mudar.)
+
+### F1-F — Testes (integration.test.js)
+- Substituições em massa: `role: 'staff'` → `role: 'fisioterapeuta'`, `role: 'gestor'` → `role: 'diretor_clinico'`.
+- Asserções: `toBe('gestor')` → `toBe('diretor_clinico')`, `toContain('gestor'/'staff')` → `toContain('diretor_clinico'/'fisioterapeuta')`.
+- 1 teste corrigido manualmente (`toHaveProperty('gestor')` mantido — é o nome do campo JSON da API, não o role).
+- **Resultado: 111/111 testes a passar ✓.**
+
+### F1-G — Frontend
+- `middleware.ts`: `Role` type atualizado para os 4 roles; `rotaPorRole` trata rececionista → /gestor; `rotaErrada` permite rececionista em /gestor.
+- `route-guard.tsx`: prop `role` agora aceita `Role | Role[]` (para áreas partilhadas); lógica de redirect atualizada.
+- `gestor/layout.tsx`: `<RouteGuard role={["diretor_clinico", "rececionista"]}>` (área partilhada).
+- `lib/auth.ts`: `Role` type + `rotaPorRole` atualizados (rececionista → /gestor).
+- `lib/api.ts`: `Role` type atualizado.
+- `gestor/equipa/page.tsx`: `ROLE_LABEL` e `ROLE_VARIANT` atualizados (4 roles); options do formulário atualizadas.
+- `admin/page.tsx`: labels de role atualizados (Diretor Clínico, Fisioterapeuta, Rececionista).
+- `propriedades/page.tsx`: filtro de staff → fisioterapeuta.
+- **Validação: tsc ✓, lint ✓, build ✓ (middleware 26.8kB).**
+
+### F1-H — Documentação (Task DOC-F1 por subagent)
+- `docs/BACKEND.md`: tabelas de Empresa (logo_url + config) e Utilizador (perfil_profissional) atualizadas; middleware RBAC documentado; load balancer role atualizada; exemplos JSON atualizados; entrada F1 no histórico.
+- `docs/FRONTEND.md`: rotas, middleware, route-guard, ROLE_LABEL atualizados; entrada F1 no histórico.
+- `docs/ARQUITETURA.md`: F1 marcado como ✅ Concluído no roadmap; schemas alinhados com a implementação real.
+
+Stage Summary:
+- **Roles migrados com sucesso** para o domínio Fisioterapia: admin, diretor_clinico, fisioterapeuta, rececionista. Default `rececionista` (menos privilegiado após admin).
+- **Perfil profissional** embutido no Utilizador (cédula, especialidades, cor do calendário) — prepara o caminho para F3 (horários) e F4 (consultas).
+- **Config da clínica** embutida na Empresa (horário padrão, duração de consulta, fuso) — prepara o motor de disponibilidade de F3.
+- **Middleware RBAC** com 4 atalhos compostos: `isAdmin`, `isDiretorClinico`, `isClinico`, `isRececionista`.
+- **/gestor partilhado** por diretor_clinico + rececionista (a rececionista gere marcações; o backend limita via `isRececionista` o acesso a notas clínicas).
+- **111/111 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
+- **Próximo passo:** F2 (Criar Paciente + CRUD + permissões).

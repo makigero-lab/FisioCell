@@ -93,7 +93,7 @@ exports.getDashboard = async (req, res) => {
       Propriedade.countDocuments({ empresa_id: empresaId, ativo: true }),
       Utilizador.countDocuments({
         empresa_id: empresaId,
-        role: { $in: ['staff', 'gestor'] },
+        role: { $in: ['fisioterapeuta', 'diretor_clinico'] },
         ativo: true,
         eliminado_em: null,
       }),
@@ -572,7 +572,7 @@ exports.getDadosCalendario = async (req, res) => {
       // Busca todos os staff/gestor da empresa com dias_folga configurados.
       const staffComFolgas = await Utilizador.find({
         empresa_id: empresaId,
-        role: { $in: ['staff', 'gestor'] },
+        role: { $in: ['fisioterapeuta', 'diretor_clinico'] },
         eliminado_em: null,
         dias_folga: { $exists: true, $ne: [] },
       })
@@ -913,7 +913,7 @@ exports.atualizarPropriedade = async (req, res) => {
         const staffPref = await Utilizador.findOne({
           _id: valor,
           empresa_id: empresaId,
-          role: 'staff',
+          role: 'fisioterapeuta',
           ativo: true,
           eliminado_em: null,
         }).lean();
@@ -1044,7 +1044,7 @@ exports.getEquipa = async (req, res) => {
  *   - nome      (obrigatório)
  *   - email     (obrigatório, único global)
  *   - password  (obrigatória, em claro — é guardada como hash bcrypt)
- *   - role      (opcional, default 'staff'; enum ['admin','gestor','staff'])
+ *   - role      (opcional, default 'fisioterapeuta'; enum ['admin','diretor_clinico','fisioterapeuta','rececionista'])
  *
  * Resposta 201: { utilizador: { ... } } (sem password_hash).
  * Erros: 400 campos em falta / role inválido; 409 email duplicado; 500 erro.
@@ -1071,10 +1071,11 @@ exports.criarMembroEquipa = async (req, res) => {
     }
 
     // Validação do role (se vier, tem de ser um dos permitidos).
-    const roleFinal = role || 'staff';
-    if (!['admin', 'gestor', 'staff'].includes(roleFinal)) {
+    // F1 — roles migrados: admin, diretor_clinico, fisioterapeuta, rececionista.
+    const roleFinal = role || 'fisioterapeuta';
+    if (!['diretor_clinico', 'fisioterapeuta', 'rececionista'].includes(roleFinal)) {
       return res.status(400).json({
-        erro: 'Role inválido. Valores permitidos: admin, gestor, staff.',
+        erro: 'Role inválido. Valores permitidos: diretor_clinico, fisioterapeuta, rececionista.',
       });
     }
 
@@ -1105,7 +1106,7 @@ exports.criarMembroEquipa = async (req, res) => {
       const resp = await Utilizador.findOne({
         _id: responsavel_id,
         empresa_id: empresaId,
-        role: { $in: ['admin', 'gestor'] },
+        role: { $in: ['admin', 'diretor_clinico'] },
       });
       if (!resp) {
         return res.status(400).json({
@@ -1263,9 +1264,9 @@ exports.atualizarMembroEquipa = async (req, res) => {
 
     // --- Role ---
     if (role !== undefined) {
-      if (!['gestor', 'staff'].includes(role)) {
+      if (!['diretor_clinico', 'fisioterapeuta', 'rececionista'].includes(role)) {
         return res.status(400).json({
-          erro: 'Role inválido. Valores permitidos via edição: gestor, staff.',
+          erro: 'Role inválido. Valores permitidos via edição: diretor_clinico, fisioterapeuta, rececionista.',
         });
       }
       utilizador.role = role;
@@ -1282,7 +1283,7 @@ exports.atualizarMembroEquipa = async (req, res) => {
         const resp = await Utilizador.findOne({
           _id: responsavel_id,
           empresa_id: empresaId,
-          role: { $in: ['admin', 'gestor'] },
+          role: { $in: ['admin', 'diretor_clinico'] },
         });
         if (!resp) {
           return res.status(400).json({
@@ -1869,12 +1870,12 @@ exports.setupClienteZero = async (req, res) => {
       {
         nome: 'Responsável Clínico', // gestor — gere a equipa
         email: 'gestor@fisiocell.pt',
-        role: 'gestor',
+        role: 'diretor_clinico',
       },
       {
         nome: 'João Fisioterapeuta', // staff — executante
         email: 'joao.fisio@fisiocell.pt',
-        role: 'staff',
+        role: 'fisioterapeuta',
       },
     ];
 

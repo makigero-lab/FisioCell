@@ -162,7 +162,7 @@ async function autoAtribuicaoEmergencia() {
           const Utilizador = require('../models/Utilizador');
           const temStaffAtivo = await Utilizador.exists({
             empresa_id: empresaId,
-            role: 'staff',
+            role: 'fisioterapeuta',
             ativo: true,
             eliminado_em: null,
           });

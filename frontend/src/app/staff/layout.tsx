@@ -6,7 +6,7 @@ import { PushNotificationSetup } from "@/components/staff/push-notification-setu
 /**
  * Layout da Área do Staff (mobile-first).
  *
- * Protegido por RouteGuard (role "staff") — camada client-side complementar
+ * Protegido por RouteGuard (role "fisioterapeuta") — camada client-side complementar
  * ao middleware.ts. Sem token válido (ou role errado) → redireciona para /login.
  *
  * v1.66.0 (Prompt 89) — O <PushNotificationSetup /> é renderizado no layout
@@ -22,7 +22,7 @@ export default function StaffLayout({
   children: React.ReactNode;
 }) {
   return (
-    <RouteGuard role="staff">
+    <RouteGuard role="fisioterapeuta">
       <PushNotificationSetup />
       {children}
     </RouteGuard>

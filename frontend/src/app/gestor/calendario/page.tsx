@@ -364,7 +364,7 @@ export default function CalendarioOperacionalPage() {
         // Prompt 105 — Só staff pode receber limpezas.
         // Prompt 114 — Só staff ATIVO (não inativos/desativados).
         (equipaRes.utilizadores ?? []).filter(
-          (u) => u.role === "staff" && u.ativo === true
+          (u) => u.role === "fisioterapeuta" && u.ativo === true
         )
       );
     } catch (e) {

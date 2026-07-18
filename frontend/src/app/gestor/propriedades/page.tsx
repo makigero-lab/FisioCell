@@ -337,7 +337,7 @@ export default function PropriedadesPage() {
         // Só interessa staff ativo (o backend valida isto ao gravar).
         setStaffList(
           (data.utilizadores ?? []).filter(
-            (u) => u.role === "staff" && u.ativo
+            (u) => u.role === "fisioterapeuta" && u.ativo
           )
         );
       } catch {

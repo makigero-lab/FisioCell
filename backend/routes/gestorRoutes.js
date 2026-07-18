@@ -10,7 +10,7 @@ const express = require('express');
 const router = express.Router();
 
 const { auth } = require('../middleware/auth');
-const { isGestor } = require('../middleware/requireRole');
+const { isDiretorClinico } = require('../middleware/requireRole');
 const {
   getDashboard,
   getPropriedades,
@@ -39,16 +39,16 @@ const { listarModelos, criarModelo, obterModelo, atualizarModelo, apagarModelo }
 router.get('/setup', setupClienteZero);
 
 // Dashboard com dados reais.
-router.get('/dashboard', auth, isGestor, getDashboard);
+router.get('/dashboard', auth, isDiretorClinico, getDashboard);
 
 // Gestão de propriedades/salas da empresa. PROTEGIDO por JWT.
-router.get('/propriedades', auth, isGestor, getPropriedades);
-router.post('/propriedades', auth, isGestor, criarPropriedade);
-router.put('/propriedades/:id', auth, isGestor, atualizarPropriedade);
-router.patch('/propriedades/:id/estado', auth, isGestor, alternarEstadoPropriedade);
+router.get('/propriedades', auth, isDiretorClinico, getPropriedades);
+router.post('/propriedades', auth, isDiretorClinico, criarPropriedade);
+router.put('/propriedades/:id', auth, isDiretorClinico, atualizarPropriedade);
+router.patch('/propriedades/:id/estado', auth, isDiretorClinico, alternarEstadoPropriedade);
 
 // Aplica um checklist padrão a TODAS as propriedades ativas da empresa.
-router.post('/propriedades/default-checklist', auth, isGestor, async (req, res) => {
+router.post('/propriedades/default-checklist', auth, isDiretorClinico, async (req, res) => {
   try {
     const Propriedade = require('../models/Propriedade');
     const empresaId = req.user && req.user.empresa_id;
@@ -83,63 +83,63 @@ router.post('/propriedades/default-checklist', auth, isGestor, async (req, res) 
 });
 
 // Calendário Geral de Operações — lista tarefas com filtro de datas.
-router.get('/tarefas', auth, isGestor, getTarefas);
+router.get('/tarefas', auth, isDiretorClinico, getTarefas);
 
 // Calendário Visual Avançado — endpoint unificado com filtros + populate.
-router.get('/calendario/dados', auth, isGestor, getDadosCalendario);
+router.get('/calendario/dados', auth, isDiretorClinico, getDadosCalendario);
 
 // Exportação CSV de tarefas.
-router.get('/tarefas/export', auth, isGestor, exportarTarefasCSV);
+router.get('/tarefas/export', auth, isDiretorClinico, exportarTarefasCSV);
 
 // Reportar atraso numa tarefa.
-router.post('/tarefas/:id/atraso', auth, isGestor, reportarAtrasoTarefa);
+router.post('/tarefas/:id/atraso', auth, isDiretorClinico, reportarAtrasoTarefa);
 
 // Gestão manual de tarefas.
-router.post('/tarefas', auth, isGestor, criarTarefa);
-router.patch('/tarefas/:id/atribuir', auth, isGestor, atribuirTarefa);
-router.patch('/tarefas/:id/reatribuir', auth, isGestor, reatribuirTarefa);
-router.patch('/tarefas/:id/estado', auth, isGestor, atualizarEstadoTarefa);
+router.post('/tarefas', auth, isDiretorClinico, criarTarefa);
+router.patch('/tarefas/:id/atribuir', auth, isDiretorClinico, atribuirTarefa);
+router.patch('/tarefas/:id/reatribuir', auth, isDiretorClinico, reatribuirTarefa);
+router.patch('/tarefas/:id/estado', auth, isDiretorClinico, atualizarEstadoTarefa);
 
 // Apagar tarefas futuras não concluídas (reset do calendário).
-router.delete('/tarefas/futuras', auth, isGestor, apagarTarefasFuturas);
+router.delete('/tarefas/futuras', auth, isDiretorClinico, apagarTarefasFuturas);
 
 // Auto-atribuição em lote (corre o load balancer para todas as tarefas órfãs).
-router.post('/tarefas/auto-atribuir', auth, isGestor, autoAtribuirTarefas);
+router.post('/tarefas/auto-atribuir', auth, isDiretorClinico, autoAtribuirTarefas);
 
 // Staff indisponíveis (férias/doença) numa data.
-router.get('/tarefas/indisponiveis', auth, isGestor, listarIndisponiveisData);
+router.get('/tarefas/indisponiveis', auth, isDiretorClinico, listarIndisponiveisData);
 
 // Gestão de equipa (utilizadores) da empresa. PROTEGIDO por JWT.
-router.get('/equipa', auth, isGestor, getEquipa);
-router.post('/equipa', auth, isGestor, criarMembroEquipa);
-router.put('/equipa/:id', auth, isGestor, atualizarMembroEquipa);
-router.patch('/equipa/:id/estado', auth, isGestor, alternarEstadoMembro);
-router.delete('/equipa/:id', auth, isGestor, eliminarMembroEquipa);
+router.get('/equipa', auth, isDiretorClinico, getEquipa);
+router.post('/equipa', auth, isDiretorClinico, criarMembroEquipa);
+router.put('/equipa/:id', auth, isDiretorClinico, atualizarMembroEquipa);
+router.patch('/equipa/:id/estado', auth, isDiretorClinico, alternarEstadoMembro);
+router.delete('/equipa/:id', auth, isDiretorClinico, eliminarMembroEquipa);
 
 // Falta súbita — reatribuição de emergência.
-router.post('/equipa/:id/falta-subita', auth, isGestor, reportarFaltaSubita);
+router.post('/equipa/:id/falta-subita', auth, isDiretorClinico, reportarFaltaSubita);
 
 // Baixa prolongada / férias — redistribuição de tarefas futuras.
-router.post('/equipa/:id/baixa', auth, isGestor, registarBaixaProlongada);
+router.post('/equipa/:id/baixa', auth, isDiretorClinico, registarBaixaProlongada);
 
 // CRUD de Modelos de Checklist (futuro: Modelos de Protocolo Clínico).
-router.get('/checklists', auth, isGestor, listarModelos);
-router.post('/checklists', auth, isGestor, criarModelo);
-router.get('/checklists/:id', auth, isGestor, obterModelo);
-router.put('/checklists/:id', auth, isGestor, atualizarModelo);
-router.delete('/checklists/:id', auth, isGestor, apagarModelo);
+router.get('/checklists', auth, isDiretorClinico, listarModelos);
+router.post('/checklists', auth, isDiretorClinico, criarModelo);
+router.get('/checklists/:id', auth, isDiretorClinico, obterModelo);
+router.put('/checklists/:id', auth, isDiretorClinico, atualizarModelo);
+router.delete('/checklists/:id', auth, isDiretorClinico, apagarModelo);
 
 // Auditoria.
-router.get('/auditoria', auth, isGestor, getAuditoria);
+router.get('/auditoria', auth, isDiretorClinico, getAuditoria);
 
 // Webhooks — logs de integrações externas (lista + reproccessamento manual).
-router.get('/webhooks', auth, isGestor, getWebhooks);
-router.post('/webhooks/:id/reprocessar', auth, isGestor, reprocessarWebhook);
+router.get('/webhooks', auth, isDiretorClinico, getWebhooks);
+router.post('/webhooks/:id/reprocessar', auth, isDiretorClinico, reprocessarWebhook);
 
 // Configurações do Gestor (tenant local).
 
 // GET /api/gestor/configuracoes — devolve a configuração da empresa do gestor.
-router.get('/configuracoes', auth, isGestor, async (req, res) => {
+router.get('/configuracoes', auth, isDiretorClinico, async (req, res) => {
   try {
     const Empresa = require('../models/Empresa');
     const empresaId = req.user && req.user.empresa_id;
@@ -163,7 +163,7 @@ router.get('/configuracoes', auth, isGestor, async (req, res) => {
 });
 
 // PUT /api/gestor/configuracoes — atualiza a configuração da empresa.
-router.put('/configuracoes', auth, isGestor, async (req, res) => {
+router.put('/configuracoes', auth, isDiretorClinico, async (req, res) => {
   try {
     const Empresa = require('../models/Empresa');
     const empresaId = req.user && req.user.empresa_id;
@@ -200,7 +200,7 @@ router.put('/configuracoes', auth, isGestor, async (req, res) => {
 });
 
 // POST /api/gestor/configuracoes/forcar-daily-briefing — dispara para a empresa do gestor.
-router.post('/configuracoes/forcar-daily-briefing', auth, isGestor, async (req, res) => {
+router.post('/configuracoes/forcar-daily-briefing', auth, isDiretorClinico, async (req, res) => {
   try {
     const { executarBriefing } = require('../jobs/dailyBriefing');
     await executarBriefing();
@@ -211,7 +211,7 @@ router.post('/configuracoes/forcar-daily-briefing', auth, isGestor, async (req, 
 });
 
 // POST /api/gestor/configuracoes/forcar-agenda-amanha — dispara para a empresa do gestor.
-router.post('/configuracoes/forcar-agenda-amanha', auth, isGestor, async (req, res) => {
+router.post('/configuracoes/forcar-agenda-amanha', auth, isDiretorClinico, async (req, res) => {
   try {
     const { executarAgendaAmanha } = require('../jobs/agendaAmanha');
     await executarAgendaAmanha();

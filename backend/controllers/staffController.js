@@ -355,17 +355,17 @@ exports.faltaHoje = async (req, res) => {
       justificacao: justificacao ? String(justificacao).trim() : '',
     });
 
-    // Notifica todos os gestores da empresa via push (fire-and-forget).
+    // Notifica todos os diretores clínicos da empresa via push (fire-and-forget).
     // Inclui o admin (role 'admin') como gestor de topo.
     try {
       const staffNome = await Utilizador.findById(utilizadorId)
         .select('nome')
         .lean();
-      const nomeStaff = staffNome?.nome ?? 'Funcionário';
+      const nomeStaff = staffNome?.nome ?? 'Fisioterapeuta';
 
       const gestores = await Utilizador.find({
         empresa_id: empresaId,
-        role: { $in: ['gestor', 'admin'] },
+        role: { $in: ['diretor_clinico', 'admin'] },
         ativo: true,
         eliminado_em: null,
         pushSubscription: { $ne: null },
@@ -591,7 +591,7 @@ exports.reportarAvaria = async (req, res) => {
         Propriedade.findById(tarefa.propriedade_id).select('nome').lean(),
         Utilizador.find({
           empresa_id: tarefa.empresa_id,
-          role: 'gestor',
+          role: 'diretor_clinico',
           ativo: true,
           eliminado_em: null,
         })

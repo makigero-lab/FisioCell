@@ -24,7 +24,7 @@ import type { NextRequest } from "next/server";
 
 const TOKEN_COOKIE = "fisiocell_token";
 
-type Role = "admin" | "gestor" | "staff";
+type Role = "admin" | "diretor_clinico" | "fisioterapeuta" | "rececionista";
 
 interface JwtPayload {
   id?: string;
@@ -55,8 +55,9 @@ function descodificarToken(token: string): JwtPayload | null {
 
 function rotaPorRole(role: Role): string {
   if (role === "admin") return "/admin";
-  if (role === "gestor") return "/gestor";
-  return "/staff";
+  if (role === "diretor_clinico") return "/gestor";
+  if (role === "rececionista") return "/gestor"; // F1 — rececionista partilha o painel /gestor (com permissões limitadas via isRececionista no backend)
+  return "/staff"; // fisioterapeuta
 }
 
 export function middleware(req: NextRequest) {
@@ -85,10 +86,12 @@ export function middleware(req: NextRequest) {
 
     const role = payload!.role!;
     const rotaEsperada = rotaPorRole(role);
+    // F1 — /gestor é partilhado por diretor_clinico e rececionista.
+    // /staff é só para fisioterapeuta. /admin é só para admin.
     const rotaErrada =
       (isAdmin && role !== "admin") ||
-      (isGestor && role !== "gestor") ||
-      (isStaff && role !== "staff");
+      (isGestor && role !== "diretor_clinico" && role !== "rececionista") ||
+      (isStaff && role !== "fisioterapeuta");
     if (rotaErrada) {
       const url = req.nextUrl.clone();
       url.pathname = rotaEsperada;

@@ -39,7 +39,8 @@ backend/
 │   ├── checklistController.js # Modelos de checklist
 │   └── notificacaoController.js # Notificações in-app
 ├── middleware/
-│   └── auth.js               # Verifica JWT (strito), injeta req.user — sem fallback legacy
+│   ├── auth.js               # Verifica JWT (strito), injeta req.user — sem fallback legacy
+│   └── requireRole.js        # Middlewares RBAC: isAdmin, isDiretorClinico, isClinico, isRececionista (F1)
 ├── models/                   # Modelos Mongoose (ODM do MongoDB)
 │   ├── Empresa.js            #   Entidade principal (multi-tenant)
 │   ├── Propriedade.js        #   Alojamento (será migrado para Sala em F3)
@@ -93,6 +94,7 @@ O sistema gira em torno de 5 coleções. Todas usam `timestamps: true` (createdA
 Entidade principal do SaaS (multi-tenant). Cada empresa agrupa Propriedades e Utilizadores.
 
 > **F0:** Os campos `morada`, `telefone`, `email` foram adicionados (substituem o antigo `smoobu_api_key`).
+> **F1:** Adicionado `logo_url` (URL do logótipo da clínica) e o bloco `config` (horário padrão, duração de consulta, tolerância de atraso, fuso horário).
 
 | Campo         | Tipo    | Notas                                              |
 |---------------|---------|----------------------------------------------------|
@@ -101,7 +103,21 @@ Entidade principal do SaaS (multi-tenant). Cada empresa agrupa Propriedades e Ut
 | `morada`      | String  | Opcional, trim. Morada da clínica (F0).            |
 | `telefone`    | String  | Opcional, trim. Telefone da clínica (F0).          |
 | `email`       | String  | Opcional, trim. Email de contacto da clínica (F0). |
+| `logo_url`    | String  | Opcional, trim. URL do logótipo da clínica (F1). Default `''`. |
 | `plano_ativo` | Boolean | Default `true`.                                    |
+| `ativa`       | Boolean | Default `true`, indexado. Empresa suspensa (`ativa: false`) bloqueia login (Prompt 116). |
+| `apagada`     | Boolean | Default `false`, indexado. Soft delete (Lixeira) — restaurável (Prompt 122). |
+
+#### `config` (sub-documento) — F1
+
+Configuração operacional da clínica. Default: objeto vazio `{}`.
+
+| Campo                      | Tipo     | Notas                                                              |
+|----------------------------|----------|--------------------------------------------------------------------|
+| `horario_padrao`           | [Object] | Default `[]`. Array de `{ dia_semana: 0-6, abertura: 'HH:mm', fecho: 'HH:mm' }` (0=Dom…6=Sáb). Regra semanal recorrente de funcionamento. |
+| `duracao_consulta_padrao`  | Number   | Default `45`, `min: 15`. Duração padrão de uma consulta em minutos. |
+| `tolerancia_atraso_min`    | Number   | Default `10`, `min: 0`. Tolerância de atraso do paciente em minutos (antes de marcar como "atrasado"). |
+| `fuso_horario`             | String   | Default `'Europe/Lisbon'`. Fuso horário da clínica (calendário + lembretes). |
 
 ### `Propriedade`
 Representa um alojamento. **F0:** o campo `smoobu_id` foi removido. Será migrado para `Sala` em F3.
@@ -119,12 +135,15 @@ Representa um alojamento. **F0:** o campo `smoobu_id` foi removido. Será migrad
 | `funcionario_preferencial_id`| ObjectId | `ref: 'Utilizador'`, default `null`, indexado. **Prompt 92 (Fase 1.5)** — staff preferencial da propriedade. |
 
 ### `Utilizador`
-Admin, Manager ou Staff de uma empresa. Credenciais de login (email + password_hash).
+Admin, Diretor Clínico, Fisioterapeuta ou Rececionista de uma empresa (clínica). Credenciais de login (email + password_hash).
 
-**Roles (hierarquia):**
-- `admin` — dono da conta (gestão total: empresas, planos, utilizadores).
-- `manager` — responsável de limpezas (gere equipa de staff, vê dashboard alargado, pode executar limpezas).
-- `staff` — executante de limpezas (vê apenas as suas tarefas no mobile).
+**Roles (hierarquia) — F1:**
+- `admin` — Super Admin da plataforma (cross-tenant). Gere empresas, planos, sistema. **NÃO vê dados clínicos** por RGPD.
+- `diretor_clinico` — acesso TOTAL à clínica: pacientes, consultas, equipa, relatórios. Pode atender pacientes (é um fisioterapeuta com poderes de gestão).
+- `fisioterapeuta` — vê SÓ os seus pacientes e consultas. Regista notas SOAP. Não vê dados de outros fisioterapeutas.
+- `rececionista` — gere marcações de TODOS os fisioterapeutas. **NÃO vê notas clínicas/SOAP** — princípio RGPD need-to-know.
+
+> **F1:** O enum foi migrado de `['admin','manager','staff']` para `['admin','diretor_clinico','fisioterapeuta','rececionista']`. O middleware legacy `isGestor`/`requireStaff`/`requireManager`/`requireAdmin` foi substituído por `isAdmin`/`isDiretorClinico`/`isClinico`/`isRececionista` em `middleware/requireRole.js`.
 
 | Campo            | Tipo     | Notas                                                              |
 |------------------|----------|--------------------------------------------------------------------|
@@ -132,11 +151,33 @@ Admin, Manager ou Staff de uma empresa. Credenciais de login (email + password_h
 | `email`          | String   | Obrigatório, lowercase, trim, **único** (indexado). Credencial de login. |
 | `password_hash`  | String   | Hash bcrypt da password (nunca a password em claro). Opcional (utilizador migrado sem password → login recusa). |
 | `empresa_id`     | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
-| `role`           | String   | `enum: ['admin','manager','staff']`, default `'staff'`.           |
-| `responsavel_id` | ObjectId | `ref: 'Utilizador'`, default `null`. Superior hierárquico (admin/manager). O admin não tem responsavel_id (topo da hierarquia). Indexado. |
+| `role`           | String   | `enum: ['admin','diretor_clinico','fisioterapeuta','rececionista']`, default `'rececionista'`. Indexado. |
+| `responsavel_id` | ObjectId | `ref: 'Utilizador'`, default `null`. Superior hierárquico (admin/diretor_clinico). O admin não tem responsavel_id (topo da hierarquia). Indexado. |
+| `telefone`       | String   | Opcional, trim. Telemóvel para notificações (formato internacional). |
+| `dias_folga`     | [Number] | Default `[]`. Folgas fixas semanais (0=Dom…6=Sáb). O load balancer exclui automaticamente o fisioterapeuta cujo dia da semana está neste array. |
 | `ativo`          | Boolean  | Default `true`. Utilizador inativo é ignorado pelo login.         |
+| `eliminado_em`   | Date     | Default `null`, indexado. Soft delete (preserva integridade referencial de consultas/notas históricas). |
+| `pushSubscription` | Mixed  | Default `null`. Subscrição Web Push (VAPID) gerada pelo browser. |
 
-> **Regras de segurança (v1.7.0):** não é possível criar/editar utilizadores com role `admin` via `/api/admin/equipa` (403). Não é possível editar/eliminar/desativar utilizadores que já sejam `admin` (403 "Não é possível modificar um administrador"). O `responsavel_id` tem de ser um admin/manager da mesma empresa (validado no backend).
+#### `perfil_profissional` (sub-documento) — F1
+
+Só faz sentido para `fisioterapeuta`/`diretor_clinico` (para `admin`/`rececionista` fica vazio).
+
+| Campo            | Tipo     | Notas                                                              |
+|------------------|----------|--------------------------------------------------------------------|
+| `cedula`         | String   | Nº de cédula da Ordem dos Fisioterapeutas. Default `''`.            |
+| `especialidades` | [String] | Default `[]`. Ex.: `'Desporto'`, `'Neurologia'`, `'Pediatria'`.     |
+| `biografia`      | String   | Default `''`. Bio curta para mostrar no perfil público (futuro portal paciente). |
+| `cor_calendario` | String   | Default `'#3b82f6'`. Cor (hex) do fisioterapeuta no FullCalendar.   |
+| `ativo_clinico`  | Boolean  | Default `true`. `false` = inativo clinicamente (impede novas marcações) mas mantém o histórico. |
+
+> **Regras de segurança (v1.7.0):** não é possível criar/editar utilizadores com role `admin` via `/api/admin/equipa` (403). Não é possível editar/eliminar/desativar utilizadores que já sejam `admin` (403 "Não é possível modificar um administrador"). O `responsavel_id` tem de ser um admin/diretor_clinico da mesma empresa (validado no backend).
+>
+> **Middlewares RBAC (F1):** definidos em `middleware/requireRole.js`:
+> - `isAdmin` — só `admin` (ações sensíveis: criar admins, setup, gestão cross-tenant).
+> - `isDiretorClinico` — `admin` + `diretor_clinico` (gestão operacional da clínica: propriedades/salas, equipa, ausências, consultas).
+> - `isClinico` — `admin` + `diretor_clinico` + `fisioterapeuta` (ações clínicas: ver ficha de paciente, registar SOAP).
+> - `isRececionista` — `admin` + `diretor_clinico` + `rececionista` (marcações, gestão admin de pacientes).
 
 ### `Ausencia`
 Indisponibilidade (férias/folga) de um Staff num intervalo de datas. Todas as datas são **normalizadas para meia-noite UTC**.
@@ -186,7 +227,7 @@ Tarefa de limpeza. **F0:** o campo `smoobu_reserva_id` foi removido. Será migra
 
 O motor de atribuição (`utils/loadBalancer.js`) implementa o seguinte fluxo **estrito** quando precisa de escolher um utilizador para uma tarefa/consulta:
 
-1. **Procurar Staff** — lista todos os `Utilizador` elegíveis (`ativo: true`, `eliminado_em: null`) da empresa (v1.45.0: gestores já não recebem tarefas de limpeza).
+1. **Procurar Fisioterapeutas** — lista todos os `Utilizador` elegíveis (`ativo: true`, `eliminado_em: null`) com `role: 'fisioterapeuta'` da empresa (F1: a role `staff` foi renomeada para `fisioterapeuta`; antes de v1.45.0 os gestores já não recebiam tarefas de limpeza).
 2. **Filtro de Ausências + Folgas** — exclui os Staff que tenham uma `Ausencia` **aprovada** que cubra o dia (`data_inicio <= dia AND data_fim >= dia`) e os Staff cujo dia da semana esteja no seu `dias_folga` (folgas fixas semanais).
 3. **Algoritmo VIP — Funcionário Preferencial (Prompt 93 / Fase 1.5)** — *antes* do load balancer geral, verifica se a propriedade tem `funcionario_preferencial_id`. Se tiver, e esse funcionário estiver **disponível** (passou os filtros de ausência + folga) e **dentro do SLA de 8h/dia** (`cargaLimpeza + tempoNovaTarefa ≤ CAPACIDADE_MAXIMA_MINUTOS` = 480 min), a tarefa é-lhe atribuída **obrigatoriamente**, ignorando o cálculo de distância/carga dos outros. Só se o preferencial não puder (folga/ausência/inativo ou excede o SLA) é que o sistema faz **fallback** para o load balancer geral.
 4. **Cálculo de Carga + Tempo de Viagem (Load Balancing geral)** — para cada Staff disponível, soma `tempo_limpeza_minutos` das tarefas já atribuídas nesse dia (excluindo `cancelada`/`concluida`) + tempo de viagem (Haversine entre a última tarefa do dia e a nova propriedade) + tempo da nova tarefa. Se a `carga_total > 480 min` (SLA de 8h), o utilizador é excluído (v1.15.0).
@@ -340,7 +381,7 @@ Lista todos os utilizadores da empresa (qualquer role), ordenados por `nome`.
 ```json
 {
   "utilizadores": [
-    { "_id": "...", "nome": "João Limpezas", "email": "joao.limpezas@fisiocell.pt", "empresa_id": "...", "role": "staff", "ativo": true, "createdAt": "...", "updatedAt": "..." }
+    { "_id": "...", "nome": "João Fisioterapeuta", "email": "joao.fisio@fisiocell.pt", "empresa_id": "...", "role": "fisioterapeuta", "ativo": true, "createdAt": "...", "updatedAt": "..." }
   ]
 }
 ```
@@ -357,13 +398,13 @@ Cria um novo membro de equipa (Utilizador) para a empresa.
   "nome": "Maria Ferreira",
   "email": "maria.ferreira@fisiocell.pt",
   "password": "segredo123",
-  "role": "staff"
+  "role": "fisioterapeuta"
 }
 ```
   - `nome` (obrigatório).
   - `email` (obrigatório, único global, normalizado para lowercase).
   - `password` (obrigatória, mín. 6 caracteres — guardada como hash bcrypt, nunca em claro).
-  - `role` (opcional, default `'staff'`; enum `['admin','manager','staff']`).
+  - `role` (opcional, default `'rececionista'` no modelo; o controller `/api/admin/equipa` usa `'fisioterapeuta'` quando omitido; enum `['admin','diretor_clinico','fisioterapeuta','rececionista']`).
 - **Resposta (201 Created):** `{ "utilizador": { ... } }` (sem `password_hash`).
 - **Erros:** `400` campos em falta / password < 6 / role inválido; `401` não autenticado; `409` email duplicado; `500` erro interno.
 
@@ -373,7 +414,7 @@ Atualiza Nome, Email e/ou Role de um utilizador, e opcionalmente a password.
 - **Auth:** JWT (strito, sem fallback legacy). **Protegido.**
 - **Body (todos opcionais, mas pelo menos um):**
 ```json
-{ "nome": "Maria Ferreira", "email": "maria@x.pt", "role": "manager", "password": "novapass123" }
+{ "nome": "Maria Ferreira", "email": "maria@x.pt", "role": "diretor_clinico", "password": "novapass123" }
 ```
   - `password`: se vier, é guardada como **nova hash bcrypt** (mín. 6 chars). Se não vier, a atual é mantida.
 - **Regras de segurança:**
@@ -407,10 +448,12 @@ Remove permanentemente o utilizador da base de dados.
 
 - 1 **Empresa** «Clínica FisioCell Teste» (procura por `nome`).
 - 3 **Utilizadores** (procura por `email` único), cada um com `password_hash` bcrypt:
-  - `admin@fisiocell.pt` (admin — dono da conta)
-  - `manager@fisiocell.pt` (manager — responsável de limpezas)
-  - `joao.limpezas@fisiocell.pt` (staff — executante de limpezas)
+  - `admin@fisiocell.pt` (admin — Super Admin da plataforma)
+  - `gestor@fisiocell.pt` (diretor_clinico — acesso total à clínica)
+  - `joao.fisio@fisiocell.pt` (fisioterapeuta — vê só os seus pacientes/consultas)
 - 1 **Propriedade** «Casa Teste».
+
+> **F1:** O `setupClienteZero` foi atualizado para os novos roles (`admin`/`diretor_clinico`/`fisioterapeuta`). O email `gestor@fisiocell.pt` é mantido por compatibilidade (a string do email não muda; só a role).
 
 - **Resposta (200 OK):**
 ```json
@@ -419,16 +462,16 @@ Remove permanentemente o utilizador da base de dados.
   "empresa_id": "<ObjectId>",
   "empresa":  { "id": "...", "nome": "Clínica FisioCell Teste", "plano_ativo": true, "criada": true },
   "utilizadores": [
-    { "id": "...", "nome": "Gestor FisioCell", "email": "admin@fisiocell.pt", "role": "admin", "criado": true, "password_definida": true, "credenciais_teste": { "email": "admin@fisiocell.pt", "password": "fisiocell123" } },
-    { "id": "...", "nome": "Responsável Limpezas", "email": "manager@fisiocell.pt", "role": "manager", "criado": true, "password_definida": true, "credenciais_teste": { "email": "manager@fisiocell.pt", "password": "fisiocell123" } },
-    { "id": "...", "nome": "João Limpezas", "email": "joao.limpezas@fisiocell.pt", "role": "staff", "criado": true, "password_definida": true, "credenciais_teste": { "email": "joao.limpezas@fisiocell.pt", "password": "fisiocell123" } }
+    { "id": "...", "nome": "Diretor FisioCell", "email": "admin@fisiocell.pt", "role": "admin", "criado": true, "password_definida": true, "credenciais_teste": { "email": "admin@fisiocell.pt", "password": "fisiocell123" } },
+    { "id": "...", "nome": "Responsável Clínico", "email": "gestor@fisiocell.pt", "role": "diretor_clinico", "criado": true, "password_definida": true, "credenciais_teste": { "email": "gestor@fisiocell.pt", "password": "fisiocell123" } },
+    { "id": "...", "nome": "João Fisioterapeuta", "email": "joao.fisio@fisiocell.pt", "role": "fisioterapeuta", "criado": true, "password_definida": true, "credenciais_teste": { "email": "joao.fisio@fisiocell.pt", "password": "fisiocell123" } }
   ],
   "propriedade": { "id": "...", "nome": "Casa Teste", "criada": true }
 }
 ```
 - Se já existir tudo, devolve `mensagem: "Cliente Zero já existia (nada foi alterado)."` com `criada/criado: false`.
 - **Retrocompatibilidade:** se um utilizador já existir sem `password_hash` (criado antes do auth), o setup define-lhe a password e garante o role correto.
-- **Credenciais de teste (3 contas):** `admin@fisiocell.pt`, `manager@fisiocell.pt`, `joao.limpezas@fisiocell.pt` — todas com password `fisiocell123` (remover em produção).
+- **Credenciais de teste (3 contas):** `admin@fisiocell.pt` (admin), `gestor@fisiocell.pt` (diretor_clinico), `joao.fisio@fisiocell.pt` (fisioterapeuta) — todas com password `fisiocell123` (remover em produção).
 
 ### 6.2. Autenticação (`/api/auth`)
 
@@ -437,7 +480,7 @@ Login com email + password. Valida a hash bcrypt e devolve um JWT.
 
 - **Body:**
 ```json
-{ "email": "joao.limpezas@fisiocell.pt", "password": "fisiocell123" }
+{ "email": "joao.fisio@fisiocell.pt", "password": "fisiocell123" }
 ```
 - **Resposta (200 OK):**
 ```json
@@ -445,9 +488,9 @@ Login com email + password. Valida a hash bcrypt e devolve um JWT.
   "token": "<jwt>",
   "utilizador": {
     "id": "...",
-    "nome": "João Limpezas",
-    "email": "joao.limpezas@fisiocell.pt",
-    "role": "staff",
+    "nome": "João Fisioterapeuta",
+    "email": "joao.fisio@fisiocell.pt",
+    "role": "fisioterapeuta",
     "empresa_id": "..."
   }
 }
@@ -478,7 +521,7 @@ Lista as ausências da empresa, com o utilizador populado.
     {
       "_id": "...",
       "utilizador_id": "...",
-      "utilizador": { "_id": "...", "nome": "João Limpezas", "email": "...", "role": "staff" },
+      "utilizador": { "_id": "...", "nome": "João Fisioterapeuta", "email": "...", "role": "fisioterapeuta" },
       "empresa_id": "...",
       "data_inicio": "2024-07-15T00:00:00.000Z",
       "data_fim": "2024-07-20T00:00:00.000Z",
@@ -502,12 +545,12 @@ Regista uma nova ausência (folga ou férias).
   "notas": "férias pagas"
 }
 ```
-  - `utilizador_id` (obrigatório) — tem de ser staff/manager da empresa (não admin).
+  - `utilizador_id` (obrigatório) — tem de ser fisioterapeuta/diretor_clinico da empresa (não admin).
   - `data_inicio` / `data_fim` (obrigatórias) — `data_fim >= data_inicio`.
   - `tipo` (opcional, default `'folga'`) — `enum: ['ferias','folga']`.
   - `notas` (opcional).
 - **Validações:**
-  - Utilizador existe e pertence à empresa com role staff/manager.
+  - Utilizador existe e pertence à empresa com role fisioterapeuta/diretor_clinico.
   - **Sem sobreposição** com outra ausência do mesmo utilizador (409 se houver).
 - **Resposta (201 Created):** `{ "ausencia": { ... } }` (com utilizador populado).
 - **Erros:** `400` campos em falta / datas inválidas / utilizador não encontrado; `409` sobreposição; `500` erro.
@@ -519,7 +562,7 @@ Elimina uma ausência.
 - **Resposta (200 OK):** `{ "mensagem": "Ausência eliminada com sucesso.", "ausencia_id": "..." }`.
 - **Erros:** `400` ID inválido; `404` não encontrada; `500` erro.
 
-> **Integração com o webhook:** as ausências registadas aqui são consultadas automaticamente pelo `webhookController` (passo 4 do fluxo de atribuição) para excluir staff indisponível da atribuição automática de tarefas.
+> **Integração com o motor de atribuição (load balancer):** as ausências registadas aqui são consultadas automaticamente pelo `utils/loadBalancer.js` (passo 2 do fluxo de atribuição) para excluir fisioterapeutas indisponíveis da atribuição automática de tarefas.
 
 ---
 
@@ -670,10 +713,14 @@ As ações diretas do admin (falta súbita, baixa prolongada, registo manual) cr
 
 ## 9. Histórico de alterações (backend)
 
-> ⚠️ **F0 — Nota histórica:** As entradas abaixo anteriores a F0 descrevem a era Alojamento Local. Referências a Smoobu/webhooks/sincronização correspondem a funcionalidade **removida em F0**. O histórico completo (incluindo commits Smoobu) está preservado no `git log`.
+> ⚠️ **F0 + F1 — Notas históricas:**
+> - **F0:** As entradas abaixo anteriores a F0 descrevem a era Alojamento Local. Referências a Smoobu/webhooks/sincronização correspondem a funcionalidade **removida em F0**.
+> - **F1:** As entradas entre F0 e F1 referem-se aos roles antigos `admin`/`manager`/`staff`/`gestor` e ao middleware legacy `isGestor`/`requireStaff`/`requireManager`/`requireAdmin` — todos **substituídos em F1** pelos roles `admin`/`diretor_clinico`/`fisioterapeuta`/`rececionista` e pelos middlewares `isAdmin`/`isDiretorClinico`/`isClinico`/`isRececionista` (ver `middleware/requireRole.js`).
+> - O histórico completo (incluindo commits Smoobu) está preservado no `git log`.
 
 | Data       | Versão | Alteração                                                            |
 |------------|--------|----------------------------------------------------------------------|
+| **F1**     | —      | **Migração de roles (Fisioterapia):** (1) Modelo `Utilizador` — enum migrado de `['admin','manager','staff']` para `['admin','diretor_clinico','fisioterapeuta','rececionista']` (default `'rececionista'`); adicionado bloco `perfil_profissional` (`cedula`, `especialidades`, `biografia`, `cor_calendario` default `'#3b82f6'`, `ativo_clinico` default `true`). (2) Modelo `Empresa` — adicionado `logo_url` e bloco `config` (`horario_padrao`, `duracao_consulta_padrao` default `45`/min `15`, `tolerancia_atraso_min` default `10`, `fuso_horario` default `'Europe/Lisbon'`). (3) `middleware/requireRole.js` — removidos `isGestor`/`requireStaff`/`requireManager`/`requireAdmin` (legacy); adicionados `isAdmin` (só admin), `isDiretorClinico` (admin+diretor_clinico), `isClinico` (admin+diretor_clinico+fisioterapeuta), `isRececionista` (admin+diretor_clinico+rececionista). (4) `utils/loadBalancer.js` + controllers — queries de role: `'staff'` → `'fisioterapeuta'`; `'gestor'` → `'diretor_clinico'`; `['staff','gestor']` → `['fisioterapeuta','diretor_clinico']`; `isGestor` → `isDiretorClinico` em todas as routes (`gestorRoutes.js`, `ausenciaRoutes.js`). (5) `setupClienteZero` atualizado: 3 utilizadores (`admin@fisiocell.pt` admin, `gestor@fisiocell.pt` diretor_clinico, `joao.fisio@fisiocell.pt` fisioterapeuta). 111/111 testes ✓. |
 | Inicial    | 1.0.0  | Criação da estrutura base: `package.json`, `server.js`, `.env.example`, `.gitignore`. Ligação ao MongoDB e rota de teste `GET /`. |
 | v1.1.0     | 1.1.0  | Lógica central: modelos `Propriedade`, `Utilizador`, `Ausencia`, `Tarefa`; `controllers/webhookController.js` (fluxo estrito de atribuição com filtro de ausências + load balancing); `routes/webhookRoutes.js` (`POST /webhooks/smoobu`); resposta 200 imediata + processamento assíncrono; tratamento de erros robusto. |
 | v1.2.0     | 1.2.0  | Painel de Administração: modelo `Empresa` (nome, nif, plano_ativo); `controllers/adminController.js` (`getPropriedades`, `criarPropriedade`, `setupClienteZero`); `routes/adminRoutes.js` (`GET/POST /api/admin/propriedades`, `GET /api/admin/setup`); montagem em `server.js`. `empresa_id` via header `x-empresa-id` (sem JWT ainda). |

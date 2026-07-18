@@ -95,8 +95,9 @@ A aplicação tem **três áreas privadas** (cada uma com layout próprio), uma 
 | `/admin/calendario`   | Calendário geral de operações (grelha mensal estilo Google) | Desktop-first |
 | `/admin/calendario-operacional` | Calendário operacional avançado (filtros + navegação meses + cartões coloridos por estado + modal com reatribuição rápida) | Desktop-first |
 | `/admin/relatorios`   | Relatórios/Analytics com gráficos (recharts: linha, barras, pie) | Desktop-first |
-| `/staff`        | Área do Staff — tarefas de limpeza do dia — **protegida** (role staff) | Mobile-first |
-| `/staff/ausencias` | Pedidos de ausência do staff (férias/doença/outro) — criar + histórico + cancelar pendentes | Mobile-first |
+| `/gestor`       | Painel operacional da clínica — **protegido** (F1: roles `diretor_clinico` + `rececionista` partilham a área via `RouteGuard role={["diretor_clinico", "rececionista"]}`; permissões diferenciadas no backend via `isDiretorClinico`/`isRececionista`) | Desktop-first |
+| `/staff`        | Área do Fisioterapeuta (executante) — **protegida** (F1: role `fisioterapeuta`) | Mobile-first |
+| `/staff/ausencias` | Pedidos de ausência do fisioterapeuta (férias/doença/outro) — criar + histórico + cancelar pendentes | Mobile-first |
 | `/staff/tarefas/[id]` | Detalhe da Tarefa (checklist + concluir)      | Mobile-first |
 
 ### 3.1 Área Admin (`/admin`)
@@ -303,21 +304,23 @@ Isto força o framework para `nextjs`, pelo que o output directory passa a `.nex
   - `Secure` — o cookie só é enviado over HTTPS (em `http://localhost` o cookie não será definido — testar em HTTPS ou ajustar temporariamente em dev).
 - `lerUtilizadorDoToken()` — descodifica o payload JWT (base64url) **sem verificar assinatura** (isso é responsabilidade do backend); devolve `{ id, role, empresa_id }` ou `null` se inválido/expirado.
 - `estaAutenticado()` — true se houver token válido.
-- `rotaPorRole(role)` — devolve `/admin` para admin, `/gestor` para gestor, `/staff` para staff (usado no redirect pós-login).
+- `rotaPorRole(role)` — devolve `/admin` para admin, `/gestor` para diretor_clinico e rececionista (área partilhada F1), `/staff` para fisioterapeuta (usado no redirect pós-login).
+
+> **F1 — Roles migrados:** o tipo `Role` em `lib/auth.ts` (e em `lib/api.ts`) passou de `"admin" | "manager" | "staff"` para `"admin" | "diretor_clinico" | "fisioterapeuta" | "rececionista"`. A função `rotaPorRole` mapeia `rececionista` → `/gestor` (partilha o painel do diretor clínico com permissões limitadas via `isRececionista` no backend).
 
 ### `src/lib/api.ts` — Helpers de fetch
 - `API_URL` — lê `process.env.NEXT_PUBLIC_API_URL`.
 - `adminHeaders()` — inclui `Authorization: Bearer <token>` **se houver token** no cookie. v1.12.0: **sem fallback** — se não houver token, não envia header `x-empresa-id` (o backend devolve 401). A proteção de rotas (middleware.ts + RouteGuard) garante que o utilizador só chega a páginas privadas com token válido.
 - `adminGet(path)` / `adminPost(path, body)` / `adminPut(path, body)` / `adminPatch(path, body?)` / `adminDelete(path)` — wrappers de `fetch` para GET/POST/PUT/PATCH/DELETE com tratamento de erros. Em `401`, removem o token (força novo login).
 - `LoginResponse` — tipo da resposta de `POST /api/auth/login`.
-- `UtilizadorDTO` / `Role` — tipos que espelham o modelo `Utilizador` do backend.
+- `UtilizadorDTO` / `Role` — tipos que espelham o modelo `Utilizador` do backend (F1: `Role = "admin" | "diretor_clinico" | "fisioterapeuta" | "rececionista"`).
 - `AusenciaDTO` / `TipoAusencia` — tipos que espelham o modelo `Ausencia` do backend.
 
 ### `/login` (Client Component)
 Ecrã minimalista premium centrado:
 - Formulário com **Email** + **Password** + botão **Entrar** (design premium: azul marinho, padrão de pontos de fundo, marca "A").
 - Ao submeter: `POST /api/auth/login` (sem auth header — endpoint público).
-- Em caso de sucesso: `guardarToken(token)` + `router.push(rotaPorRole(role))` → **admin → `/admin`**, **staff → `/staff`**.
+- Em caso de sucesso: `guardarToken(token)` + `router.push(rotaPorRole(role))` → **admin → `/admin`**, **diretor_clinico/rececionista → `/gestor`** (área partilhada), **fisioterapeuta → `/staff`** (F1).
 - Estados: loading (spinner), erro (cartão vermelho com a mensagem do backend).
 
 ### `/admin/propriedades` (Client Component)
@@ -333,7 +336,7 @@ Primeiro ecrã a consumir a API real (mock-data abandonado nesta secção):
 ### `/admin/equipa` (Client Component) — CRUD completo (v1.9.0 + v1.10.0)
 - `useEffect` chama `adminGet('/api/admin/equipa')` ao montar.
 - **Tabela** com colunas: **Nome**, **Email**, **Role** (Badge), **Responsável** (nome do superior hierárquico ou "—"), **Estado** (Badge Ativo/Inativo), **Ações**.
-- **Adicionar**: botão "Adicionar Funcionário" → formulário inline (Nome, Email, Password, Role select **sem Admin**, **Responsável select** populado com admin+manager) → `adminPost`.
+- **Adicionar**: botão "Adicionar Funcionário" → formulário inline (Nome, Email, Password, Role select **sem Admin**, **Responsável select** populado com admin+diretor_clinico) → `adminPost` (F1: roles migrados).
 - **Editar**: botão ✏️ por linha → abre **modal Dialog** com Nome, Email, Role (**sem Admin**), **Responsável select** + **Nova Password (opcional)** → `adminPut`. Password vazia = mantém atual. O utilizador a editar é excluído do select de Responsável (não pode ser responsável de si próprio).
 - **Ativar/Desativar**: botão ⏻ por linha → `adminPatch('/equipa/:id/estado')` com otimismo (atualiza UI imediatamente, reverte se falhar).
 - **Eliminar**: botão 🗑️ por linha → abre **modal de confirmação** (Dialog) → `adminDelete`. Aviso: "ação permanente".
@@ -342,7 +345,7 @@ Primeiro ecrã a consumir a API real (mock-data abandonado nesta secção):
 - Componente `Dialog` (shadcn, sem Radix) em `components/ui/dialog.tsx` — backdrop, fecho com Esc/clique fora, scroll bloqueado.
 
 ### `/admin/calendario` (Client Component) — Folgas e Férias (v1.11.0)
-- `useEffect` carrega em paralelo: `adminGet('/api/admin/ausencias?futuras=true')` + `adminGet('/api/admin/equipa')` (para popular o select de funcionários, filtrado a staff+manager).
+- `useEffect` carrega em paralelo: `adminGet('/api/admin/ausencias?futuras=true')` + `adminGet('/api/admin/equipa')` (para popular o select de funcionários, filtrado a fisioterapeuta+diretor_clinico — F1).
 - **Formulário "Marcar Ausência"** no topo: select Funcionário, Data de Início, Data de Fim, select Tipo (Folga/Férias), Notas (opcional), botão "Agendar" → `adminPost`.
 - **Tabela** de ausências agendadas: Funcionário, Tipo (Badge com ícone Plane/Sun), Período (datas formatadas pt-PT), Notas, Ações.
 - **Eliminar**: botão 🗑️ por linha → `adminDelete` com otimismo (remove da UI imediatamente, reverte se falhar).
@@ -361,13 +364,15 @@ Executado antes de renderizar qualquer página. Lê o cookie `fisiocell_token` (
 
 - **Rotas privadas** (`/admin/*`, `/gestor/*`, `/staff/*`):
   - Sem token (ou token inválido/expirado) → redireciona para `/login?from=<rota>` (preserva a rota pretendida).
-  - Token válido mas role errado (ex.: staff tenta aceder a `/admin`) → redireciona para o painel do role.
+  - Token válido mas role errado (ex.: fisioterapeuta tenta aceder a `/admin`) → redireciona para o painel do role.
   - Token válido + role certo → deixa passar.
 - **Rotas públicas para autenticados** (`/`, `/login`):
   - Com token válido → redireciona para o painel do role (`/admin`, `/gestor` ou `/staff`).
   - Sem token → deixa passar (mostra landing/login).
 - `matcher`: `/`, `/login`, `/admin/:path*`, `/gestor/:path*`, `/staff/:path*` (ignora `_next`, `api`, estáticos).
 - **Não verifica a assinatura** do JWT (seria arriscado no Edge); valida apenas formato + `exp`. A verificação real é feita pelo backend em cada pedido à API.
+
+> **F1 — `Role` e `rotaPorRole` migrados:** o tipo `Role` no `middleware.ts` passou a `"admin" | "diretor_clinico" | "fisioterapeuta" | "rececionista"`. A função `rotaPorRole` mapeia `admin` → `/admin`, `diretor_clinico` e `rececionista` → `/gestor` (área partilhada), `fisioterapeuta` → `/staff`. A validação de rota errada permite `diretor_clinico`+`rececionista` em `/gestor/*`, só `fisioterapeuta` em `/staff/*`, só `admin` em `/admin/*`.
 
 ### 12.2 `components/auth/route-guard.tsx` (camada client-side)
 Client Component aplicado nos layouts de `/admin`, `/gestor` e `/staff` (envolve o conteúdo). Segunda camada de defesa:
@@ -377,12 +382,14 @@ Client Component aplicado nos layouts de `/admin`, `/gestor` e `/staff` (envolve
 - Mostra um **spinner** enquanto valida (evita flash de conteúdo protegido).
 - Se falhar → `router.replace('/login')`.
 
+> **F1 — Aceita `Role | Role[]`:** a prop `role` do `RouteGuard` passou a aceitar um array de roles para suportar áreas partilhadas. O `gestor/layout.tsx` usa `role={["diretor_clinico", "rececionista"]}` (ambos acedem ao `/gestor/*` com permissões diferentes via `isDiretorClinico`/`isRececionista` no backend). O `admin/layout.tsx` continua a usar `role="admin"` e o `staff/layout.tsx` continua a usar `role="fisioterapeuta"` (era `"staff"`).
+
 ### 12.3 `lib/auth.ts` — token em cookie (necessário para middleware)
 O token passou a ser guardado num **cookie** (`fisiocell_token`, SameSite=Lax, 7 dias) em vez de localStorage, porque o `middleware.ts` (Edge) só consegue ler cookies, não localStorage. Mantém-se localStorage como backup. Funções: `guardarToken`, `lerToken`, `removerToken`, `lerUtilizadorDoToken`, `estaAutenticado`, `rotaPorRole`.
 
 ### 12.4 Fluxo de redirecionamento pós-login
 - Login com sucesso → `guardarToken(token)` (define cookie) → redirect para `?from=` (se vier de rota protegida) ou `rotaPorRole(role)`.
-- `rotaPorRole`: admin → `/admin`, gestor → `/gestor`, staff → `/staff`.
+- `rotaPorRole` (F1): admin → `/admin`, diretor_clinico/rececionista → `/gestor` (área partilhada), fisioterapeuta → `/staff`.
 - Se um utilizador autenticado aceder a `/login` ou `/` → middleware redireciona para o painel.
 
 ### 12.5 Área `/manager` (Responsável de Limpezas) — v1.6.0 (removida)
@@ -392,10 +399,14 @@ O token passou a ser guardado num **cookie** (`fisiocell_token`, SameSite=Lax, 7
 
 ## 13. Histórico de alterações (frontend)
 
-> ⚠️ **F0 — Nota histórica:** As entradas abaixo anteriores a F0 descrevem a era Alojamento Local. Referências a Smoobu/webhooks/sincronização correspondem a funcionalidade **removida em F0**. O histórico completo (incluindo commits Smoobu) está preservado no `git log`.
+> ⚠️ **F0 + F1 — Notas históricas:**
+> - **F0:** As entradas abaixo anteriores a F0 descrevem a era Alojamento Local. Referências a Smoobu/webhooks/sincronização correspondem a funcionalidade **removida em F0**.
+> - **F1:** As entradas entre F0 e F1 referem-se aos roles antigos `admin`/`manager`/`staff`/`gestor` e à área `/manager` (removida em v1.37.0). Em **F1** os roles foram migrados para `admin`/`diretor_clinico`/`fisioterapeuta`/`rececionista`; a área `/gestor/*` passou a ser partilhada entre `diretor_clinico` e `rececionista` (via `RouteGuard role={["diretor_clinico", "rececionista"]}`).
+> - O histórico completo (incluindo commits Smoobu) está preservado no `git log`.
 
 | Data    | Versão | Alteração                                                                       |
 |---------|--------|---------------------------------------------------------------------------------|
+| **F1**  | —      | **Migração de roles (Fisioterapia):** (1) `middleware.ts` — tipo `Role` atualizado para `"admin" \| "diretor_clinico" \| "fisioterapeuta" \| "rececionista"`; `rotaPorRole` mapeia `rececionista` → `/gestor` (partilhado); validação de rota errada aceita `diretor_clinico`+`rececionista` em `/gestor/*`. (2) `lib/auth.ts` + `lib/api.ts` — tipo `Role` atualizado. (3) `components/auth/route-guard.tsx` — prop `role` passou a aceitar `Role \| Role[]` para suportar áreas partilhadas. (4) `app/gestor/layout.tsx` — `RouteGuard role={["diretor_clinico", "rececionista"]}`. (5) `app/gestor/equipa/page.tsx` — `ROLE_LABEL` e `ROLE_VARIANT` atualizados (Diretor Clínico/Fisioterapeuta/Rececionista); formulário de criar/editar usa `role: "fisioterapeuta"` por defeito. (6) `app/admin/page.tsx` — labels de role no modal de utilizadores (`diretor_clinico` → "Diretor Clínico", `fisioterapeuta` → "Fisioterapeuta", `rececionista` → "Rececionista"); botão "Criar Novo Gestor" passa a criar com `role: "diretor_clinico"`. Lint + tsc + build ✓. |
 | Inicial | 1.0.0  | Scaffold Next.js 14 + TS + Tailwind + shadcn; rotas `/admin` (sidebar + dashboard + placeholders) e `/staff` (mobile-first com cartões de tarefas); mock data. Build validado. |
 | v1.1.0  | 1.1.0  | Ecrã de Detalhe da Tarefa (`/staff/tarefas/[id]`): checklist interativa gerada de array, textarea de observações, botão "Concluir Tarefa" desativado até todas as checkboxes marcadas (React State). Componentes UI Checkbox e Textarea. TaskCard agora abre o detalhe via Link. |
 | v1.1.1  | 1.1.1  | Fix deploy Vercel: adicionado `vercel.json` (`"framework": "nextjs"`) para forçar a deteção do framework e evitar o erro `No Output Directory named "public"`. Documentação de deploy atualizada com definições obrigatórias (Root Directory = `frontend`, Framework Preset = Next.js). |

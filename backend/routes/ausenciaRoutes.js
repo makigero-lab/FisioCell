@@ -11,7 +11,7 @@
  *   PATCH  /:id/cancelar      — soft cancel: marca estado='cancelada' (v1.39.0/Prompt 131b)
  *
  * Autenticação:
- *   - A maioria das rotas exige `auth` + `isGestor` (admin/gestor).
+ *   - A maioria das rotas exige `auth` + `isDiretorClinico` (admin/gestor).
  *   - A rota PATCH /:id/cancelar exige apenas `auth` (staff pode cancelar
  *     as SUAS ausências pendentes/aprovadas; o controller valida ownership).
  *     Isto permite que o staff use o mesmo endpoint que o gestor para
@@ -21,7 +21,7 @@ const express = require('express');
 const router = express.Router();
 
 const { auth } = require('../middleware/auth');
-const { isGestor } = require('../middleware/requireRole');
+const { isDiretorClinico } = require('../middleware/requireRole');
 const {
   listarAusencias,
   registarAusencia,
@@ -32,13 +32,13 @@ const {
 
 // v1.28.0: endpoints de gestão de ausências exigem role admin OU manager
 // (o staff não pode aprovar/rejeitar nem ver ausências de outros).
-router.get('/', auth, isGestor, listarAusencias);
-router.post('/', auth, isGestor, registarAusencia);
-router.delete('/:id', auth, isGestor, eliminarAusencia);
-router.patch('/:id/estado', auth, isGestor, aprovarRejeitarAusencia);
+router.get('/', auth, isDiretorClinico, listarAusencias);
+router.post('/', auth, isDiretorClinico, registarAusencia);
+router.delete('/:id', auth, isDiretorClinico, eliminarAusencia);
+router.patch('/:id/estado', auth, isDiretorClinico, aprovarRejeitarAusencia);
 
 // v1.39.0 (Prompt 131b) — Soft cancel: marca estado='cancelada' (mantém histórico).
-// Apenas `auth` (sem isGestor): o staff pode cancelar as SUAS ausências; o
+// Apenas `auth` (sem isDiretorClinico): o staff pode cancelar as SUAS ausências; o
 // gestor/admin pode cancelar qualquer ausência da empresa. O controller
 // valida ownership consoante o role.
 router.patch('/:id/cancelar', auth, cancelarAusencia);
