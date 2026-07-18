@@ -3336,3 +3336,434 @@ describe('F3 — Horários (CRUD + disponibilidade)', () => {
     expect(res.status).toBe(401);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* F4 — Consultas (CRUD + validação de conflitos fisio+sala+paciente) */
+/* ------------------------------------------------------------------ */
+
+describe('F4 — Consultas (CRUD + conflitos)', () => {
+  let fisioF4Token, diretorF4Token, rececionistaF4Token, fisio2F4Token;
+  let fisioF4Id, fisio2F4Id;
+  let pacienteF4Id, paciente2F4Id;
+  let salaF4Id, sala2F4Id;
+  let consultaId, consultaConcluidaId;
+
+  beforeAll(async () => {
+    const hash = await bcrypt.hash(PASSWORD, 10);
+
+    const fisio = await Utilizador.create({
+      nome: 'Fisio F4', email: 'fisio.f4@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'fisioterapeuta', ativo: true,
+      perfil_profissional: { cedula: 'FIS-12345', ativo_clinico: true },
+    });
+    fisioF4Id = String(fisio._id);
+
+    const fisio2 = await Utilizador.create({
+      nome: 'Fisio2 F4', email: 'fisio2.f4@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'fisioterapeuta', ativo: true,
+      perfil_profissional: { cedula: 'FIS-67890', ativo_clinico: true },
+    });
+    fisio2F4Id = String(fisio2._id);
+
+    const diretor = await Utilizador.create({
+      nome: 'Diretor F4', email: 'diretor.f4@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'diretor_clinico', ativo: true,
+      perfil_profissional: { cedula: 'DIR-11111' },
+    });
+
+    const rececionista = await Utilizador.create({
+      nome: 'Rece F4', email: 'rece.f4@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'rececionista', ativo: true,
+    });
+
+    const [rFisio, rFisio2, rDir, rRec] = await Promise.all([
+      request(app).post('/api/auth/login').send({ email: 'fisio.f4@teste.pt', password: PASSWORD }),
+      request(app).post('/api/auth/login').send({ email: 'fisio2.f4@teste.pt', password: PASSWORD }),
+      request(app).post('/api/auth/login').send({ email: 'diretor.f4@teste.pt', password: PASSWORD }),
+      request(app).post('/api/auth/login').send({ email: 'rece.f4@teste.pt', password: PASSWORD }),
+    ]);
+    fisioF4Token = rFisio.body.token;
+    fisio2F4Token = rFisio2.body.token;
+    diretorF4Token = rDir.body.token;
+    rececionistaF4Token = rRec.body.token;
+
+    // Cria pacientes e salas de teste.
+    const Paciente = require('../models/Paciente');
+    const p1 = await Paciente.create({ empresa_id: empresaId, nome: 'Paciente F4 A', telefone: '+351911111111' });
+    const p2 = await Paciente.create({ empresa_id: empresaId, nome: 'Paciente F4 B', telefone: '+351922222222' });
+    pacienteF4Id = String(p1._id);
+    paciente2F4Id = String(p2._id);
+
+    const s1 = await Propriedade.create({ empresa_id: empresaId, nome: 'Sala F4 1', morada: 'Rua Teste', tempo_limpeza_minutos: 45 });
+    const s2 = await Propriedade.create({ empresa_id: empresaId, nome: 'Sala F4 2', morada: 'Rua Teste 2', tempo_limpeza_minutos: 45 });
+    salaF4Id = String(s1._id);
+    sala2F4Id = String(s2._id);
+
+    // F3 — Cria horários recorrentes para os 2 fisios (seg-sex 09:00-19:00).
+    // Necessário para o motor de disponibilidade não bloquear as consultas.
+    const HorarioFisioterapeuta = require('../models/HorarioFisioterapeuta');
+    for (const fid of [fisioF4Id, fisio2F4Id]) {
+      for (let dia = 1; dia <= 5; dia++) { // 1=Seg...5=Sex
+        await HorarioFisioterapeuta.create({
+          empresa_id: empresaId,
+          fisioterapeuta_id: fid,
+          tipo: 'recorrente',
+          dia_semana: dia,
+          hora_inicio: '09:00',
+          hora_fim: '19:00',
+        });
+      }
+    }
+  });
+
+  afterAll(async () => {
+    await Utilizador.deleteMany({ email: { $in: ['fisio.f4@teste.pt', 'fisio2.f4@teste.pt', 'diretor.f4@teste.pt', 'rece.f4@teste.pt'] } });
+    const Paciente = require('../models/Paciente');
+    const Consulta = require('../models/Consulta');
+    const HorarioFisioterapeuta = require('../models/HorarioFisioterapeuta');
+    await Paciente.deleteMany({ _id: { $in: [pacienteF4Id, paciente2F4Id] } });
+    await HorarioFisioterapeuta.deleteMany({ fisioterapeuta_id: { $in: [fisioF4Id, fisio2F4Id] } });
+    await Propriedade.deleteMany({ _id: { $in: [salaF4Id, sala2F4Id] } });
+    await Consulta.deleteMany({ empresa_id: empresaId, fisioterapeuta_id: { $in: [fisioF4Id, fisio2F4Id] } });
+  });
+
+  it('POST /api/gestor/consultas (rececionista) → 201 cria consulta', async () => {
+    // Data futura: 2027-01-15 10:00 (sexta-feira).
+    const res = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({
+        fisioterapeuta_id: fisioF4Id,
+        sala_id: salaF4Id,
+        paciente_id: pacienteF4Id,
+        data_hora_inicio: '2027-01-15T10:00:00',
+        duracao_minutos: 45,
+        tipo: 'primeira_consulta',
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.consulta).toHaveProperty('_id');
+    expect(res.body.consulta.estado).toBe('marcada');
+    expect(res.body.consulta.tipo).toBe('primeira_consulta');
+    consultaId = res.body.consulta._id;
+  });
+
+  it('POST sem campos obrigatórios → 400', async () => {
+    const res = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({ fisioterapeuta_id: fisioF4Id });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST com data no passado → 400', async () => {
+    const res = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({
+        fisioterapeuta_id: fisioF4Id,
+        sala_id: salaF4Id,
+        paciente_id: pacienteF4Id,
+        data_hora_inicio: '2020-01-01T10:00:00',
+      });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST com fisioterapeuta inexistente → 400', async () => {
+    const idFake = new mongoose.Types.ObjectId();
+    const res = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({
+        fisioterapeuta_id: idFake,
+        sala_id: salaF4Id,
+        paciente_id: pacienteF4Id,
+        data_hora_inicio: '2027-02-15T10:00:00',
+      });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST com paciente inexistente → 400', async () => {
+    const idFake = new mongoose.Types.ObjectId();
+    const res = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({
+        fisioterapeuta_id: fisioF4Id,
+        sala_id: salaF4Id,
+        paciente_id: idFake,
+        data_hora_inicio: '2027-02-15T10:00:00',
+      });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST com sala inexistente → 400', async () => {
+    const idFake = new mongoose.Types.ObjectId();
+    const res = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({
+        fisioterapeuta_id: fisioF4Id,
+        sala_id: idFake,
+        paciente_id: pacienteF4Id,
+        data_hora_inicio: '2027-02-15T10:00:00',
+      });
+    expect(res.status).toBe(400);
+  });
+
+  it('POST com conflito de SALA → 409 (sem forcar)', async () => {
+    // Mesma sala, mesmo horário, fisio diferente, paciente diferente.
+    const res = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({
+        fisioterapeuta_id: fisio2F4Id,
+        sala_id: salaF4Id, // mesma sala
+        paciente_id: paciente2F4Id,
+        data_hora_inicio: '2027-01-15T10:00:00', // mesmo horário
+        duracao_minutos: 45,
+      });
+    expect(res.status).toBe(409);
+    expect(res.body.conflitos).toBeTruthy();
+    expect(res.body.conflitos.some((c) => c.includes('Sala ocupada'))).toBe(true);
+  });
+
+  it('POST com conflito de SALA + forcar=true → 200 com warning', async () => {
+    const res = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({
+        fisioterapeuta_id: fisio2F4Id,
+        sala_id: salaF4Id,
+        paciente_id: paciente2F4Id,
+        data_hora_inicio: '2027-01-15T10:00:00',
+        duracao_minutos: 45,
+        forcar: true,
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.warning).toBeTruthy();
+    expect(res.body.conflitos).toBeTruthy();
+  });
+
+  it('POST com conflito de FISIOTERAPEUTA → 409', async () => {
+    // Mesmo fisio, mesma hora, sala diferente, paciente diferente.
+    const res = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({
+        fisioterapeuta_id: fisioF4Id, // mesmo fisio
+        sala_id: sala2F4Id,
+        paciente_id: paciente2F4Id,
+        data_hora_inicio: '2027-01-15T10:00:00', // mesmo horário
+        duracao_minutos: 45,
+      });
+    expect(res.status).toBe(409);
+    expect(res.body.conflitos.some((c) => c.includes('Fisioterapeuta ocupado'))).toBe(true);
+  });
+
+  it('POST com conflito de PACIENTE → 409', async () => {
+    // Mesmo paciente, mesma hora, fisio diferente, sala diferente.
+    const res = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({
+        fisioterapeuta_id: fisio2F4Id,
+        sala_id: sala2F4Id,
+        paciente_id: pacienteF4Id, // mesmo paciente
+        data_hora_inicio: '2027-01-15T10:00:00',
+        duracao_minutos: 45,
+      });
+    expect(res.status).toBe(409);
+    expect(res.body.conflitos.some((c) => c.includes('Paciente já tem consulta'))).toBe(true);
+  });
+
+  it('POST sem sobreposição → 201 (sem conflitos)', async () => {
+    // Sala diferente, fisio diferente, paciente diferente, horário diferente.
+    const res = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({
+        fisioterapeuta_id: fisio2F4Id,
+        sala_id: sala2F4Id,
+        paciente_id: paciente2F4Id,
+        data_hora_inicio: '2027-03-15T14:00:00',
+        duracao_minutos: 60,
+      });
+    expect(res.status).toBe(201);
+  });
+
+  it('GET /api/gestor/consultas (rececionista) → 200 lista todas', async () => {
+    const res = await request(app)
+      .get('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${rececionistaF4Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBeGreaterThan(0);
+  });
+
+  it('GET (fisio) → 200 lista só as suas', async () => {
+    const res = await request(app)
+      .get('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${fisioF4Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.consultas.every((c) => String(c.fisioterapeuta_id?._id) === fisioF4Id)).toBe(true);
+  });
+
+  it('GET /:id → 200 detalhe', async () => {
+    const res = await request(app)
+      .get(`/api/gestor/consultas/${consultaId}`)
+      .set('Authorization', `Bearer ${rececionistaF4Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.consulta._id).toBe(consultaId);
+  });
+
+  it('GET /validar → 200 com conflitos sem criar', async () => {
+    const res = await request(app)
+      .get(`/api/gestor/consultas/validar?fisioterapeuta_id=${fisioF4Id}&sala_id=${salaF4Id}&paciente_id=${pacienteF4Id}&data_hora_inicio=2027-01-15T10:00:00&duracao_minutos=45`)
+      .set('Authorization', `Bearer ${rececionistaF4Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.conflitos.length).toBeGreaterThan(0);
+  });
+
+  it('PUT /:id → 200 atualiza estado para confirmada', async () => {
+    const res = await request(app)
+      .put(`/api/gestor/consultas/${consultaId}`)
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({ estado: 'confirmada' });
+    expect(res.status).toBe(200);
+    expect(res.body.consulta.estado).toBe('confirmada');
+  });
+
+  it('PATCH /nota-clinica (fisio com cédula) → 200', async () => {
+    const res = await request(app)
+      .patch(`/api/gestor/consultas/${consultaId}/nota-clinica`)
+      .set('Authorization', `Bearer ${fisioF4Token}`)
+      .send({
+        subjetivo: 'Dor lombar',
+        objetivo: 'Palpação dolorosa L4-L5',
+        avaliacao: 'Lombalgia mecânica',
+        plano: 'Sessões de terapia manual + exercício',
+        tratamento_efetuado: 'Mobilização L4-L5 + stretching',
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.consulta.nota_clinica.subjetivo).toBe('Dor lombar');
+    expect(res.body.consulta.nota_clinica.cedula_assinante).toBe('FIS-12345');
+  });
+
+  it('PATCH /nota-clinica por fisio SEM cédula → 403', async () => {
+    // Cria fisio sem cédula.
+    const hash = await bcrypt.hash(PASSWORD, 10);
+    const fisioSemCedula = await Utilizador.create({
+      nome: 'Fisio Sem Cedula', email: 'fisiosemcedula.f4@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'fisioterapeuta', ativo: true,
+      // perfil_profissional.cedula vazio
+    });
+    const rLogin = await request(app).post('/api/auth/login').send({ email: 'fisiosemcedula.f4@teste.pt', password: PASSWORD });
+    const tokenSemCedula = rLogin.body.token;
+
+    // Cria consulta atribuída ao fisio sem cédula para ele poder tentar editar.
+    // 2027-06-14 é segunda-feira. forcar=true porque o fisio sem cédula não
+    // tem horário definido (o motor F3 bloqueia).
+    const rConsulta = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({
+        fisioterapeuta_id: fisioSemCedula._id,
+        sala_id: sala2F4Id,
+        paciente_id: paciente2F4Id,
+        data_hora_inicio: '2027-06-14T14:00:00',
+        forcar: true,
+      });
+    const consultaSemCedulaId = rConsulta.body.consulta?._id;
+    expect(consultaSemCedulaId).toBeTruthy();
+
+    const res = await request(app)
+      .patch(`/api/gestor/consultas/${consultaSemCedulaId}/nota-clinica`)
+      .set('Authorization', `Bearer ${tokenSemCedula}`)
+      .send({ subjetivo: 'Tentativa sem cédula' });
+    expect(res.status).toBe(403);
+    expect(res.body.erro).toContain('cédula');
+
+    await Utilizador.deleteOne({ _id: fisioSemCedula._id });
+  });
+
+  it('PATCH /nota-clinica por rececionista → 403 (só isClinico)', async () => {
+    const res = await request(app)
+      .patch(`/api/gestor/consultas/${consultaId}/nota-clinica`)
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({ subjetivo: 'Tentativa rececionista' });
+    expect(res.status).toBe(403);
+  });
+
+  it('PUT concluir consulta → 200 (regista concluida_em)', async () => {
+    const res = await request(app)
+      .put(`/api/gestor/consultas/${consultaId}`)
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({ estado: 'concluida' });
+    expect(res.status).toBe(200);
+    expect(res.body.consulta.estado).toBe('concluida');
+    expect(res.body.consulta.concluida_em).toBeTruthy();
+    consultaConcluidaId = consultaId;
+  });
+
+  it('PATCH /nota-clinica em consulta CONCLUÍDA → 403 (imutável)', async () => {
+    const res = await request(app)
+      .patch(`/api/gestor/consultas/${consultaConcluidaId}/nota-clinica`)
+      .set('Authorization', `Bearer ${fisioF4Token}`)
+      .send({ subjetivo: 'Tentativa alterar concluída' });
+    expect(res.status).toBe(403);
+    expect(res.body.erro).toContain('imutável');
+  });
+
+  it('DELETE consulta concluída → 403 (RGPD)', async () => {
+    const res = await request(app)
+      .delete(`/api/gestor/consultas/${consultaConcluidaId}`)
+      .set('Authorization', `Bearer ${diretorF4Token}`);
+    expect(res.status).toBe(403);
+    expect(res.body.erro).toContain('RGPD');
+  });
+
+  it('DELETE (rececionista) → 403 (só diretor)', async () => {
+    // Cria consulta não concluída para tentar eliminar.
+    // 2027-06-14 é uma segunda-feira (fisio tem horário seg-sex).
+    const rConsulta = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({
+        fisioterapeuta_id: fisioF4Id,
+        sala_id: salaF4Id,
+        paciente_id: pacienteF4Id,
+        data_hora_inicio: '2027-06-14T10:00:00',
+      });
+    const idParaEliminar = rConsulta.body.consulta?._id;
+    expect(idParaEliminar).toBeTruthy();
+
+    const res = await request(app)
+      .delete(`/api/gestor/consultas/${idParaEliminar}`)
+      .set('Authorization', `Bearer ${rececionistaF4Token}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('DELETE (diretor) → 200 elimina consulta não concluída', async () => {
+    // 2027-06-21 é uma segunda-feira.
+    const rConsulta = await request(app)
+      .post('/api/gestor/consultas')
+      .set('Authorization', `Bearer ${rececionistaF4Token}`)
+      .send({
+        fisioterapeuta_id: fisioF4Id,
+        sala_id: salaF4Id,
+        paciente_id: pacienteF4Id,
+        data_hora_inicio: '2027-06-21T10:00:00',
+      });
+    const idParaEliminar = rConsulta.body.consulta._id;
+
+    const res = await request(app)
+      .delete(`/api/gestor/consultas/${idParaEliminar}`)
+      .set('Authorization', `Bearer ${diretorF4Token}`);
+    expect(res.status).toBe(200);
+  });
+
+  it('sem token → 401', async () => {
+    const res = await request(app).get('/api/gestor/consultas');
+    expect(res.status).toBe(401);
+  });
+});

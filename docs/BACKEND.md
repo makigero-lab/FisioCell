@@ -31,6 +31,7 @@ backend/
 │   ├── adminController.js    # Painel de Administração + setup Cliente Zero
 │   ├── authController.js     # Autenticação: login (JWT) + /me
 │   ├── gestorController.js   # Painel do Gestor (dashboard, tarefas, equipa)
+│   ├── consultaController.js # CRUD de Consultas (F4) + validação de conflitos + nota clínica SOAP + cédula
 │   ├── horarioController.js # CRUD de HorarioFisioterapeuta (F3) + verificador de disponibilidade
 │   ├── pacienteController.js # CRUD de Pacientes (F2) — permissões por role + sanitização de dados clínicos
 │   ├── staffController.js    # Painel do Staff
@@ -46,11 +47,12 @@ backend/
 ├── models/                   # Modelos Mongoose (ODM do MongoDB)
 │   ├── Empresa.js            #   Entidade principal (multi-tenant)
 │   ├── Propriedade.js        #   Alojamento (será migrado para Sala em F3)
-│   ├── Utilizador.js         #   Admin / Staff de uma empresa (email + password_hash)
+│   ├── Utilizador.js         #   Admin / Staff de uma empresa (email + password_hash) + temCedulaValida() (F4)
 │   ├── Ausencia.js           #   Indisponibilidade de Staff num dia
 │   ├── Tarefa.js             #   Tarefa de limpeza (será migrada para Consulta em F4)
 │   ├── Paciente.js           #   Paciente da clínica (F2) — soft delete + dados clínicos sanitizados
-│   └── HorarioFisioterapeuta.js # Limites de agenda do fisio (F3) — recorrente/excecao + motor de disponibilidade
+│   ├── HorarioFisioterapeuta.js # Limites de agenda do fisio (F3) — recorrente/excecao + motor de disponibilidade
+│   └── Consulta.js           #   Marcação/sessão de fisioterapia (F4) — substitui Tarefa; conflitos + SOAP + cédula
 ├── utils/
 │   ├── loadBalancer.js       # Motor de atribuição (extraído do webhook em F0)
 │   ├── geocoding.js          # Geocoding de moradas (Nominatim)
@@ -65,6 +67,7 @@ backend/
     ├── gestorRoutes.js       # Rotas /api/gestor/*
     ├── pacienteRoutes.js     # Rotas /api/gestor/pacientes/* (F2)
     ├── horarioRoutes.js      # Rotas /api/gestor/horarios/* (F3)
+    ├── consultaRoutes.js     # Rotas /api/gestor/consultas/* (F4)
     ├── staffRoutes.js        # Rotas /api/staff/*
     ├── authRoutes.js         # POST /api/auth/login, GET /api/auth/me
     ├── ausenciaRoutes.js     # Rotas de ausências
@@ -94,7 +97,7 @@ O fluxo de arranque segue uma sequência segura:
 
 ## 3.1. Modelos de dados (Mongoose)
 
-O sistema gira em torno de 7 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
+O sistema gira em torno de 8 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
 
 ### `Empresa`
 Entidade principal do SaaS (multi-tenant). Cada empresa agrupa Propriedades e Utilizadores.
@@ -176,6 +179,8 @@ Só faz sentido para `fisioterapeuta`/`diretor_clinico` (para `admin`/`rececioni
 | `biografia`      | String   | Default `''`. Bio curta para mostrar no perfil público (futuro portal paciente). |
 | `cor_calendario` | String   | Default `'#3b82f6'`. Cor (hex) do fisioterapeuta no FullCalendar.   |
 | `ativo_clinico`  | Boolean  | Default `true`. `false` = inativo clinicamente (impede novas marcações) mas mantém o histórico. |
+
+> **F4 — Método de instância `temCedulaValida()`:** adicionado ao schema `Utilizador` (`utilizadorSchema.methods.temCedulaValida`). Devolve `true` para `admin`/`rececionista` (não aplicável — não assinam notas clínicas); para `fisioterapeuta`/`diretor_clinico` devolve `true` apenas se `perfil_profissional.cedula` for uma string não vazia (após `trim()`). A cédula da Ordem dos Fisioterapeutas é **OBRIGATÓRIA** para assinar notas clínicas (SOAP) e para a futura faturação (F4 — ver `consultaController.atualizarNotaClinica`).
 
 > **Regras de segurança (v1.7.0):** não é possível criar/editar utilizadores com role `admin` via `/api/admin/equipa` (403). Não é possível editar/eliminar/desativar utilizadores que já sejam `admin` (403 "Não é possível modificar um administrador"). O `responsavel_id` tem de ser um admin/diretor_clinico da mesma empresa (validado no backend).
 >
@@ -299,6 +304,57 @@ Limites de agenda de cada fisioterapeuta. **F3** — novo modelo do domínio Fis
 >
 > **Motor de disponibilidade:** este modelo é consultado pelo motor em `utils/disponibilidade.js` (funções `obterHorarioDia`, `verificarConflitoHorario`, `verificarDisponibilidadeCompleta` — ver secção 3.4).
 
+### `Consulta`
+Marcação/sessão de fisioterapia. **F4** — substitui `Tarefa` no domínio Fisioterapia. Cada consulta cruza 3 eixos: `fisioterapeuta_id` (quem atende), `sala_id` (onde — `Propriedade` alias Sala até F8) e `paciente_id` (a quem).
+
+> **F4:** A `Consulta` é o nó central da clínica — a sua criação/atualização dispara a **validação de conflitos** (ver secção 3.5) em simultâneo sobre 4 dimensões: (1) fisioterapeuta disponível (motor F3), (2) sala sem sobreposição, (3) fisioterapeuta sem sobreposição, (4) paciente sem sobreposição. A nota clínica SOAP é um sub-documento embutido e **imutável após conclusão** (RGPD/legal). A cédula do fisioterapeuta assinante é **snapshot**'d em `nota_clinica.cedula_assinante` para auditoria legal. Consultas concluídas **não podem ser eliminadas** (RGPD — preservar SOAP) — apenas canceladas.
+
+| Campo                   | Tipo     | Notas                                                              |
+|-------------------------|----------|--------------------------------------------------------------------|
+| `empresa_id`            | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
+| `sala_id`               | ObjectId | `ref: 'Propriedade'` (alias Sala até F8). Obrigatório, indexado. Validado no controller como `Propriedade` ativa da empresa. |
+| `fisioterapeuta_id`     | ObjectId | `ref: 'Utilizador'`. Obrigatório, indexado. Validado no controller como fisio/diretor_clinico ativo da empresa. |
+| `paciente_id`           | ObjectId | `ref: 'Paciente'`. Obrigatório, indexado. Validado no controller como paciente não eliminado da empresa. |
+| `data_hora_inicio`      | Date     | Obrigatório, indexado. Timestamp exato do início (não meia-noite). Não pode ser no passado (validado no controller). |
+| `data_hora_fim`         | Date     | Obrigatório. Calculado pelo controller como `inicio + duracao_minutos`. |
+| `duracao_minutos`       | Number   | Obrigatório, default `45`, `min: 15`. Duração prevista da sessão. |
+| `tipo`                  | String   | `enum: ['primeira_consulta','sessao','reavaliacao','alta','grupo']`, default `'sessao'`. Indexado. |
+| `estado`                | String   | `enum: ['marcada','confirmada','em_curso','concluida','cancelada','faltou','nao_compareceu']`, default `'marcada'`. Indexado. |
+| `motivo_cancelamento`   | String   | `enum: ['paciente','clinica','fisio','outro']`, default `null`. Preenchido quando `estado='cancelada'`. |
+| `presenca`              | String   | `enum: ['pendente','presente','ausente','atrasado']`, default `'pendente'`. Preenchido pela rececionista no momento. |
+| `nota_clinica`          | Object   | Sub-documento SOAP (ver tabela abaixo). **Imutável após `estado='concluida'`** (RGPD/legal). |
+| `criada_por`            | ObjectId | `ref: 'Utilizador'`. Obrigatório. Quem criou a marcação (auditoria). |
+| `concluida_em`          | Date     | Default `null`. Preenchida quando `estado='concluida'`. |
+| `cancelada_em`          | Date     | Default `null`. Preenchida quando `estado='cancelada'`. |
+| `cancelada_por`         | ObjectId | `ref: 'Utilizador'`, default `null`. Quem cancelou. |
+| `lembrete_24h_enviado`  | Boolean  | Default `false`. Flag para o futuro cron job de lembrete 24h (F7). |
+| `lembrete_2h_enviado`   | Boolean  | Default `false`. Flag para o futuro cron job de lembrete 2h (F7). |
+| `observacoes`           | String   | Default `''`, trim. Notas administrativas (não clínicas) — visíveis à rececionista. |
+
+#### `nota_clinica` (sub-documento SOAP) — F4
+
+> Preenchida pelo fisioterapeuta durante/após a sessão. Endpoint dedicado `PATCH /api/gestor/consultas/:id/nota-clinica` (permissão `isClinico`, separada do PUT geral). Uma vez `estado='concluida'`, torna-se **read-only** (RGPD/legal). O assinante tem de ter cédula profissional válida (`Utilizador.temCedulaValida()`); o nº de cédula é guardado como snapshot em `cedula_assinante` para auditoria legal.
+
+| Campo                   | Tipo     | Notas                                                              |
+|-------------------------|----------|--------------------------------------------------------------------|
+| `subjetivo`             | String   | Default `''`. **S** — queixas do paciente (o que ele relata).      |
+| `objetivo`              | String   | Default `''`. **O** — observações/exame físico (o que o fisio mede/observa). |
+| `avaliacao`             | String   | Default `''`. **A** — diagnóstico clínico / hipótese diagnóstica.  |
+| `plano`                 | String   | Default `''`. **P** — plano terapêutico (exercícios, frequência, etc.). |
+| `tratamento_efetuado`   | String   | Default `''`. O que foi efetivamente feito nesta sessão.           |
+| `protocolo_aplicado`    | [Object] | Default `[]`. Snapshot do `ModeloProtocolo` aplicado (futuro F5). Cada item: `{ nome: String (obrigatório), items: [{ texto: String, concluido: Boolean }] }`. |
+| `cedula_assinante`      | String   | Default `''`. Snapshot da cédula do fisioterapeuta que assinou a nota (auditoria legal — garante que quem assinou tinha cédula válida no momento). |
+
+**Índices compostos:**
+- `{ empresa_id: 1, fisioterapeuta_id: 1, data_hora_inicio: 1 }` — lookup de consultas de um fisio por data.
+- `{ empresa_id: 1, sala_id: 1, data_hora_inicio: 1 }` — lookup de consultas numa sala por data (validação de conflito de sala).
+- `{ empresa_id: 1, paciente_id: 1, data_hora_inicio: -1 }` — histórico do paciente (ordenado do mais recente para o mais antigo).
+- `{ estado: 1, data_hora_inicio: 1 }` — queries operacionais (ex.: consultas ativas por data).
+
+> **Permissões (F4):** as routes (`routes/consultaRoutes.js`) usam um middleware custom `podeVer` (todos os 4 roles) para `GET /`, `GET /:id` e `GET /validar` — fisioterapeuta vê só as suas consultas (filtro `fisioterapeuta_id = req.user.id` aplicado no controller); os restantes roles vêem todas. As mutações de marcação (`POST`, `PUT`) exigem `isRececionista` (admin + diretor_clinico + rececionista — todos podem marcar). O endpoint dedicado `PATCH /:id/nota-clinica` exige `isClinico` (admin + diretor_clinico + fisioterapeuta) — SOAP. O `DELETE /:id` exige `isDiretorClinico` (admin + diretor_clinico). Auditoria registada em criar/atualizar/atualizar_nota_clinica/eliminar via `utils/auditoria.js` (`recurso: 'consulta'`).
+>
+> **Imutabilidade de concluídas (RGPD):** o `DELETE /:id` bloqueia consultas com `estado='concluida'` (403 — "Não é possível eliminar uma consulta concluída (RGPD — nota clínica é imutável). Cancela em vez de eliminar."). O `PUT /:id` rejeita `nota_clinica` no body (400 — deve ser atualizada via `PATCH /:id/nota-clinica`) e bloqueia edições de `nota_clinica` se a consulta já estiver concluída (403). O `PATCH /:id/nota-clinica` bloqueia consultas concluídas (403) e valida que o assinante tem cédula (`Utilizador.temCedulaValida()`).
+
 ---
 
 ## 3.2. Lógica central — Atribuição de tarefas
@@ -397,6 +453,33 @@ A função `obterHorarioDia` consulta o modelo `HorarioFisioterapeuta` para um d
 - `compararHoras(a, b)` — compara duas strings `"HH:mm"` (devolve `-1/0/1`); converte para minutos totais.
 
 > **Robustez de fuso (herdada do Prompt 113):** todas as comparações de data usam a **data de calendário de Lisboa** (não o instante UTC midnight). Isto garante que uma tarefa/consulta criada às 00:00 local (23:00Z do dia anterior em UTC) conta como "mesmo dia" para efeitos de ausências/horários — mesmo quando o `Ausencia.data_inicio` está armazenado em UTC midnight.
+
+---
+
+## 3.5. Validação de Conflitos — F4
+
+O controller `controllers/consultaController.js` expõe a função interna `validarConflitos({ empresaId, fisioterapeutaId, salaId, pacienteId, dataHoraInicio, duracaoMinutos, excluirConsultaId })` que valida **em simultâneo** 4 dimensões antes de criar/atualizar uma `Consulta`. Devolve `{ ok: boolean, warnings: string[], horario?: { hora_inicio, hora_fim } }`:
+
+1. **Fisioterapeuta disponível** (motor F3) — procura o utilizador (`fisioterapeuta`/`diretor_clinico`, `ativo: true`, `eliminado_em: null`, da empresa) e invoca `verificarDisponibilidadeCompleta(fisio, inicio, duracaoMinutos)` (ver secção 3.4). Se o fisio não existir ou estiver inativo clinicamente (`perfil_profissional.ativo_clinico === false`) → warning. Se a disponibilidade falhar → warning com o `motivo` devolvido pelo motor (ausência/folga/horário). Em caso de sucesso, `horario` é preenchido com a janela de trabalho do dia.
+2. **Sala sem sobreposição** — procura outra `Consulta` ativa (`estado: { $nin: ['cancelada','faltou','nao_compareceu'] }`) com `sala_id` igual e sobreposição de intervalos (`inicio < data_hora_fim_existente AND fim > data_hora_inicio_existente`). Se houver, gera um warning com o nome do paciente e fisio conflitantes + janela temporal.
+3. **Fisioterapeuta sem sobreposição** — mesmo filtro, com `fisioterapeuta_id` igual. Warning com o nome do paciente e sala.
+4. **Paciente sem sobreposição** — mesmo filtro, com `paciente_id` igual. O paciente não pode ter 2 consultas em paralelo. Warning com o nome do fisio e sala.
+
+> **Parâmetro `excluirConsultaId`:** passado pelo `PUT /:id` (atualização) para excluir a própria consulta da verificação — caso contrário, atualizar a duração de uma consulta geraria sempre um "conflito" consigo mesma.
+
+### Soft block (padrão de conflitos)
+
+O comportamento do controller em `criarConsulta` e `atualizarConsulta` segue o padrão **soft block**:
+
+- **Sem `forcar: true`** e há conflitos → **`409 Conflict`** com `{ erro, conflitos: string[] }`. A marcação é recusada; o frontend mostra os warnings e pode optar por forçar.
+- **Com `forcar: true`** e há conflitos → a marcação é criada/atualizada com sucesso, devolvendo **`200 OK`** (não 201) com `{ consulta, warning: 'Consulta criada/atualizada com conflitos (forçado).', conflitos: string[] }`. O gestor pode forçar marcações em situações excecionais (ex.: 2 pacientes em grupo na mesma sala, sobreposição curta por atraso de um fisio).
+- **Sem conflitos** → `201 Created` (POST) ou `200 OK` (PUT) com `{ consulta }`.
+
+> **Auditoria:** em ambos os casos (forçado ou não), o `criarConsulta`/`atualizarConsulta` regista a ação em `utils/auditoria.js` (`acao: 'criar'`/`'atualizar'`, `recurso: 'consulta'`). O campo `detalhes.conflitos_forcados: true` sinaliza as marcações forçadas — útil para auditoria posterior.
+
+### Validação em tempo real (frontend)
+
+O endpoint `GET /api/gestor/consultas/validar` (função `validarConflitosEndpoint`) expõe a mesma função `validarConflitos` sem criar a consulta — usado pelo frontend para mostrar warnings em tempo real no modal de criar/editar (debounce 400ms antes de submeter).
 
 ---
 
@@ -1035,6 +1118,184 @@ Atualiza um horário existente.
 
 ---
 
+### 6.14. Consultas (`/api/gestor/consultas`) — F4
+
+> **Auth:** JWT (strito, sem fallback legacy). Todas as rotas protegidas por `auth` (em `consultaRoutes.js`).
+>
+> **Permissões (F4):**
+> - `podeVer` (middleware custom) — todos os 4 roles (`admin`, `diretor_clinico`, `fisioterapeuta`, `rececionista`) podem aceder a `GET /` (listar), `GET /:id` (detalhe) e `GET /validar` (verificador de conflitos em tempo real). Como o Express não tem middleware "OR" nativo entre `isClinico` e `isRececionista`, define-se um `podeVer` inline que valida `req.user.role` contra o conjunto dos 4 roles. O fisioterapeuta vê apenas as suas próprias consultas (filtro `fisioterapeuta_id = req.user.id` aplicado no controller); os restantes roles vêem todas as consultas da empresa.
+> - `isRececionista` (admin + diretor_clinico + rececionista) — `POST` e `PUT` (marcações: data/duração/tipo/estado/presenca/observacoes). Todos podem marcar; o fisioterapeuta **não** pode criar/editar marcações.
+> - `isClinico` (admin + diretor_clinico + fisioterapeuta) — `PATCH /:id/nota-clinica` (SOAP). Endpoint **separado** do `PUT` geral precisamente porque tem permissões diferentes (o PUT é da rececionista; o PATCH da SOAP é do clínico). O fisioterapeuta só pode editar notas das suas próprias consultas.
+> - `isDiretorClinico` (admin + diretor_clinico) — `DELETE /:id` (eliminação). Só diretor/admin podem eliminar marcações erradas.
+>
+> **Imutabilidade de concluídas (RGPD):** consultas com `estado: 'concluida'` **não podem ser eliminadas** (403 — preservar nota clínica SOAP) e a sua `nota_clinica` **não pode ser editada** via PUT (403) nem via PATCH `/nota-clinica` (403). Para "anular" uma consulta concluída deve usar-se o cancelamento. O `DELETE` só serve para eliminar marcações erradas (`marcada`/`cancelada`/`faltou`/`nao_compareceu`) — hard delete, sem soft delete (a `Consulta` não tem `eliminado_em`).
+>
+> **Cédula obrigatória:** o `PATCH /:id/nota-clinica` valida que o assinante tem cédula profissional válida (`Utilizador.temCedulaValida()`) — caso contrário, 403. O nº de cédula é guardado como snapshot em `nota_clinica.cedula_assinante` (auditoria legal).
+>
+> **Validação de conflitos (soft block):** `POST` e `PUT` invocam a função interna `validarConflitos` (ver secção 3.5). Sem `forcar: true` e com conflitos → 409. Com `forcar: true` → 200 com `warning` + `conflitos`. O `PUT` re-valida apenas se algum campo temporal mudar (`data_hora_inicio`, `duracao_minutos`, `fisioterapeuta_id`, `sala_id`, `paciente_id`), excluindo a própria consulta.
+>
+> **Auditoria:** todas as mutações registam em `utils/auditoria.js` (`recurso: 'consulta'`, `acao: 'criar' | 'atualizar' | 'atualizar_nota_clinica' | 'eliminar'`). As marcações forçadas (`forcar: true` com conflitos) ficam sinalizadas em `detalhes.conflitos_forcados: true`.
+
+#### `GET /api/gestor/consultas`
+Lista consultas da empresa do utilizador autenticado.
+
+- **Auth:** JWT + `podeVer` (4 roles). Fisioterapeuta vê só as suas (filtro `fisioterapeuta_id = req.user.id`).
+- **Query params (opcionais):**
+  - `fisioterapeuta_id` — filtra por fisioterapeuta (ignorado se o `req.user.role === 'fisioterapeuta'`, que vê só as suas).
+  - `sala_id` — filtra por sala (Propriedade alias Sala).
+  - `paciente_id` — filtra por paciente.
+  - `estado` — filtra por estado (`marcada`/`confirmada`/`em_curso`/`concluida`/`cancelada`/`faltou`/`nao_compareceu`).
+  - `inicio` (`yyyy-mm-dd` | ISO) — `data_hora_inicio >= inicio`.
+  - `fim` (`yyyy-mm-dd` | ISO) — `data_hora_inicio <= fim`.
+  - `limit` — default `200`, máx `500`.
+- **Ordenação:** `data_hora_inicio` (asc).
+- **Populate:** `fisioterapeuta_id` → `{ nome, email, perfil_profissional.cor_calendario }`; `sala_id` → `{ nome }`; `paciente_id` → `{ nome, telefone }`; `criada_por` → `{ nome }`.
+- **Resposta (200 OK):**
+```json
+{
+  "consultas": [
+    {
+      "_id": "...",
+      "empresa_id": "...",
+      "sala_id": { "_id": "...", "nome": "Sala 1" },
+      "fisioterapeuta_id": { "_id": "...", "nome": "João Fisioterapeuta", "email": "...", "perfil_profissional": { "cor_calendario": "#3b82f6" } },
+      "paciente_id": { "_id": "...", "nome": "Ana Silva", "telefone": "912345678" },
+      "data_hora_inicio": "2025-01-15T10:00:00.000Z",
+      "data_hora_fim": "2025-01-15T10:45:00.000Z",
+      "duracao_minutos": 45,
+      "tipo": "sessao",
+      "estado": "marcada",
+      "presenca": "pendente",
+      "nota_clinica": { "subjetivo": "", "objetivo": "", "avaliacao": "", "plano": "", "tratamento_efetuado": "", "cedula_assinante": "" },
+      "criada_por": { "_id": "...", "nome": "Maria Rececionista" },
+      "observacoes": "",
+      "concluida_em": null,
+      "cancelada_em": null,
+      "lembrete_24h_enviado": false,
+      "lembrete_2h_enviado": false,
+      "createdAt": "...",
+      "updatedAt": "..."
+    }
+  ],
+  "total": 12
+}
+```
+- **Erros:** `401` não autenticado; `403` role sem permissão; `500` erro interno.
+
+#### `GET /api/gestor/consultas/validar`
+Valida conflitos para uma consulta proposta **sem a criar** — usado pelo frontend para mostrar warnings em tempo real no modal de criar/editar (debounce antes de submeter). **Nota:** esta rota está registada **antes** de `GET /:id` para não ser apanhada como path param.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Query params (obrigatórios):**
+  - `fisioterapeuta_id`, `sala_id`, `paciente_id`, `data_hora_inicio` (ISO string).
+- **Query params (opcionais):**
+  - `duracao_minutos` — default `45`.
+  - `excluir_id` — ObjectId da consulta sendo editada (modo edição, para excluir a própria consulta da verificação).
+- **Resposta (200 OK):**
+```json
+{
+  "ok": false,
+  "conflitos": [
+    "Fisioterapeuta: Folga fixa semanal (Terça).",
+    "Sala ocupada: sobreposição com consulta de \"Ana Silva\" (fisio: João Fisioterapeuta) das 15/1/2025 10:00 às 10:45."
+  ],
+  "horario": { "hora_inicio": "09:00", "hora_fim": "13:00" }
+}
+```
+  - `ok: true` quando não há warnings. `conflitos` é `[]` nesse caso. `horario` é a janela de trabalho do fisio no dia (ou `null` se indisponível).
+- **Erros:** `400` `fisioterapeuta_id`/`sala_id`/`paciente_id`/`data_hora_inicio` em falta; `401` não autenticado; `500` erro.
+
+#### `GET /api/gestor/consultas/:id`
+Devolve o detalhe de uma consulta.
+
+- **Auth:** JWT + `podeVer` (4 roles). Fisioterapeuta só vê as suas (403 caso contrário).
+- **Populate:** `fisioterapeuta_id` → `{ nome, email, perfil_profissional }`; `sala_id` → `{ nome }`; `paciente_id` → `{ nome, telefone, email, data_nascimento }`; `criada_por` → `{ nome }`; `cancelada_por` → `{ nome }`.
+- **Resposta (200 OK):** `{ "consulta": { ... } }` (com todos os populados).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` fisioterapeuta a tentar ver consulta de outro; `404` não encontrada / não pertence à empresa; `500` erro.
+
+#### `POST /api/gestor/consultas`
+Cria uma nova consulta.
+
+- **Auth:** JWT + `isRececionista` (admin + diretor_clinico + rececionista).
+- **Body:**
+```json
+{
+  "fisioterapeuta_id": "65f...",
+  "sala_id": "65f...",
+  "paciente_id": "65f...",
+  "data_hora_inicio": "2025-01-15T10:00:00.000Z",
+  "duracao_minutos": 45,
+  "tipo": "sessao",
+  "observacoes": "Primeira sessão pós-avaliação.",
+  "forcar": false
+}
+```
+  - `fisioterapeuta_id`, `sala_id`, `paciente_id`, `data_hora_inicio` — **obrigatórios**.
+  - `duracao_minutos` — default `45`, `min: 15`.
+  - `tipo` — default `'sessao'` (`enum: ['primeira_consulta','sessao','reavaliacao','alta','grupo']`).
+  - `observacoes` — default `''` (string, trimmed).
+  - `forcar` — default `false`. Se `true`, ignora warnings de conflito (soft block — ver secção 3.5).
+- **Validações:**
+  - `data_hora_inicio` não pode ser no passado.
+  - `fisioterapeuta_id` tem de ser fisioterapeuta/diretor_clinico ativo (não eliminado) da mesma empresa.
+  - `sala_id` tem de ser uma `Propriedade` ativa da empresa.
+  - `paciente_id` tem de ser um `Paciente` não eliminado da empresa.
+  - `validarConflitos` (fisio + sala + paciente em simultâneo — ver secção 3.5).
+- **Resposta:**
+  - **`201 Created`** — `{ "consulta": { ... } }` (criada sem conflitos).
+  - **`200 OK`** — `{ "consulta": { ... }, "warning": "Consulta criada com conflitos (forçado).", "conflitos": string[] }` (criada com `forcar: true` e conflitos).
+- **Auditoria:** registada (`acao: 'criar'`, `recurso: 'consulta'`, `detalhes.conflitos_forcados: true` se aplicável).
+- **Erros:** `400` campos em falta / `data_hora_inicio` no passado / `duracao_minutos < 15` / fisio/sala/paciente não encontrados / `ValidationError`; `401` não autenticado; `403` role sem permissão; `409` conflitos e `forcar: false` (`{ "erro": "Conflitos detetados. Confirma com forcar=true para ignorar.", "conflitos": string[] }`); `500` erro.
+
+#### `PUT /api/gestor/consultas/:id`
+Atualiza uma consulta (marcações: data, duração, tipo, estado, presenca, observacoes). Re-valida conflitos se algum campo temporal mudar.
+
+- **Auth:** JWT + `isRececionista` (admin + diretor_clinico + rececionista).
+- **Body (todos opcionais, mas pelo menos um):** `fisioterapeuta_id`, `sala_id`, `paciente_id`, `data_hora_inicio`, `duracao_minutos`, `tipo`, `estado`, `presenca`, `motivo_cancelamento`, `observacoes`, `forcar`.
+  - Se `estado='concluida'` → `concluida_em` é preenchida com `now()` (se ainda não estava).
+  - Se `estado='cancelada'` → `cancelada_em` é preenchida com `now()` e `cancelada_por` com `req.user.id` (se `motivo_cancelamento` vier, é guardado).
+  - **`nota_clinica` é rejeitada neste endpoint** (400) — deve ser atualizada via `PATCH /:id/nota-clinica` (porque tem permissões diferentes).
+- **Re-validação de conflitos:** se algum campo temporal mudar (`data_hora_inicio`, `duracao_minutos`, `fisioterapeuta_id`, `sala_id`, `paciente_id`), invoca `validarConflitos` com `excluirConsultaId = consulta._id` (excluir a própria consulta).
+- **Resposta:**
+  - **`200 OK`** — `{ "consulta": { ... } }` (atualizada sem conflitos novos).
+  - **`200 OK`** — `{ "consulta": { ... }, "warning": "Consulta atualizada com conflitos (forçado).", "conflitos": string[] }` (atualizada com `forcar: true` e novos conflitos).
+- **Auditoria:** registada (`acao: 'atualizar'`, `recurso: 'consulta'`).
+- **Erros:** `400` ID inválido / `nota_clinica` no body (deve ir para o PATCH) / `ValidationError`; `401` não autenticado; `403` role sem permissão / consulta concluída a tentar editar nota clínica (imutável); `404` não encontrada; `409` novos conflitos e `forcar: false`; `500` erro.
+
+#### `PATCH /api/gestor/consultas/:id/nota-clinica`
+Atualiza a nota clínica SOAP de uma consulta. **Endpoint separado** do `PUT` geral (porque tem permissões diferentes — `isClinico` em vez de `isRececionista`).
+
+- **Auth:** JWT + `isClinico` (admin + diretor_clinico + fisioterapeuta).
+- **Regras:**
+  - Consulta concluída → **403** (nota imutável — RGPD/legal).
+  - Fisioterapeuta só pode editar notas das suas próprias consultas (`consulta.fisioterapeuta_id === req.user.id`) → 403 caso contrário.
+  - O assinante tem de ter cédula profissional válida (`Utilizador.temCedulaValida()`) — 403 caso contrário. Para `admin`/`rececionista` o método devolve sempre `true` (mas o endpoint exige `isClinico`, pelo que `rececionista` não chega aqui). Para `fisioterapeuta`/`diretor_clinico` exige `perfil_profissional.cedula` preenchido.
+- **Body (todos opcionais, mas pelo menos um):**
+```json
+{
+  "subjetivo": "Dor lombar ao levantar.",
+  "objetivo": "ROM reduzida em flexão.",
+  "avaliacao": "Lombalgia mecânica.",
+  "plano": "Exercícios de Mobility + sessões 2x/sem.",
+  "tratamento_efetuado": "Mobilização lombar + stretching."
+}
+```
+- **Snapshot da cédula:** ao guardar, `nota_clinica.cedula_assinante` é preenchida com `perfil_profissional.cedula` do assinante (auditoria legal — garante rastreabilidade de quem assinou).
+- **Resposta (200 OK):** `{ "consulta": { ... } }` (com `nota_clinica` atualizada e `cedula_assinante` preenchida).
+- **Auditoria:** registada (`acao: 'atualizar_nota_clinica'`, `recurso: 'consulta'`).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` consulta concluída / fisioterapeuta a editar nota de outro / sem cédula válida; `404` não encontrada; `500` erro.
+
+#### `DELETE /api/gestor/consultas/:id`
+**Hard delete** da consulta (a `Consulta` não tem soft delete — para "anular" uma consulta concluída usa-se o cancelamento). Apenas para eliminar marcações erradas (`marcada`/`cancelada`/`faltou`/`nao_compareceu`).
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Bloqueio RGPD:** consultas com `estado='concluida'` são **bloqueadas** (403 — "Não é possível eliminar uma consulta concluída (RGPD — nota clínica é imutável). Cancela em vez de eliminar."). A nota clínica SOAP de uma consulta concluída é um documento legal que tem de ser preservado.
+- **Resposta (200 OK):** `{ "message": "Consulta eliminada." }`.
+- **Auditoria:** registada (`acao: 'eliminar'`, `recurso: 'consulta'`, `descricao: "Consulta eliminada (estado anterior: X)"`).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` role sem permissão / consulta concluída (RGPD); `404` não encontrada; `500` erro.
+
+---
+
 ## 7. Deploy no Render
 
 | Definição        | Valor                        |
@@ -1066,6 +1327,7 @@ Atualiza um horário existente.
 
 | Data       | Versão | Alteração                                                            |
 |------------|--------|----------------------------------------------------------------------|
+| **F4**     | —      | **Consultas + validação de conflitos + cédula profissional:** (1) Novo modelo `models/Consulta.js` — `empresa_id`, `sala_id` (`ref: 'Propriedade'` alias Sala até F8), `fisioterapeuta_id` (`ref: 'Utilizador'`), `paciente_id` (`ref: 'Paciente'`), `data_hora_inicio`/`data_hora_fim` (Date), `duracao_minutos` (default `45`, `min: 15`), `tipo` (`enum ['primeira_consulta','sessao','reavaliacao','alta','grupo']` default `'sessao'`), `estado` (`enum ['marcada','confirmada','em_curso','concluida','cancelada','faltou','nao_compareceu']` default `'marcada'`), `motivo_cancelamento` (`enum ['paciente','clinica','fisio','outro']`), `presenca` (`enum ['pendente','presente','ausente','atrasado']`), `nota_clinica` (`{subjetivo, objetivo, avaliacao, plano, tratamento_efetuado, protocolo_aplicado[], cedula_assinante}` — imutável após `estado='concluida'`), `criada_por`, `concluida_em`, `cancelada_em`, `cancelada_por`, `lembrete_24h_enviado`, `lembrete_2h_enviado`, `observacoes`. Índices compostos `{empresa_id, fisioterapeuta_id, data_hora_inicio}`, `{empresa_id, sala_id, data_hora_inicio}`, `{empresa_id, paciente_id, data_hora_inicio (-1)}`, `{estado, data_hora_inicio}`. (2) `models/Utilizador.js` — adicionado método de instância `temCedulaValida()` (devolve `true` para admin/rececionista; para fisio/diretor_clinico exige `perfil_profissional.cedula` preenchido). (3) Novo `controllers/consultaController.js` — função interna `validarConflitos` (4 verificações em simultâneo: fisio disponível via motor F3 + sala sem sobreposição + fisio sem sobreposição + paciente sem sobreposição, devolve `{ok, warnings, horario}`); 7 funções exportadas (`listarConsultas` com filtros fisioterapeuta_id/sala_id/paciente_id/estado/inicio/fim + fisio vê só as suas, `obterConsulta`, `criarConsulta` com `forcar` para soft block 409/200, `atualizarConsulta` com re-validação temporal + `excluirConsultaId`, `atualizarNotaClinica` endpoint separado com `isClinico` + validação de cédula + snapshot de `cedula_assinante`, `eliminarConsulta` bloqueia concluídas RGPD, `validarConflitosEndpoint` GET para o frontend validar em tempo real); auditoria registada (`recurso: 'consulta'`). (4) Novas `routes/consultaRoutes.js` montadas em `/api/gestor/consultas` — middleware custom `podeVer` (4 roles) para GET/listar/validar/detalhe, `isRececionista` para POST/PUT, `isClinico` para `PATCH /:id/nota-clinica`, `isDiretorClinico` para DELETE. (5) `server.js` — mount `app.use('/api/gestor/consultas', consultaRoutes)`. 176/176 testes ✓ (+25 testes de Consulta: CRUD, validação de conflitos fisio/sala/paciente, soft block com `forcar`, nota clínica SOAP com cédula, imutabilidade de concluídas, RGPD no delete). |
 | **F3**     | —      | **Horários de Fisioterapeuta + motor de disponibilidade:** (1) Novo modelo `models/HorarioFisioterapeuta.js` — `empresa_id`, `fisioterapeuta_id`, `tipo` (`enum ['recorrente','excecao']` default `'recorrente'`), `dia_semana` (0-6, `null` se `excecao`), `hora_inicio`/`hora_fim` (formato `HH:mm` validado por regex), `data` (Date, `null` se `recorrente`), `disponivel` (boolean default `true` — para `excecao`), `ativo` (boolean default `true` indexado — soft toggle), `nota` (string). Validação `pre('validate')`: `recorrente` exige `dia_semana` e força `data=null`; `excecao` exige `data` e força `dia_semana=null`. Índices compostos `{fisioterapeuta_id, dia_semana, ativo}`, `{empresa_id, fisioterapeuta_id, tipo}`, `{fisioterapeuta_id, data}`. (2) `utils/disponibilidade.js` expandido — adicionadas `horaLisboa(instante)` (devolve `HH:mm` no fuso de Lisboa via `Intl.DateTimeFormat`), `compararHoras(a, b)` (compara `HH:mm` em minutos), `obterHorarioDia(fisioId, data)` (3 sub-camadas: exceção do dia → regra recorrente → sem horário), `verificarConflitoHorario(fisioId, dataHoraInicio, duracaoMin)` (valida se a consulta cabe no bloco de trabalho), `verificarDisponibilidadeCompleta(utilizador, dataHoraInicio, duracaoMin)` (ausência aprovada → folga fixa semanal → horário de trabalho, com falha cedo). (3) Novo `controllers/horarioController.js` — CRUD completo (`listarHorarios`, `obterHorario`, `criarHorario`, `atualizarHorario`, `eliminarHorario` hard delete, `verificarDisponibilidade`); valida `fisioterapeuta_id` como fisio/diretor_clinico ativo da empresa; fisioterapeuta vê só os seus; auditoria registada. (4) Novas `routes/horarioRoutes.js` montadas em `/api/gestor/horarios` — middleware custom `podeVer` (4 roles) para GET/listar/disponibilidade, `isDiretorClinico` para POST/PUT/DELETE. (5) `server.js` — mount `app.use('/api/gestor/horarios', horarioRoutes)`. 151/151 testes ✓ (+21 testes de Horário: CRUD, permissões, motor de disponibilidade com exceções, conflitos de horário, dia sem regra). |
 | **F2**     | —      | **Pacientes (Fisioterapia):** (1) Novo modelo `models/Paciente.js` — `empresa_id`, `nome`, `data_nascimento`, `genero` (`enum ['M','F','Outro','NA']` default `'NA'`), `num_utente` (SNS), `nif`, `telefone` (obrigatório), `email`, `morada`, `contacto_emergencia` (`{nome, telefone, relacao}`), `historico_medico`, `alergias` (`[String]`), `consentimento_dados` (`{concedido, data, versao_termos}`), `ativo`, `eliminado_em` (soft delete), `observacoes`, `origem` (`enum ['walk_in','referenciacao','online','outro']` default `'walk_in'`). Índices compostos `{empresa_id, nome}`, `{empresa_id, num_utente}`, `{empresa_id, ativo, eliminado_em}`. (2) Novo `controllers/pacienteController.js` — CRUD completo (`listarPacientes`, `obterPaciente`, `criarPaciente`, `atualizarPaciente`, `eliminarPaciente` soft delete, `alternarEstadoPaciente`) + helpers `temAcessoClinico` e `sanitizarParaNaoClinico` (remove `historico_medico`/`alergias`/`contacto_emergencia` para rececionistas) + auditoria via `utils/auditoria.js`. (3) Novas `routes/pacienteRoutes.js` montadas em `/api/gestor/pacientes` — middleware custom `podeVer` (4 roles) para GET/POST/PUT, `isRececionista` para `PATCH /:id/estado`, `isDiretorClinico` para `DELETE /:id` (soft delete). (4) `server.js` — mount `app.use('/api/gestor/pacientes', pacienteRoutes)`. Respostas incluem flag `dados_clinicos: boolean`. 130/130 testes ✓ (+19 testes de Paciente). |
 | **F1**     | —      | **Migração de roles (Fisioterapia):** (1) Modelo `Utilizador` — enum migrado de `['admin','manager','staff']` para `['admin','diretor_clinico','fisioterapeuta','rececionista']` (default `'rececionista'`); adicionado bloco `perfil_profissional` (`cedula`, `especialidades`, `biografia`, `cor_calendario` default `'#3b82f6'`, `ativo_clinico` default `true`). (2) Modelo `Empresa` — adicionado `logo_url` e bloco `config` (`horario_padrao`, `duracao_consulta_padrao` default `45`/min `15`, `tolerancia_atraso_min` default `10`, `fuso_horario` default `'Europe/Lisbon'`). (3) `middleware/requireRole.js` — removidos `isGestor`/`requireStaff`/`requireManager`/`requireAdmin` (legacy); adicionados `isAdmin` (só admin), `isDiretorClinico` (admin+diretor_clinico), `isClinico` (admin+diretor_clinico+fisioterapeuta), `isRececionista` (admin+diretor_clinico+rececionista). (4) `utils/loadBalancer.js` + controllers — queries de role: `'staff'` → `'fisioterapeuta'`; `'gestor'` → `'diretor_clinico'`; `['staff','gestor']` → `['fisioterapeuta','diretor_clinico']`; `isGestor` → `isDiretorClinico` em todas as routes (`gestorRoutes.js`, `ausenciaRoutes.js`). (5) `setupClienteZero` atualizado: 3 utilizadores (`admin@fisiocell.pt` admin, `gestor@fisiocell.pt` diretor_clinico, `joao.fisio@fisiocell.pt` fisioterapeuta). 111/111 testes ✓. |

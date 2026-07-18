@@ -284,6 +284,70 @@ export interface DisponibilidadeResponse {
   origem: "excecao" | "recorrente" | null;
 }
 
+// F4 — Consulta
+export type EstadoConsulta =
+  | "marcada"
+  | "confirmada"
+  | "em_curso"
+  | "concluida"
+  | "cancelada"
+  | "faltou"
+  | "nao_compareceu";
+
+export type TipoConsulta =
+  | "primeira_consulta"
+  | "sessao"
+  | "reavaliacao"
+  | "alta"
+  | "grupo";
+
+export interface ConsultaDTO {
+  _id: string;
+  empresa_id: string;
+  sala_id: string | { _id: string; nome: string };
+  fisioterapeuta_id: string | {
+    _id: string;
+    nome: string;
+    email: string;
+    perfil_profissional?: { cor_calendario?: string; cedula?: string };
+  };
+  paciente_id: string | { _id: string; nome: string; telefone: string };
+  data_hora_inicio: string;
+  data_hora_fim: string;
+  duracao_minutos: number;
+  tipo: TipoConsulta;
+  estado: EstadoConsulta;
+  presenca: "pendente" | "presente" | "ausente" | "atrasado";
+  motivo_cancelamento?: string | null;
+  nota_clinica?: {
+    subjetivo: string;
+    objetivo: string;
+    avaliacao: string;
+    plano: string;
+    tratamento_efetuado: string;
+    cedula_assinante: string;
+  };
+  criada_por: string | { _id: string; nome: string };
+  concluida_em?: string | null;
+  cancelada_em?: string | null;
+  observacoes?: string;
+  lembrete_24h_enviado?: boolean;
+  lembrete_2h_enviado?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ConsultaListResponse {
+  consultas: ConsultaDTO[];
+  total: number;
+}
+
+export interface ValidarConflitosResponse {
+  ok: boolean;
+  conflitos: string[];
+  horario?: { hora_inicio: string; hora_fim: string } | null;
+}
+
 export interface AusenciaDTO {
   _id: string;
   utilizador_id: string;

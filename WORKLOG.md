@@ -1177,3 +1177,134 @@ Stage Summary:
 - **Nota**: a 4.ª camada (conflito com consultas já marcadas) será implementada em F4 (Consulta). Por agora, o motor valida disponibilidade do fisioterapeuta mas não conflitos de sala/paciente.
 - **Nota**: Propriedade→Sala foi adiada (o modelo Propriedade mantém-se, será renomeado em F8 de limpeza). O foco da F3 foi o motor de disponibilidade.
 - **Próximo passo:** F4 (Consulta de Tarefa + CRUD de marcação + validação de conflitos sala+fisio+paciente).
+
+
+---
+Task ID: DOC-F4
+Agent: general-purpose
+Task: Atualização de documentação para F4 (Consultas + validação de conflitos + cédula profissional)
+
+Work Log:
+- Lido `WORKLOG.md` (1179 linhas, últimas entradas DOC-F3/F3) e `docs/ARQUITETURA.md` (389 linhas) para contexto.
+- Confirmado estado pós-F4 no código: `backend/models/Consulta.js` (empresa_id, sala_id ref Propriedade alias Sala, fisioterapeuta_id ref Utilizador, paciente_id ref Paciente, data_hora_inicio/data_hora_fim Date, duracao_minutos default 45 min 15, tipo enum ['primeira_consulta','sessao','reavaliacao','alta','grupo'] default 'sessao', estado enum ['marcada','confirmada','em_curso','concluida','cancelada','faltou','nao_compareceu'] default 'marcada', motivo_cancelamento enum ['paciente','clinica','fisio','outro'] default null, presenca enum ['pendente','presente','ausente','atrasado'] default 'pendente', nota_clinica {subjetivo, objetivo, avaliacao, plano, tratamento_efetuado, protocolo_aplicado[] {nome, items[{texto, concluido}]}, cedula_assinante}, criada_por ref Utilizador, concluida_em, cancelada_em, cancelada_por ref Utilizador, lembrete_24h_enviado, lembrete_2h_enviado, observacoes; índices {empresa_id, fisioterapeuta_id, data_hora_inicio}, {empresa_id, sala_id, data_hora_inicio}, {empresa_id, paciente_id, data_hora_inicio -1}, {estado, data_hora_inicio}); `backend/models/Utilizador.js` (método de instância `temCedulaValida()` — true para admin/rececionista, exige `perfil_profissional.cedula` para fisio/diretor_clinico); `backend/controllers/consultaController.js` (função interna `validarConflitos` 4 dimensões + 7 funções exportadas: `listarConsultas` com filtros fisioterapeuta_id/sala_id/paciente_id/estado/inicio/fim + fisio vê só as suas, `obterConsulta`, `criarConsulta` com `forcar` soft block 409/200, `atualizarConsulta` com re-validação temporal + excluirConsultaId, `atualizarNotaClinica` endpoint separado isClinico + validação cédula + snapshot cedula_assinante, `eliminarConsulta` bloqueia concluídas RGPD hard delete, `validarConflitosEndpoint` GET para tempo real; auditoria recurso 'consulta'); `backend/routes/consultaRoutes.js` (podeVer 4 roles para GET, isRececionista para POST/PUT, isClinico para PATCH /:id/nota-clinica, isDiretorClinico para DELETE); `backend/server.js` mount `/api/gestor/consultas`; `frontend/src/app/gestor/consultas/page.tsx` (lista cartões + modal criar/editar com debounce 400ms + modal detalhe SOAP + ações rápidas Confirmar/Concluir/Eliminar); `frontend/src/lib/api.ts` (EstadoConsulta, TipoConsulta, ConsultaDTO, ConsultaListResponse, ValidarConflitosResponse); `frontend/src/components/gestor/gestor-sidebar.tsx` (item Consultas, ícone CalendarPlus, entre Calendário e Tarefas).
+
+- **docs/BACKEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 2 (Estrutura): adicionado `consultaController.js` à árvore de controllers; `Consulta.js` à árvore de models (com nota "substitui Tarefa; conflitos + SOAP + cédula"); `consultaRoutes.js` à árvore de routes; nota "temCedulaValida() (F4)" no Utilizador.js. Atualizada contagem "7 coleções" → "8 coleções" na secção 3.1.
+  - Secção 3.1: nova subsecção `Consulta` (após `HorarioFisioterapeuta`) — nota F4 sobre 3 eixos (fisio/sala/paciente) e 4 dimensões de conflito; tabela completa de campos (empresa_id, sala_id ref Propriedade alias Sala, fisioterapeuta_id, paciente_id, data_hora_inicio, data_hora_fim, duracao_minutos, tipo, estado, motivo_cancelamento, presenca, nota_clinica, criada_por, concluida_em, cancelada_em, cancelada_por, lembrete_24h_enviado, lembrete_2h_enviado, observacoes); sub-tabela `nota_clinica` (subjetivo, objetivo, avaliacao, plano, tratamento_efetuado, protocolo_aplicado[], cedula_assinante) com nota sobre imutabilidade e snapshot de cédula; lista de 4 índices compostos; nota de permissões (podeVer/isRececionista/isClinico/isDiretorClinico) + nota de imutabilidade de concluídas (RGPD) com citação exata da mensagem 403.
+  - Secção 3.1 (`Utilizador`): adicionada nota F4 sobre o método de instância `temCedulaValida()` (lógica, casos por role, obrigatoriedade para SOAP/faturação).
+  - Secção 3.4: mantida nota "a 4.ª camada (conflito com consultas já marcadas) será adicionada em F4" — atualizada para referir que está implementada na nova secção 3.5.
+  - Secção 3.5 (nova) — Validação de Conflitos — F4: documentação da função interna `validarConflitos` (4 verificações em simultâneo: fisio disponível via motor F3, sala sem sobreposição, fisio sem sobreposição, paciente sem sobreposição; filtro de consultas ativas `estado: { $nin: ['cancelada','faltou','nao_compareceu'] }`; parâmetro `excluirConsultaId` para modo edição); documentação do soft block (409 sem `forcar`, 200 com warning se `forcar: true`, 201/200 sem conflitos); nota de auditoria (`detalhes.conflitos_forcados: true`); nota sobre o endpoint `GET /validar` para validação em tempo real no frontend (debounce 400ms).
+  - Secção 6 (API): nova secção 6.14 — Consultas (`/api/gestor/consultas`). Bloco de permissões (podeVer/isRececionista/isClinico/isDiretorClinico), bloco de imutabilidade RGPD (403 em DELETE/PUT/PATCH para concluídas), bloco de cédula obrigatória (`temCedulaValida()` + snapshot `cedula_assinante`), bloco de soft block (409/200/201), nota de auditoria. Documentados 7 endpoints: GET / (lista com query params fisioterapeuta_id/sala_id/paciente_id/estado/inicio/fim/limit + populate + exemplo JSON), GET /validar (verificador com query params fisioterapeuta_id/sala_id/paciente_id/data_hora_inicio/duracao_minutos/excluir_id + resposta {ok, conflitos[], horario}), GET /:id (detalhe com 5 populates), POST / (criar com body exemplo + validações + 201/200/409/400), PUT /:id (atualizar com re-validação temporal + rejeição de nota_clinica no body), PATCH /:id/nota-clinica (endpoint separado isClinico + regras de imutabilidade/autoridade/cédula + snapshot de cédula), DELETE /:id (hard delete + bloqueio RGPD de concluídas). Cada um com auth, body, resposta, erros, auditoria.
+  - Secção 9 (Histórico): nova entrada F4 no topo do changelog descrevendo os 5 grupos de alterações (modelo Consulta + 4 índices; método temCedulaValida no Utilizador; controller consultaController com validarConflitos + 7 funções; routes consultaRoutes com 4 middlewares; mount em server.js). 176/176 testes ✓ (+25 testes de Consulta).
+
+- **docs/FRONTEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 3 (Rotas): adicionada linha `/gestor/consultas` à tabela (Consultas F4 — lista de cartões, modal criar/editar com validação de conflitos em tempo real debounce 400ms, modal detalhe com SOAP editável, ações rápidas Confirmar/Concluir/Eliminar).
+  - Secção 11 (`lib/api.ts`): adicionado bullet `EstadoConsulta`/`TipoConsulta`/`ConsultaDTO`/`ConsultaListResponse`/`ValidarConflitosResponse` (F4) — espelham o modelo `Consulta` + resposta do verificador; `sala_id`/`fisioterapeuta_id`/`paciente_id`/`criada_por` como `string | { _id, ... }` (populate); `nota_clinica` opcional; `ValidarConflitosResponse` = `{ ok, conflitos[], horario? }`.
+  - Secção 11: nova subsecção `/gestor/consultas (Client Component) — F4` (após `/gestor/equipa/horarios`). Nota sobre item de sidebar (gestor-sidebar.tsx, href /gestor/consultas, ícone CalendarPlus do lucide-react, entre Calendário e Tarefas). Documentação da lista de cartões (paciente/fisio/sala/data/estado/tipo/indicador SOAP), modal criar/editar com validação de conflitos em tempo real (debounce 400ms + `excluir_id` no modo edição), submissão com soft block (409 → modal "Forçar Agendamento?" → reenvio com `forcar: true`), modal de detalhe com SOAP editável (S/O/A/P + tratamento_efetuado) via PATCH /:id/nota-clinica (só isClinico; imutável se concluída), ações rápidas Confirmar/Concluir/Eliminar, permissões client-side, estados visuais (loading/erro/vazio), tipos F4.
+  - Secção 13 (Histórico): nova entrada F4 no topo do changelog descrevendo os 3 grupos de alterações (página /gestor/consultas; tipos EstadoConsulta/TipoConsulta/ConsultaDTO/ConsultaListResponse/ValidarConflitosResponse em lib/api.ts; item Consultas no gestor-sidebar com ícone CalendarPlus). Lint + tsc + build ✓ (rota /gestor/consultas = 5.6 kB).
+
+- **docs/ARQUITETURA.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Banner topo: "acompanha as fases F0, F1, F2 e F3" → "acompanha as fases F0, F1, F2, F3 e F4" (com descrição "`Consulta` + validação de conflitos + cédula profissional + nota clínica SOAP imutável").
+  - Secção 4 (Mapa de Migração): linhas do `Tarefa` → `Consulta` e `TarefaArquivo` → `ConsultaArquivo` marcadas com "F4 ✅" (era "F4").
+  - Secção 5.4 `Consulta`: título "F4 (substitui Tarefa)" → "✅ F4 concluído (substitui Tarefa)"; schema reescrito para refletir a implementação real (sala_id ref 'Propriedade' alias Sala em vez de ref 'Sala'; fisioterapeuta_id obrigatório em vez de default null; data_hora dividida em data_hora_inicio + data_hora_fim; duracao_minutos default 45 em vez de 60; enum tipo com 'sessao' e 'grupo'; enum estado com 'marcada' em vez de 'agendada' + 'nao_compareceu'; motivo_cancelamento; presenca com 'atrasado' em vez de 'justificada'; nota_clinica com tratamento_efetuado + protocolo_aplicado[] + cedula_assinante; lembretes[] → lembrete_24h_enviado/lembrete_2h_enviado; adicionados criada_por/cancelada_em/cancelada_por; índices expandidos para 4 com data_hora_inicio -1 no do paciente). Adicionada nota "F4 — Implementação real" listando as divergências face à proposta v0.1 + nota sobre imutabilidade enforced no controller + cédula via temCedulaValida + validarConflitos soft block.
+  - Secção 7 (Decisões de Design): decisão #3 ("Nota clínica SOAP embutida") reescrita para incluir F4 (imutável após conclusão + cédula obrigatória via temCedulaValida + endpoint dedicado PATCH /:id/nota-clinica); decisão #7 ("Soft delete em tudo") atualizada com exceção da Consulta (hard delete + bloqueio RGPD de concluídas); decisão #8 ("3 camadas de disponibilidade") atualizada com a 4.ª camada (validarConflitos do consultaController: 4a fisio disponível via camadas 1-3, 4b sala, 4c fisio, 4d paciente); novas decisões #9 (Soft block de conflitos — 409/200/forcar + auditoria + debounce frontend) e #10 (Cédula obrigatória para assinar SOAP — temCedulaValida + snapshot cedula_assinante para rastreabilidade).
+  - Secção 8 (Roadmap): F4 marcado como "✅ Concluído" (era "Pendente") com escopo expandido para mencionar "nota clínica SOAP imutável + cédula profissional".
+
+Stage Summary:
+- **docs/BACKEND.md**: nota F4 sobre `temCedulaValida()` no Utilizador; nova subsecção do modelo Consulta (tabela completa + sub-tabela nota_clinica + 4 índices + nota de permissões + nota de imutabilidade RGPD); nova secção 3.5 com a validação de conflitos (4 dimensões + soft block + auditoria + endpoint /validar); nova secção 6.14 com 7 endpoints documentados (GET listagem, GET /validar, GET /:id, POST, PUT, PATCH /:id/nota-clinica, DELETE) + blocos de permissões, imutabilidade RGPD, cédula obrigatória, soft block e auditoria; árvore de ficheiros atualizada (consultaController.js, Consulta.js, consultaRoutes.js); contagem "8 coleções"; entrada F4 no histórico. 176/176 testes ✓ referenciado.
+- **docs/FRONTEND.md**: rota /gestor/consultas na tabela; subsecção completa da página (lista cartões, modal criar/editar com validação de conflitos em tempo real debounce 400ms, modal detalhe SOAP via PATCH, soft block 409→forçar, ações rápidas, permissões, estados visuais); tipos EstadoConsulta/TipoConsulta/ConsultaDTO/ConsultaListResponse/ValidarConflitosResponse documentados; item de sidebar (CalendarPlus, entre Calendário e Tarefas) documentado; entrada F4 no histórico. Lint + tsc + build ✓ (5.6 kB).
+- **docs/ARQUITETURA.md**: F4 marcado ✅ no roadmap (secção 8) e no mapa de migração (secção 4 — Tarefa→Consulta e TarefaArquivo→ConsultaArquivo); schema de Consulta (secção 5.4) alinhado com a implementação real + nota de divergências face à proposta v0.1; decisões de design #3/#7/#8 atualizadas + novas decisões #9 (soft block) e #10 (cédula obrigatória); banner topo atualizado.
+- **WORKLOG.md**: esta entrada DOC-F4 adicionada em append.
+- **Finding (não resolvido por escopo):** a matriz de permissões da secção 3.1 de ARQUITETURA.md indica `admin` ❌ para "Consultas (marcar)"/"Consultas (ver todas)"/"Nota clínica SOAP", mas a implementação F4 inclui `admin` no middleware `podeVer` (ver consultas), no `isRececionista` (criar/editar marcações via POST/PUT) e no `isClinico` (PATCH /nota-clinica). Esta divergência é coerente com as mesmas divergências já registadas em DOC-F2 (Pacientes) e DOC-F3 (Horários) — o `admin` plataforma tem acesso total por conveniência operacional. Fica como assunto a clarificar numa futura revisão global da matriz (ou remover `admin` dos middlewares, ou atualizar a matriz + decisão #6 para refletir o acesso total do admin). Não foi alterada por estar fora do escopo pedido (a task pedia apenas atualizar schema, roadmap e decisões de design).
+
+---
+Task ID: F4
+Agent: Z.ai Code
+Task: Criar Consulta (substitui Tarefa) + CRUD de marcação + validação de conflitos (fisio + sala + paciente em simultâneo) + cédula profissional obrigatória para notas clínicas SOAP + imutabilidade RGPD.
+
+Work Log:
+
+### F4-A — Reforçar validação de cédula no Utilizador
+- Adicionado método de instância `temCedulaValida()` no schema Utilizador.
+- Devolve `true` para admin/rececionista (não aplicável).
+- Para fisioterapeuta/diretor_clinico: verifica se `perfil_profissional.cedula` está preenchido.
+- **Obrigatório** para assinar notas clínicas (SOAP) — prepara o caminho para faturação.
+
+### F4-B — Modelo Consulta
+- Criado `backend/models/Consulta.js` (substitui Tarefa para o novo domínio):
+  - 3 eixos: fisioterapeuta_id, sala_id (Propriedade alias Sala), paciente_id.
+  - Marcação temporal: data_hora_inicio, data_hora_fim, duracao_minutos (default 45, min 15).
+  - tipo (primeira_consulta/sessao/reavaliacao/alta/grupo), estado (7 valores), presenca (4 valores).
+  - nota_clinica SOAP: subjetivo, objetivo, avaliacao, plano, tratamento_efetuado, protocolo_aplicado[], cedula_assinante.
+  - Auditoria: criada_por, concluida_em, cancelada_em, cancelada_por.
+  - Lembretes: lembrete_24h_enviado, lembrete_2h_enviado.
+  - Índices: {empresa_id, fisioterapeuta_id, data_hora_inicio}, {empresa_id, sala_id, data_hora_inicio}, {empresa_id, paciente_id, data_hora_inicio}, {estado, data_hora_inicio}.
+
+### F4-C — Controller com validação de conflitos (ponto mais sensível)
+- Criado `backend/controllers/consultaController.js`:
+  - `validarConflitos()` (função interna) — valida em simultâneo:
+    1. Fisioterapeuta disponível (motor F3: ausência + folga + horário)
+    2. Sala sem sobreposição temporal com outra consulta ATIVA
+    3. Fisioterapeuta sem sobreposição temporal
+    4. Paciente sem sobreposição temporal
+  - Soft block: conflitos devolvem 409 (sem `forcar`) ou 200 com warning (com `forcar=true`).
+  - `criarConsulta`: valida fisio/sala/paciente existem, rejeita data no passado, valida conflitos.
+  - `atualizarConsulta`: re-valida conflitos se mudar data/duração/fisio/sala/paciente (excluindo a própria consulta).
+  - `atualizarNotaClinica` (endpoint SEPARADO, isClinico): valida cédula do assinante, guarda snapshot da cédula para auditoria legal.
+  - `eliminarConsulta`: bloqueia consultas concluídas (RGPD — nota clínica imutável).
+  - `validarConflitosEndpoint` (GET /validar): para o frontend validar em tempo real sem criar.
+
+### F4-D — Routes + server.js
+- Criado `backend/routes/consultaRoutes.js` montado em `/api/gestor/consultas`:
+  - GET /, GET /validar, GET /:id → podeVer (4 roles)
+  - POST /, PUT /:id → isRececionista (marcações)
+  - PATCH /:id/nota-clinica → isClinico (fisio/diretor/admin — SOAP)
+  - DELETE /:id → isDiretorClinico
+- `server.js`: montado `app.use('/api/gestor/consultas', consultaRoutes)`.
+
+### F4-E — Testes (176/176 ✓)
+- Adicionados 25 testes no bloco "F4 — Consultas (CRUD + conflitos)":
+  - CRUD completo (criar, listar, detalhe, atualizar, eliminar).
+  - Validações (400): campos obrigatórios, data no passado, fisio/sala/paciente inexistentes.
+  - **Validação de conflitos** (409 sem forcar):
+    - Conflito de SALA (mesma sala, mesmo horário, fisio diferente)
+    - Conflito de FISIOTERAPEUTA (mesmo fisio, mesmo horário, sala diferente)
+    - Conflito de PACIENTE (mesmo paciente, mesmo horário, fisio/sala diferentes)
+  - Soft block com `forcar=true` → 200 com warning.
+  - Sem sobreposição → 201 (sem conflitos).
+  - Fisioterapeuta vê só as suas consultas.
+  - GET /validar → 200 com conflitos sem criar.
+  - PATCH /nota-clinica (fisio com cédula) → 200 + snapshot da cédula.
+  - PATCH /nota-clinica por fisio SEM cédula → 403 (mensagem contém "cédula").
+  - PATCH /nota-clinica por rececionista → 403 (só isClinico).
+  - PATCH /nota-clinica em consulta CONCLUÍDA → 403 (imutável, RGPD).
+  - DELETE consulta concluída → 403 (RGPD).
+  - DELETE (rececionista) → 403 (só diretor).
+  - DELETE (diretor) → 200.
+  - 401 sem token.
+- **Resultado: 176/176 testes a passar ✓** (+25).
+
+### F4-F — Frontend (/gestor/consultas)
+- Criada página `frontend/src/app/gestor/consultas/page.tsx`:
+  - Lista de consultas (cartões com paciente, fisio, sala, data, estado, tipo, indicador SOAP).
+  - **Modal criar/editar com validação de conflitos em tempo real** (debounce 400ms, mostra warnings antes de submeter).
+  - Modal detalhe com nota clínica SOAP editável (S/O/A/P + tratamento_efetuado).
+  - Ações rápidas: Confirmar, Concluir, Eliminar.
+  - Botão "Forçar Agendamento" quando há conflitos.
+- `ConsultaDTO`, `ConsultaListResponse`, `ValidarConflitosResponse`, `EstadoConsulta`, `TipoConsulta` adicionados a `lib/api.ts`.
+- Item "Consultas" (ícone CalendarPlus) adicionado ao sidebar do gestor (entre Calendário e Tarefas).
+- **Lint ✓, tsc ✓, build ✓** (rota /gestor/consultas = 5.6 kB).
+
+### F4-G — Documentação (Task DOC-F4 por subagent)
+- `docs/BACKEND.md`: modelo Consulta documentado, validação de conflitos (4 dimensões), soft block, endpoint PATCH /nota-clinica, imutabilidade RGPD, temCedulaValida(), 7 endpoints, entrada F4 no histórico.
+- `docs/FRONTEND.md`: rota /gestor/consultas, 5 tipos DTO, página documentada (validação em tempo real, SOAP), entrada F4 no histórico.
+- `docs/ARQUITETURA.md`: F4 marcado ✅ no roadmap, schema de Consulta alinhado, decisões de design #9 (soft block) e #10 (cédula obrigatória) adicionadas.
+
+Stage Summary:
+- **Consulta criada** com 3 eixos (fisio + sala + paciente) e nota clínica SOAP completa.
+- **Validação de conflitos dupla** (o ponto mais sensível, conforme pedido do utilizador): valida em simultâneo se o fisioterapeuta está disponível (motor F3) E se a sala tem vaga (sem sobreposição). Adicionalmente valida fisio e paciente sem sobreposição.
+- **Soft block**: conflitos não bloqueiam (409 sem forçar, 200 com warning se forçado) — o gestor pode sobrepor em casos excecionais (dupla marcação, sobreposição intencional).
+- **Cédula profissional obrigatória** para assinar notas clínicas SOAP (RGPD/faturação). Snapshot da cédula guardado para auditoria legal.
+- **Imutabilidade RGPD**: consultas concluídas não podem ser eliminadas nem ter a nota clínica editada.
+- **176/176 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
+- **Próximo passo:** F5 (Nota clínica SOAP avançada + ModeloProtocolo de ModeloChecklist).

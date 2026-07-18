@@ -143,4 +143,25 @@ const utilizadorSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+/**
+ * Verifica se o utilizador tem cédula profissional válida (não vazia).
+ *
+ * F4 — A cédula da Ordem dos Fisioterapeutas é OBRIGATÓRIA para:
+ *   - Registar notas clínicas (SOAP)
+ *   - Emitir faturação (recibos/atas)
+ *   - Assinar documentos clínicos
+ *
+ * Para admin/rececionista, este método devolve sempre true (não aplicável).
+ *
+ * @returns {boolean}
+ */
+utilizadorSchema.methods.temCedulaValida = function () {
+  // Admin/rececionista não precisam de cédula.
+  if (this.role === 'admin' || this.role === 'rececionista') {
+    return true;
+  }
+  const cedula = this.perfil_profissional?.cedula;
+  return typeof cedula === 'string' && cedula.trim().length > 0;
+};
+
 module.exports = mongoose.model('Utilizador', utilizadorSchema);

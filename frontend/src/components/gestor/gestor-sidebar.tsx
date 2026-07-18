@@ -19,6 +19,7 @@ import {
   ListChecks,
   UserRound,
   Clock,
+  CalendarPlus,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -53,6 +54,7 @@ interface NavItem {
 const gestorNavItems: NavItem[] = [
   { label: "Dashboard", href: "/gestor", icon: LayoutDashboard },
   { label: "Calendário", href: "/gestor/calendario", icon: CalendarRange },
+  { label: "Consultas", href: "/gestor/consultas", icon: CalendarPlus },
   { label: "Tarefas", href: "/gestor/tarefas", icon: ClipboardList },
   { label: "Propriedades", href: "/gestor/propriedades", icon: Building2 },
   { label: "Pacientes", href: "/gestor/pacientes", icon: UserRound },
