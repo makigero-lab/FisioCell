@@ -43,6 +43,12 @@ const { iniciarDailyBriefing } = require('./jobs/dailyBriefing');
 const { iniciarAgendaAmanha } = require('./jobs/agendaAmanha');
 const { iniciarCaoGuarda } = require('./jobs/caoGuarda');
 const { iniciarArquivista } = require('./jobs/arquivista');
+// F7 — Cron jobs para Consultas (domínio Fisioterapia).
+const { iniciarBriefingFisio } = require('./jobs/briefingDiarioFisio');
+const { iniciarLembreteAmanha } = require('./jobs/lembreteConsultasAmanha');
+const { iniciarLembrete2h } = require('./jobs/lembrete2hConsulta');
+const { iniciarCaoGuardaConsultas } = require('./jobs/caoGuardaConsultas');
+const { iniciarArquivistaConsultas } = require('./jobs/arquivistaConsultas');
 const { configurarWebPush } = require('./utils/push');
 
 const app = express();
@@ -210,6 +216,18 @@ if (require.main === module) {
       // Prompt 109 — Cron job "Arquivista": dia 1 de cada trimestre,
       // move tarefas concluídas/canceladas com mais de 3 meses para o arquivo.
       iniciarArquivista();
+
+      // F7 — Cron jobs para Consultas (domínio Fisioterapia).
+      // Briefing diário fisio: 08:00 — push a cada fisio com consultas hoje.
+      iniciarBriefingFisio();
+      // Lembrete consultas amanhã: 19:00 — push ao fisio sobre consultas de amanhã.
+      iniciarLembreteAmanha();
+      // Lembrete 2h: a cada 15min — lembrete 2h antes da consulta.
+      iniciarLembrete2h();
+      // Cão de guarda consultas: 02:00 — verifica consultas órfãs/esquecidas.
+      iniciarCaoGuardaConsultas();
+      // Arquivista consultas: domingo 03:00 — move >6 meses para consultas_arquivo.
+      iniciarArquivistaConsultas();
     })
     .catch((err) => {
       console.error('❌ Erro ao ligar ao MongoDB:', err.message);

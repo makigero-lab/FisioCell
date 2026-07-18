@@ -54,6 +54,7 @@ backend/
 │   ├── Paciente.js           #   Paciente da clínica (F2) — soft delete + dados clínicos sanitizados
 │   ├── HorarioFisioterapeuta.js # Limites de agenda do fisio (F3) — recorrente/excecao + motor de disponibilidade
 │   ├── Consulta.js           #   Marcação/sessão de fisioterapia (F4) — substitui Tarefa; conflitos + SOAP + cédula
+│   ├── ConsultaArquivo.js    #   Cópia exata de Consulta + arquivado_em (F7) — coleção `consultas_arquivo`; preserva SOAP para RGPD
 │   └── ModeloProtocolo.js    #   Template de protocolo clínico (F5) — substitui ModeloChecklist; área + ativo + snapshot
 ├── utils/
 │   ├── loadBalancer.js       # Motor de atribuição (extraído do webhook em F0)
@@ -100,7 +101,7 @@ O fluxo de arranque segue uma sequência segura:
 
 ## 3.1. Modelos de dados (Mongoose)
 
-O sistema gira em torno de 9 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
+O sistema gira em torno de 10 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
 
 ### `Empresa`
 Entidade principal do SaaS (multi-tenant). Cada empresa agrupa Propriedades e Utilizadores.
@@ -379,6 +380,23 @@ Template de protocolo clínico reutilizável. **F5** — substitui `ModeloCheckl
 >
 > **Helper `gerarSnapshotProtocolo(protocoloId, empresaId)`:** exportado por `protocoloController.js` e invocado por `consultaController.criarConsulta` quando o body traz `protocolo_id`. Procura o protocolo (`_id` + `empresa_id`) e devolve um array de `{ nome, items: [{ texto, concluido: false }] }` (cópia das secções com todos os items marcados como não concluídos). Devolve `null` se o protocolo não existir ou não pertencer à empresa → o `criarConsulta` responde `400` ("Protocolo não encontrado (ou não pertence a esta empresa)."). O snapshot é guardado em `nota_clinica.protocolo_aplicado` e **não é alterado** por edições futuras no template (RGPD/legal — o protocolo aplicado numa sessão tem de refletir o template no momento da marcação).
 
+### `ConsultaArquivo`
+Cópia exata do schema `Consulta` usada para arquivar consultas concluídas/canceladas com mais de 6 meses. **F7** — coleção dedicada `consultas_arquivo` (via `mongoose.model('ConsultaArquivo', consultaArquivoSchema, 'consultas_arquivo')`), separada da coleção principal `consultas` para manter o calendário e as queries operacionais leves. As notas clínicas SOAP são **preservadas indefinitely** para auditoria legal/RGPD (obrigações de retenção de dados clínicos: tipicamente 10–20 anos).
+
+> **F7:** O modelo `ConsultaArquivo` é um **clone do schema `Consulta`** com um campo extra (`arquivado_em`). O movimento de consultas para o arquivo é feito pelo cron job `arquivistaConsultas` (ver secção 3.3) todos os domingos às 03:00 (Europe/Lisbon): procura consultas com `estado` ∈ `{ 'concluida','cancelada','faltou','nao_compareceu' }` e `data_hora_inicio` anterior a 6 meses, cria o documento no arquivo (preserva todos os campos da consulta original, incluindo `nota_clinica` SOAP) e depois apaga o original da coleção `consultas`. As referências (`empresa_id`, `sala_id`, `fisioterapeuta_id`, `paciente_id`, `criada_por`, `cancelada_por`) são mantidas (não há re-populate retroativo — o snapshot do SOAP fica imutável).
+
+| Campo           | Tipo     | Notas                                                              |
+|-----------------|----------|--------------------------------------------------------------------|
+| `arquivado_em`  | Date     | **F7** — default `Date.now`. Data em que a consulta foi movida para o arquivo. |
+| (demais campos) | —        | **Clone exato do schema `Consulta`** — `empresa_id`, `sala_id`, `fisioterapeuta_id`, `paciente_id`, `data_hora_inicio`, `data_hora_fim`, `duracao_minutos`, `tipo`, `estado`, `motivo_cancelamento`, `presenca`, `nota_clinica` (SOAP completo com `protocolo_aplicado[]` + `cedula_assinante`), `criada_por`, `concluida_em`, `cancelada_em`, `cancelada_por`, `lembrete_24h_enviado`, `lembrete_2h_enviado`, `observacoes`. |
+
+**Índices compostos:**
+- `{ empresa_id: 1, fisioterapeuta_id: 1, data_hora_inicio: -1 }` — histórico arquivado por fisio (desc).
+- `{ empresa_id: 1, paciente_id: 1, data_hora_inicio: -1 }` — histórico arquivado do paciente (desc).
+- `{ arquivado_em: 1 }` — lookup por data de arquivo (auditoria).
+
+> **Permissões (F7):** não há endpoints REST dedicados à leitura/escrita direta de `ConsultaArquivo` — o movimento é feito exclusivamente pelo cron job `arquivistaConsultas`. O acesso ao histórico arquivado para auditoria legal/RGPD será exposto numa futura fase (relatórios / portal de auditoria). A imutabilidade da `nota_clinica` herdada do schema `Consulta` é preservada (o documento em arquivo é apenas para leitura histórica).
+
 ---
 
 ## 3.2. Lógica central — Atribuição de tarefas
@@ -402,7 +420,7 @@ O motor de atribuição (`utils/loadBalancer.js`) implementa o seguinte fluxo **
 
 ## 3.3. Cron Jobs (node-cron)
 
-O backend tem três cron jobs diários, todos iniciados no arranque (`server.js`, dentro de `if (require.main === module)` — não correm nos testes):
+O backend tem **3 cron jobs legacy** (domínio Alojamento Local — `Tarefa`) e **5 cron jobs F7** (domínio Fisioterapia — `Consulta`), todos iniciados no arranque (`server.js`, dentro de `if (require.main === module)` — não correm nos testes). Os jobs legacy mantêm-se até F8 (fase de limpeza que removerá `Tarefa`/`TarefaArquivo`).
 
 | Job | Ficheiro | Agenda (cron) | Timezone | Descrição |
 |-----|----------|---------------|----------|-----------|
@@ -442,6 +460,66 @@ Executa **duas fases** todos os dias às 18:00 (Europe/Lisbon):
 5. Devolve `{ processados, notificados, tarefas }` (estatísticas para testes/logs).
 
 > **Timezone:** o `Cão de Guarda` e o `Agenda de Amanhã` usam a opção `timezone: 'Europe/Lisbon'` do node-cron, pelo que os horários são estáveis mesmo que o servidor esteja em UTC (caso do Render) — acompanham automaticamente as mudanças legais de horário de Verão/Inverno de Portugal. O `Daily Briefing` usa o fuso do servidor (definir `TZ=Europe/Lisbon` no ambiente para alinhar).
+
+### Cron Jobs de Consultas (F7)
+
+Os **5 cron jobs F7** operam sobre o modelo `Consulta` (domínio Fisioterapia). Todos usam `timezone: 'Europe/Lisbon'` (estável em servidores UTC como o Render) e o `require('../utils/notificar')` é feito **lazy** (dentro das funções) para permitir `jest.spyOn` nos testes.
+
+| Job | Ficheiro | Agenda (cron) | Timezone | Descrição |
+|-----|----------|---------------|----------|-----------|
+| **Briefing Diário Fisio** | `jobs/briefingDiarioFisio.js` | `0 8 * * *` | `Europe/Lisbon` | 08:00 — envia push a cada fisioterapeuta com consultas **hoje** (estados `'marcada'`/`'confirmada'`/`'em_curso'`). Mensagem: `📋 Tens X consulta(s) hoje. Entra na app para ver a agenda.` |
+| **Lembrete Consultas Amanhã** | `jobs/lembreteConsultasAmanha.js` | `0 19 * * *` | `Europe/Lisbon` | 19:00 — envia push a cada fisioterapeuta com consultas **amanhã** (estados `'marcada'`/`'confirmada'`, `lembrete_24h_enviado ≠ true`). Mensagem: `📅 Lembrete: tens X consulta(s) amanhã.` Marca `lembrete_24h_enviado=true` em lote. |
+| **Lembrete 2h Consulta** | `jobs/lembrete2hConsulta.js` | `*/15 * * * *` | `Europe/Lisbon` | A cada 15 min — procura consultas que começam dentro da janela +1h45 a +2h15 (estados `'marcada'`/`'confirmada'`, `lembrete_2h_enviado ≠ true`), envia push ao fisio e marca `lembrete_2h_enviado=true`. Mensagem: `Consulta com [Paciente] às [HH:mm] — faltam ~2 horas.` |
+| **Cão de Guarda Consultas** | `jobs/caoGuardaConsultas.js` | `0 2 * * *` | `Europe/Lisbon` | 02:00 — verifica (1) consultas de **hoje** sem fisio ativo (órfãs) e (2) consultas de datas **passadas** não concluídas (esquecidas). Notifica diretores clínicos/admins da empresa. |
+| **Arquivista Consultas** | `jobs/arquivistaConsultas.js` | `0 3 * * 0` | `Europe/Lisbon` | Domingo 03:00 — move consultas concluídas/canceladas/faltou/nao_compareceu com `data_hora_inicio` anterior a 6 meses para a coleção `consultas_arquivo` (preserva `nota_clinica` SOAP para RGPD). |
+
+#### Briefing Diário Fisio (`jobs/briefingDiarioFisio.js`) — F7
+1. Calcula o intervalo de **hoje** (meia-noite UTC).
+2. Procura `Consulta` com `data_hora_inicio` nesse intervalo e `estado` ∈ `{ 'marcada', 'confirmada', 'em_curso' }`, com populate de `fisioterapeuta_id` (nome, ativo, eliminado_em, role).
+3. Agrupa por `fisioterapeuta_id` — só fisios **ativos** e não eliminados, com `role` ∈ `{ 'fisioterapeuta', 'diretor_clinico' }`.
+4. Para cada fisio, chama `notificarUtilizador(fisioId, '📅 Briefing Diário', '📋 Tens X consulta(s) hoje. Entra na app para ver a agenda.', '/staff', { criarInApp: true, tipo: 'sistema' })` (fire-and-forget; skip silencioso se não houver `pushSubscription` ou Web Push não configurado).
+5. Devolve `{ processados, notificados, consultas }` (estatísticas para testes/logs).
+
+#### Lembrete Consultas Amanhã (`jobs/lembreteConsultasAmanha.js`) — F7
+1. Calcula o intervalo de **amanhã** (meia-noite UTC).
+2. Procura `Consulta` com `data_hora_inicio` nesse intervalo, `estado` ∈ `{ 'marcada', 'confirmada' }` e `lembrete_24h_enviado: { $ne: true }` (não notificadas), com populate de `fisioterapeuta_id`.
+3. Agrupa por fisio (mesmo filtro: ativo, não eliminado, `role` fisio/diretor_clinico).
+4. Para cada fisio, envia push `📅 Agenda de Amanhã` com mensagem `📅 Lembrete: tens X consulta(s) amanhã.`
+5. Atualiza as consultas em lote via `Consulta.updateMany({ _id: { $in: [...] } }, { $set: { lembrete_24h_enviado: true } })` — evita reenviar no dia seguinte caso o job volte a correr.
+6. Devolve `{ processados, notificados, consultas }`.
+
+> **Marcação de lembrete:** o `lembrete_24h_enviado=true` é o mecanismo de idempotência — uma consulta só recebe o lembrete 24h **uma vez**. Se o job falhar a meio, na execução seguinte só as consultas por notificar são processadas (a query filtra `lembrete_24h_enviado: { $ne: true }`).
+
+#### Lembrete 2h Consulta (`jobs/lembrete2hConsulta.js`) — F7
+1. Calcula a janela temporal: `inicioJanela = agora + 1h45` (105 min) e `fimJanela = agora + 2h15` (135 min). A janela é deliberadamente mais larga do que os 15 min de cadência do cron para garantir que **nenhuma consulta escap** caso o job corra alguns minutos tarde.
+2. Procura `Consulta` com `data_hora_inicio` ∈ `[inicioJanela, fimJanela[`, `estado` ∈ `{ 'marcada', 'confirmada' }` e `lembrete_2h_enviado: { $ne: true }`, com populate de `fisioterapeuta_id` (nome, ativo, eliminado_em, role) e `paciente_id` (nome).
+3. Para cada fisio elegível (ativo, não eliminado, fisio/diretor_clinico), envia push `⏰ Consulta em 2 horas` com mensagem `Consulta com [nome do paciente] às [HH:mm] — faltam ~2 horas.` (a hora é formatada via `toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })`).
+4. Atualiza em lote `lembrete_2h_enviado=true` nas consultas notificadas.
+5. Devolve `{ notificados, consultas }`.
+
+> **Cadência de 15 min + janela 1h45–2h15:** o cron `*/15 * * * *` corre 4× por hora (às :00, :15, :30, :45). A janela de 30 min (de 1h45 a 2h15) garante sobreposição entre execuções consecutivas: cada consulta é apanhada por pelo menos uma execução, mesmo que o job seja lançado alguns minutos tarde. O `lembrete_2h_enviado=true` impede duplicação.
+
+#### Cão de Guarda Consultas (`jobs/caoGuardaConsultas.js`) — F7
+Executa **duas verificações** todos os dias às 02:00 (Europe/Lisbon):
+
+1. **Consultas órfãs (de hoje)** — procura `Consulta` com `data_hora_inicio` no intervalo de hoje, `estado` ∈ `{ 'marcada', 'confirmada', 'em_curso' }`, com populate de `fisioterapeuta_id` e `paciente_id`. Filtra as que têm fisio inativo/eliminado/inexistente (`!f || f.eliminado_em || !f.ativo`).
+2. **Consultas esquecidas (datas passadas)** — procura `Consulta` com `data_hora_inicio < inicioHoje` (qualquer dia anterior) e `estado` ∈ `{ 'marcada', 'confirmada', 'em_curso' }` (ainda por concluir/cancelar).
+3. Agrupa os alertas por `empresa_id` (conta órfãs e esquecidas por empresa).
+4. Para cada empresa, procura os `diretor_clinico`/`admin` ativos não eliminados e envia push `🐕 Cão de Guarda — Alerta` com mensagem `🐕 Alerta: X consulta(s) órfã(s), Y consulta(s) esquecida(s). Verifica o painel.` (rota `/gestor/consultas`, `tipo: 'aviso'`).
+5. Devolve `{ orfas, esquecidas, alertas }`.
+
+> **Destinatários:** ao contrário do `briefingDiarioFisio`/`lembreteConsultasAmanha` (que notificam os fisioterapeutas), o Cão de Guarda Consultas notifica apenas os **diretores clínicos e admins** da empresa — são eles que têm de intervir (reatribuir a consulta órfã ou concluir/cancelar a esquecida).
+
+#### Arquivista Consultas (`jobs/arquivistaConsultas.js`) — F7
+1. Calcula a data limite (6 meses atrás a partir de `agora`).
+2. Procura `Consulta` com `estado` ∈ `{ 'concluida', 'cancelada', 'faltou', 'nao_compareceu' }` e `data_hora_inicio < limite` (`.lean()` para evitar validações Mongoose).
+3. Para cada consulta, cria um documento em `ConsultaArquivo` com **todos os campos** da consulta original (removendo `_id`, `__v`, `createdAt`, `updatedAt`) + `arquivado_em: new Date()`. Em caso de erro individual, regista no log e incrementa o contador de erros (não interrompe o resto do lote).
+4. Apaga as consultas originais via `Consulta.deleteMany({ _id: { $in: idsParaApagar } })` (só as que foram copiadas com sucesso para o arquivo).
+5. Devolve `{ arquivadas, erros }`.
+
+> **Preservação de SOAP (RGPD):** o `arquivistaConsultas` move fisicamente o documento da coleção `consultas` para `consultas_arquivo`, preservando integralmente a `nota_clinica` SOAP (incluindo `protocolo_aplicado[]` e `cedula_assinante`). Isto mantém a coleção principal leve (calendário + queries operacionais rápidas) mas garante a retenção legal de dados clínicos por 10–20 anos. O acesso ao histórico arquivado será exposto numa futura fase (relatórios / portal de auditoria).
+
+> **Padrão de robustez:** o `arquivistaConsultas` só apaga os originais **depois** de os ter copiado com sucesso para `consultas_arquivo`. Se o processo Mongo falhar a meio do lote, as consultas já copiadas são apagadas, mas as que falharam ficam na coleção principal — serão reprocessadas na execução seguinte (domingo seguinte às 03:00).
 
 ---
 
@@ -1462,6 +1540,7 @@ Atualiza um protocolo (todos os campos opcionais, mas pelo menos um). Permite de
 
 | Data       | Versão | Alteração                                                            |
 |------------|--------|----------------------------------------------------------------------|
+| **F7**     | —      | **Cron Jobs de Consultas + `ConsultaArquivo`:** (1) Novo modelo `models/ConsultaArquivo.js` — clone exato do schema `Consulta` com campo extra `arquivado_em` (Date, default `Date.now`); coleção dedicada `consultas_arquivo` (via `mongoose.model('ConsultaArquivo', consultaArquivoSchema, 'consultas_arquivo')`). Preserva todos os campos da `Consulta` (incluindo `nota_clinica` SOAP com `protocolo_aplicado[]` + `cedula_assinante`) para auditoria legal/RGPD (retenção 10–20 anos). Índices compostos `{empresa_id, fisioterapeuta_id, data_hora_inicio: -1}`, `{empresa_id, paciente_id, data_hora_inicio: -1}`, `{arquivado_em: 1}`. Sem endpoints REST dedicados — o movimento é feito exclusivamente pelo cron job `arquivistaConsultas`. (2) 5 novos cron jobs em `jobs/` (todos com `timezone: 'Europe/Lisbon'` e `require('../utils/notificar')` lazy para `jest.spyOn`): (2a) `briefingDiarioFisio.js` — `0 8 * * *` 08:00, push a cada fisio (`fisioterapeuta`/`diretor_clinico` ativo não eliminado) com consultas **hoje** (`estado` ∈ `{marcada, confirmada, em_curso}`), mensagem `📋 Tens X consulta(s) hoje. Entra na app para ver a agenda.`, agrupado por fisio, devolve `{processados, notificados, consultas}`; (2b) `lembreteConsultasAmanha.js` — `0 19 * * *` 19:00, push a cada fisio com consultas **amanhã** (`estado` ∈ `{marcada, confirmada}` e `lembrete_24h_enviado: {$ne: true}`), mensagem `📅 Lembrete: tens X consulta(s) amanhã.`, marca `lembrete_24h_enviado=true` em lote via `Consulta.updateMany` (idempotência); (2c) `lembrete2hConsulta.js` — `*/15 * * * *` a cada 15 min, procura consultas que começam na janela +1h45 a +2h15 (105–135 min, sobreposição garante nenhuma escapar), `estado` ∈ `{marcada, confirmada}` e `lembrete_2h_enviado: {$ne: true}`, push ao fisio com mensagem `Consulta com [paciente] às [HH:mm] — faltam ~2 horas.`, marca `lembrete_2h_enviado=true`; (2d) `caoGuardaConsultas.js` — `0 2 * * *` 02:00, verifica (1) consultas de **hoje** sem fisio ativo (órfãs) e (2) consultas de datas **passadas** não concluídas (esquecidas), agrupa alertas por `empresa_id`, notifica apenas `diretor_clinico`/`admin` ativos (rota `/gestor/consultas`, `tipo: 'aviso'`) com mensagem `🐕 Alerta: X consulta(s) órfã(s), Y consulta(s) esquecida(s). Verifica o painel.`; (2e) `arquivistaConsultas.js` — `0 3 * * 0` domingo 03:00, move `Consulta` com `estado` ∈ `{concluida, cancelada, faltou, nao_compareceu}` e `data_hora_inicio` anterior a 6 meses para `consultas_arquivo` (preserva todos os campos + `arquivado_em`), apaga originais só depois de copiados com sucesso (robustez — reprocessa falhadas no domingo seguinte), devolve `{arquivadas, erros}`. (3) `server.js` — os 5 jobs montados no arranque dentro de `if (require.main === module)` (após `mongoose.connect` com sucesso, depois dos 4 jobs legacy `dailyBriefing`/`agendaAmanha`/`caoGuarda`/`arquivista` que se mantêm até F8). Jobs legacy (Tarefa) não removidos — coexistem até F8 (limpeza). 200/200 testes ✓ (+8 testes: briefing fisio com consultas hoje, lembrete 24h marca `lembrete_24h_enviado=true`, lembrete 2h filtra janela e marca `lembrete_2h_enviado=true`, cão de guarda deteta órfãs + esquecidas e notifica diretores, arquivista move consultas >6 meses para `consultas_arquivo` preservando SOAP). |
 | **F5**     | —      | **Protocolos Clínicos + snapshot na Consulta:** (1) Novo modelo `models/ModeloProtocolo.js` (evolução do `ModeloChecklist`) — `empresa_id`, `nome`, `descricao`, `area` (`enum ['musculoesqueletica','neurologica','cardioresp','desporto','pediatria','outro']` default `'musculoesqueletica'`), `seccoes[{nome, items[]}]`, `ativo` (boolean default `true`). Índice composto `{empresa_id, ativo, area}` + índices individuais em `empresa_id`/`nome`/`area`/`ativo`. (2) Novo `controllers/protocoloController.js` — 5 funções CRUD (`listarProtocolos` com filtros `area`/`ativo` ordenado por `area`+`nome`, `obterProtocolo`, `criarProtocolo` com validação de `nome` obrigatório + `area` válida + `seccoes` array não vazio + cada secção com `nome` e `items` não vazios, `atualizarProtocolo` com normalização de `ativo`/`seccoes`, `apagarProtocolo` hard delete) + helper exportado `gerarSnapshotProtocolo(protocoloId, empresaId)` (devolve array de `{nome, items:[{texto, concluido:false}]}` ou `null` se não existir/não pertencer à empresa); auditoria registada (`recurso: 'modelo_protocolo'`). (3) Novas `routes/protocoloRoutes.js` montadas em `/api/gestor/protocolos` — middleware custom `podeVer` (4 roles: admin/diretor_clinico/fisioterapeuta/rececionista) para `GET /` e `GET /:id` (fisio precisa de ver para aplicar; rececionista para selecionar ao marcar); `isDiretorClinico` para POST/PUT/DELETE (só direção clínica gere protocolos). (4) `server.js` — mount `app.use('/api/gestor/protocolos', protocoloRoutes)`. (5) Integração na Consulta — `consultaController.criarConsulta` aceita `protocolo_id` opcional no body → invoca `gerarSnapshotProtocolo` e guarda em `nota_clinica.protocolo_aplicado` (400 se protocolo não encontrado/não pertence à empresa); `consultaController.atualizarNotaClinica` (`PATCH /:id/nota-clinica`) aceita `protocolo_aplicado` para marcar items como `concluido` durante a sessão (substitui o snapshot, normaliza `texto`/`concluido`). Snapshot imutável por edições futuras no template (RGPD/legal). 192/192 testes ✓ (+16 testes: CRUD de protocolos, validações de `nome`/`area`/`seccoes`, permissões `podeVer`/`isDiretorClinico`, snapshot na criação de consulta com `protocolo_id`, marcação de items concluídos via PATCH, protocolo inexistente → 400). |
 | **F4**     | —      | **Consultas + validação de conflitos + cédula profissional:** (1) Novo modelo `models/Consulta.js` — `empresa_id`, `sala_id` (`ref: 'Propriedade'` alias Sala até F8), `fisioterapeuta_id` (`ref: 'Utilizador'`), `paciente_id` (`ref: 'Paciente'`), `data_hora_inicio`/`data_hora_fim` (Date), `duracao_minutos` (default `45`, `min: 15`), `tipo` (`enum ['primeira_consulta','sessao','reavaliacao','alta','grupo']` default `'sessao'`), `estado` (`enum ['marcada','confirmada','em_curso','concluida','cancelada','faltou','nao_compareceu']` default `'marcada'`), `motivo_cancelamento` (`enum ['paciente','clinica','fisio','outro']`), `presenca` (`enum ['pendente','presente','ausente','atrasado']`), `nota_clinica` (`{subjetivo, objetivo, avaliacao, plano, tratamento_efetuado, protocolo_aplicado[], cedula_assinante}` — imutável após `estado='concluida'`), `criada_por`, `concluida_em`, `cancelada_em`, `cancelada_por`, `lembrete_24h_enviado`, `lembrete_2h_enviado`, `observacoes`. Índices compostos `{empresa_id, fisioterapeuta_id, data_hora_inicio}`, `{empresa_id, sala_id, data_hora_inicio}`, `{empresa_id, paciente_id, data_hora_inicio (-1)}`, `{estado, data_hora_inicio}`. (2) `models/Utilizador.js` — adicionado método de instância `temCedulaValida()` (devolve `true` para admin/rececionista; para fisio/diretor_clinico exige `perfil_profissional.cedula` preenchido). (3) Novo `controllers/consultaController.js` — função interna `validarConflitos` (4 verificações em simultâneo: fisio disponível via motor F3 + sala sem sobreposição + fisio sem sobreposição + paciente sem sobreposição, devolve `{ok, warnings, horario}`); 7 funções exportadas (`listarConsultas` com filtros fisioterapeuta_id/sala_id/paciente_id/estado/inicio/fim + fisio vê só as suas, `obterConsulta`, `criarConsulta` com `forcar` para soft block 409/200, `atualizarConsulta` com re-validação temporal + `excluirConsultaId`, `atualizarNotaClinica` endpoint separado com `isClinico` + validação de cédula + snapshot de `cedula_assinante`, `eliminarConsulta` bloqueia concluídas RGPD, `validarConflitosEndpoint` GET para o frontend validar em tempo real); auditoria registada (`recurso: 'consulta'`). (4) Novas `routes/consultaRoutes.js` montadas em `/api/gestor/consultas` — middleware custom `podeVer` (4 roles) para GET/listar/validar/detalhe, `isRececionista` para POST/PUT, `isClinico` para `PATCH /:id/nota-clinica`, `isDiretorClinico` para DELETE. (5) `server.js` — mount `app.use('/api/gestor/consultas', consultaRoutes)`. 176/176 testes ✓ (+25 testes de Consulta: CRUD, validação de conflitos fisio/sala/paciente, soft block com `forcar`, nota clínica SOAP com cédula, imutabilidade de concluídas, RGPD no delete). |
 | **F3**     | —      | **Horários de Fisioterapeuta + motor de disponibilidade:** (1) Novo modelo `models/HorarioFisioterapeuta.js` — `empresa_id`, `fisioterapeuta_id`, `tipo` (`enum ['recorrente','excecao']` default `'recorrente'`), `dia_semana` (0-6, `null` se `excecao`), `hora_inicio`/`hora_fim` (formato `HH:mm` validado por regex), `data` (Date, `null` se `recorrente`), `disponivel` (boolean default `true` — para `excecao`), `ativo` (boolean default `true` indexado — soft toggle), `nota` (string). Validação `pre('validate')`: `recorrente` exige `dia_semana` e força `data=null`; `excecao` exige `data` e força `dia_semana=null`. Índices compostos `{fisioterapeuta_id, dia_semana, ativo}`, `{empresa_id, fisioterapeuta_id, tipo}`, `{fisioterapeuta_id, data}`. (2) `utils/disponibilidade.js` expandido — adicionadas `horaLisboa(instante)` (devolve `HH:mm` no fuso de Lisboa via `Intl.DateTimeFormat`), `compararHoras(a, b)` (compara `HH:mm` em minutos), `obterHorarioDia(fisioId, data)` (3 sub-camadas: exceção do dia → regra recorrente → sem horário), `verificarConflitoHorario(fisioId, dataHoraInicio, duracaoMin)` (valida se a consulta cabe no bloco de trabalho), `verificarDisponibilidadeCompleta(utilizador, dataHoraInicio, duracaoMin)` (ausência aprovada → folga fixa semanal → horário de trabalho, com falha cedo). (3) Novo `controllers/horarioController.js` — CRUD completo (`listarHorarios`, `obterHorario`, `criarHorario`, `atualizarHorario`, `eliminarHorario` hard delete, `verificarDisponibilidade`); valida `fisioterapeuta_id` como fisio/diretor_clinico ativo da empresa; fisioterapeuta vê só os seus; auditoria registada. (4) Novas `routes/horarioRoutes.js` montadas em `/api/gestor/horarios` — middleware custom `podeVer` (4 roles) para GET/listar/disponibilidade, `isDiretorClinico` para POST/PUT/DELETE. (5) `server.js` — mount `app.use('/api/gestor/horarios', horarioRoutes)`. 151/151 testes ✓ (+21 testes de Horário: CRUD, permissões, motor de disponibilidade com exceções, conflitos de horário, dia sem regra). |

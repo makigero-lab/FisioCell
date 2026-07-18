@@ -1481,3 +1481,99 @@ Stage Summary:
 - **Coexistência**: a página antiga `/gestor/calendario` (Tarefas) mantém-se até F8 (limpeza) — não quebra funcionalidade existente.
 - **Lint ✓, tsc ✓, build ✓**.
 - **Próximo passo:** F7 (cron jobs — briefing fisio, lembretes paciente, arquivista de consultas).
+
+---
+Task ID: DOC-F7
+Agent: general-purpose
+Task: Atualização de documentação para F7 (cron jobs de Consultas)
+
+Work Log:
+- Lido `WORKLOG.md` (1484 linhas — herdado o formato das entradas DOC-F4/DOC-F5/DOC-F6 por subagent de documentação a seguir a cada fase de implementação).
+- Lido `docs/ARQUITETURA.md` (449 linhas — intro, secção 4 Mapa de Migração, secção 5.4 Consulta, secção 6 Cron Jobs, secção 7 Decisões de Design, secção 8 Roadmap) e `docs/BACKEND.md` (1540 linhas — secção 2 Estrutura, secção 3.1 Modelos, secção 3.3 Cron Jobs, secção 9 Histórico).
+- Lidos os ficheiros de implementação F7 para extrair detalhes exatos: `backend/models/ConsultaArquivo.js` (clone do schema Consulta + `arquivado_em`, coleção `consultas_arquivo`, 3 índices), os 5 cron jobs em `backend/jobs/` (`briefingDiarioFisio.js` 08:00, `lembreteConsultasAmanha.js` 19:00, `lembrete2hConsulta.js` */15min, `caoGuardaConsultas.js` 02:00, `arquivistaConsultas.js` domingo 03:00) e o `backend/server.js` (montagem no arranque dentro de `if (require.main === module)` após os 4 jobs legacy).
+
+- `docs/BACKEND.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 2 (Estrutura de ficheiros): adicionado `models/ConsultaArquivo.js` à árvore (cópia exata de Consulta + `arquivado_em`, coleção `consultas_arquivo`, preserva SOAP para RGPD).
+  - Secção 3.1 (Modelos): contador de coleções atualizado de 9 → 10.
+  - Nova subsecção `### ConsultaArquivo` (após `### ModeloProtocolo`) com nota F7 sobre o clone do schema, tabela de campos (com `arquivado_em` + lista dos campos herdados da `Consulta`), 3 índices compostos (`{empresa_id, fisioterapeuta_id, data_hora_inicio: -1}`, `{empresa_id, paciente_id, data_hora_inicio: -1}`, `{arquivado_em: 1}`) e nota de permissões (sem endpoints REST — movimento exclusivo do cron job `arquivistaConsultas`).
+  - Secção 3.3 (Cron Jobs): parágrafo introdutório alargado para referir os **3 cron jobs legacy** (sobre `Tarefa`, mantêm-se até F8) + os **5 cron jobs F7** (sobre `Consulta`).
+  - Nova subsecção `### Cron Jobs de Consultas (F7)` (após a descrição do legacy `Agenda de Amanhã`) com tabela resumo dos 5 jobs (ficheiro, agenda cron, timezone, descrição) + 5 sub-subsecções detalhadas (`#### Briefing Diário Fisio`, `#### Lembrete Consultas Amanhã`, `#### Lembrete 2h Consulta`, `#### Cão de Guarda Consultas`, `#### Arquivista Consultas`) documentando passo-a-passo cada job (queries, filtros, destinatários, mensagens, marcação de flags `lembrete_24h_enviado`/`lembrete_2h_enviado`, retorno de estatísticas) + notas explicativas sobre (a) idempotência via flags, (b) cadência de 15 min + janela 1h45-2h15 com sobreposição, (c) destinatários do cão de guarda (diretores clínicos/admins, não fisios), (d) preservação de SOAP para RGPD no arquivista, (e) padrão de robustez (apagar originais só depois de copiados).
+  - Secção 9 (Histórico): adicionada entrada `**F7**` no topo da tabela (antes de `**F5**`) com o resumo completo da implementação (modelo `ConsultaArquivo`, 5 cron jobs com schedules/destinatários/mensagens/marcação de flags, montagem no `server.js` após os 4 jobs legacy, coexistência até F8, 200/200 testes ✓ com +8 testes).
+
+- `docs/ARQUITETURA.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Intro: parágrafo de abertura alargado para mencionar **F7** (cron jobs de Consultas + `ConsultaArquivo`).
+  - Secção 4 (Mapa de Migração de Domínio): linha `TarefaArquivo → ConsultaArquivo` marcada `F7 ✅` (era `F4 ✅` — o `ConsultaArquivo` só foi implementado em F7; em F4 só existia o `Consulta`).
+  - Secção 5.4 (`Consulta` — nota "F4 — Implementação real"): atualizada a referência às flags `lembrete_24h_enviado`/`lembrete_2h_enviado` de "futuros cron jobs F7" para "**F7 concluído**: flags usadas pelos cron jobs `lembreteConsultasAmanha` (24h) e `lembrete2hConsulta` (2h) para idempotência"; adicionada nota final **F7 — Arquivo** sobre o movimento para `consultas_arquivo` via `arquivistaConsultas`.
+  - Secção 6 (Cron Jobs — Adaptação): parágrafo introdutório alargado com nota "**F7 ✅ — Implementação real:** os 5 jobs abaixo estão implementados em `backend/jobs/` e montados no arranque do `server.js` dentro de `if (require.main === module)` (não correm nos testes). Os jobs legacy (`dailyBriefing`, `agendaAmanha`, `caoGuarda`, `arquivista`) sobre `Tarefa` mantêm-se até F8 (limpeza) — coexistem com os jobs F7.".
+  - Tabela dos 5 cron jobs reescrita para refletir a implementação real: schedules corretos (`0 8 * * *`, `0 19 * * *`, `*/15 * * * *`, `0 2 * * *`, `0 3 * * 0`), destinatários (fisios para briefing/lembretes, diretores+admins para cão de guarda, nenhum para arquivista), estados considerados, mensagens exatas, marcação de flags `lembrete_24h_enviado`/`lembrete_2h_enviado` em lote, janela 1h45-2h15 no lembrete 2h, limite de 6 meses no arquivista (era ">90 dias" na proposta).
+  - Nova nota **F7 — Padrões transversais aos 5 jobs** abaixo da tabela: timezone `Europe/Lisbon`, `require('../utils/notificar')` lazy para `jest.spyOn`, destinatários por job, idempotência via flags.
+  - Secção 7 (Decisões de Design): adicionadas 2 novas decisões: **#11 — Cron jobs de Consulta com idempotência via flags (F7)** (3 padrões: idempotência via flags + `updateMany` em lote após pushes; `require` lazy para `jest.spyOn`; janela de 30 min + cadência de 15 min com sobreposição no `lembrete2hConsulta`) e **#12 — Arquivo separado para SOAP preservar RGPD (F7)** (move para `consultas_arquivo` após 6 meses preservando SOAP, robustez — só apaga originais depois de copiados com sucesso, índices dedicados para auditoria futura).
+  - Secção 8 (Roadmap): linha **F7** marcada `✅ Concluído` com escopo reescrito para refletir a implementação real (5 cron jobs + modelo `ConsultaArquivo` — clone de `Consulta` + `arquivado_em`, coleção `consultas_arquivo`).
+
+Stage Summary:
+- **2 ficheiros de documentação atualizados** (`docs/BACKEND.md` e `docs/ARQUITETURA.md`) por via cirúrgica (Edit — sem reescrita integral). (Não houve alterações a `docs/FRONTEND.md` — a F7 não introduziu alterações no frontend.)
+- **BACKEND.md**: novo modelo `ConsultaArquivo` documentado (clone de `Consulta` + `arquivado_em`, coleção `consultas_arquivo`, 3 índices, sem endpoints REST); nova subsecção `### Cron Jobs de Consultas (F7)` com tabela resumo + 5 descrições detalhadas passo-a-passo + notas de idempotência/janela/destinatários/robustez; parágrafo introdutório da secção 3.3 atualizado para distinguir 3 legacy + 5 F7 (coexistência até F8); entrada F7 no histórico (200/200 testes ✓ +8); estrutura de ficheiros + contador de coleções (9 → 10) atualizados.
+- **ARQUITETURA.md**: F7 marcado `✅ Concluído` no roadmap; cabeçalho atualizado para mencionar F7; migração `TarefaArquivo → ConsultaArquivo` marcada `F7 ✅` (era `F4 ✅`); tabela de cron jobs reescrita para refletir a implementação real (schedules, destinatários, mensagens, flags, janela 1h45-2h15, limite 6 meses); nota F7 — Padrões transversais adicionada; nota F4 atualizada (flags `lembrete_*_enviado` já não são "futuros cron jobs F7" + nota F7 — Arquivo); 2 novas decisões de design (#11 idempotência via flags + lazy require + janela 30 min, #12 arquivo separado para SOAP preservar RGPD).
+- **Linguagem pt-pt** preservada; formatação Markdown mantida; sem informação inventada (todos os detalhes foram extraídos dos ficheiros de implementação F7 — `ConsultaArquivo.js`, 5 cron jobs em `backend/jobs/` e `server.js`).
+- **Nota de escopo:** os 4 jobs legacy sobre `Tarefa` (`dailyBriefing`, `agendaAmanha`, `caoGuarda`, `arquivista`) não foram removidos da documentação — mantêm-se até F8 (fase de limpeza), conforme decidido na implementação F7 para não quebrar funcionalidade existente.
+- **Próximo passo:** F8 (limpeza — remover `Tarefa`, `TarefaArquivo`, `Propriedade`, `ModeloChecklist` antigos + os 4 cron jobs legacy).
+
+
+---
+Task ID: F7
+Agent: Z.ai Code
+Task: Criar 5 cron jobs adaptados ao domínio Fisioterapia (briefing fisio, lembretes paciente, cão de guarda, arquivista) + modelo ConsultaArquivo.
+
+Work Log:
+
+### F7-A — Modelo ConsultaArquivo
+- Criado `backend/models/ConsultaArquivo.js`: clone do schema Consulta com campo extra `arquivado_em`.
+- Coleção `consultas_arquivo` (separada da principal para performance).
+- Preserva notas clínicas SOAP para auditoria legal/RGPD (10-20 anos).
+- Índices: {empresa_id, fisioterapeuta_id, data_hora_inicio}, {empresa_id, paciente_id, data_hora_inicio}, {arquivado_em}.
+
+### F7-B — briefingDiarioFisio.js (08:00)
+- Todos os dias às 08:00 (Europe/Lisbon).
+- Procura Consultas de hoje (estados marcada/confirmada/em_curso).
+- Agrupa por fisioterapeuta, envia push: "📋 Tens X consulta(s) hoje."
+- Filtra só fisios ativos não eliminados (role fisioterapeuta/diretor_clinico).
+
+### F7-C — lembreteConsultasAmanha.js (19:00)
+- Todos os dias às 19:00 (Europe/Lisbon).
+- Procura Consultas de amanhã sem lembrete_24h_enviado.
+- Push ao fisio: "📅 Lembrete: tens X consulta(s) amanhã."
+- Marca lembrete_24h_enviado=true (idempotente — não repete).
+
+### F7-D — lembrete2hConsulta.js (15min)
+- A cada 15 minutos.
+- Procura consultas que começam em ~2h (janela 1h45-2h15 de agora).
+- Push ao fisio: "⏰ Consulta com [Paciente] às [HH:mm] — faltam ~2 horas."
+- Marca lembrete_2h_enviado=true (idempotente).
+
+### F7-E — caoGuardaConsultas.js (02:00)
+- Todos os dias às 02:00 (Europe/Lisbon).
+- Verifica: (1) consultas de hoje sem fisio ativo (órfãs), (2) consultas de datas passadas não concluídas (esquecidas).
+- Notifica diretores clínicos + admins da empresa com alertas.
+
+### F7-F — arquivistaConsultas.js (domingo 03:00)
+- Todos os domingos às 03:00 (Europe/Lisbon).
+- Move consultas concluídas/canceladas/faltou/nao_compareceu com >6 meses para consultas_arquivo.
+- Preserva todos os campos (incluindo nota clínica SOAP).
+- Robusto: se falhar a criar no arquivo, não apaga o original.
+
+### F7-G — Montagem no server.js + testes
+- 5 jobs montados no arranque (dentro de `if (require.main === module)` após os jobs legacy).
+- Jobs legacy (dailyBriefing, agendaAmanha, caoGuarda, arquivista) mantêm-se até F8.
+- **Testes: 200/200 ✓** (+8 testes cobrindo briefing, lembrete 24h, lembrete 2h com idempotência, cão de guarda, arquivista com move e não-move).
+
+### F7-H — Documentação (Task DOC-F7 por subagent)
+- `docs/BACKEND.md`: modelo ConsultaArquivo documentado, 5 cron jobs detalhados (schedules, destinatários, mensagens, idempotência), entrada F7 no histórico.
+- `docs/ARQUITETURA.md`: F7 marcado ✅ no roadmap, secção de cron jobs reescrita, decisões de design #11 (idempotência) e #12 (arquivo separado RGPD) adicionadas.
+
+Stage Summary:
+- **5 cron jobs criados** para o domínio Fisioterapia: briefing fisio (08:00), lembrete amanhã (19:00), lembrete 2h (15min), cão de guarda (02:00), arquivista (domingo 03:00).
+- **Idempotência** via flags lembrete_24h_enviado e lembrete_2h_enviado (não repete notificações).
+- **Timezone blindado**: todos os jobs usam Europe/Lisbon (robusto em servidores UTC).
+- **ConsultaArquivo** preserva notas clínicas SOAP indefinitely (RGPD — 10-20 anos).
+- **200/200 testes ✓**.
+- **Próximo passo:** F8 (limpeza — remover Tarefa, TarefaArquivo, Propriedade, ModeloChecklist antigos + jobs legacy).

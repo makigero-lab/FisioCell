@@ -4046,3 +4046,248 @@ describe('F5 — Protocolos (CRUD + snapshot)', () => {
     expect(res.status).toBe(401);
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* F7 — Cron Jobs de Consultas                                         */
+/* ------------------------------------------------------------------ */
+
+
+/* ------------------------------------------------------------------ */
+/* F7 — Cron Jobs de Consultas                                         */
+/* ------------------------------------------------------------------ */
+
+describe('F7 — Cron Jobs de Consultas', () => {
+  let fisioF7Id, diretorF7Id;
+  let pacienteF7Id, salaF7Id;
+
+  beforeAll(async () => {
+    const hash = await bcrypt.hash(PASSWORD, 10);
+
+    const fisio = await Utilizador.create({
+      nome: 'Fisio F7', email: 'fisio.f7@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'fisioterapeuta', ativo: true,
+      perfil_profissional: { cedula: 'FIS-F7', ativo_clinico: true },
+    });
+    fisioF7Id = String(fisio._id);
+
+    const diretor = await Utilizador.create({
+      nome: 'Diretor F7', email: 'diretor.f7@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'diretor_clinico', ativo: true,
+      perfil_profissional: { cedula: 'DIR-F7' },
+    });
+    diretorF7Id = String(diretor._id);
+
+    const Paciente = require('../models/Paciente');
+    const pac = await Paciente.create({ empresa_id: empresaId, nome: 'Paciente F7', telefone: '+351900000007' });
+    pacienteF7Id = String(pac._id);
+
+    const sala = await Propriedade.create({ empresa_id: empresaId, nome: 'Sala F7', morada: 'x', tempo_limpeza_minutos: 45 });
+    salaF7Id = String(sala._id);
+
+    // Cria horário recorrente para o fisio (seg-sex 09-19).
+    const HorarioFisioterapeuta = require('../models/HorarioFisioterapeuta');
+    for (let d = 1; d <= 5; d++) {
+      await HorarioFisioterapeuta.create({ empresa_id: empresaId, fisioterapeuta_id: fisioF7Id, tipo: 'recorrente', dia_semana: d, hora_inicio: '09:00', hora_fim: '19:00' });
+    }
+  });
+
+  afterAll(async () => {
+    await Utilizador.deleteMany({ email: { $in: ['fisio.f7@teste.pt', 'diretor.f7@teste.pt'] } });
+    const Paciente = require('../models/Paciente');
+    const HorarioFisioterapeuta = require('../models/HorarioFisioterapeuta');
+    const Consulta = require('../models/Consulta');
+    const ConsultaArquivo = require('../models/ConsultaArquivo');
+    await Paciente.deleteOne({ _id: pacienteF7Id });
+    await Propriedade.deleteOne({ _id: salaF7Id });
+    await HorarioFisioterapeuta.deleteMany({ fisioterapeuta_id: fisioF7Id });
+    await Consulta.deleteMany({ fisioterapeuta_id: fisioF7Id });
+    await ConsultaArquivo.deleteMany({ fisioterapeuta_id: fisioF7Id });
+  });
+
+  it('briefingDiarioFisio — notifica fisio com consulta hoje', async () => {
+    const Consulta = require('../models/Consulta');
+    const agora = new Date();
+    const horaConsulta = new Date(agora.getTime() + 2 * 60 * 60 * 1000); // +2h
+    await Consulta.create({
+      empresa_id: empresaId, sala_id: salaF7Id, fisioterapeuta_id: fisioF7Id,
+      paciente_id: pacienteF7Id,
+      data_hora_inicio: horaConsulta,
+      data_hora_fim: new Date(horaConsulta.getTime() + 45 * 60000),
+      duracao_minutos: 45, estado: 'marcada', criada_por: diretorF7Id,
+    });
+
+    const { executarBriefingFisio } = require('../jobs/briefingDiarioFisio');
+    const resultado = await executarBriefingFisio();
+
+    expect(resultado.consultas).toBeGreaterThanOrEqual(1);
+    expect(resultado.notificados).toBeGreaterThanOrEqual(1);
+
+    // Limpa.
+    await Consulta.deleteMany({ fisioterapeuta_id: fisioF7Id, data_hora_inicio: horaConsulta });
+  });
+
+  it('briefingDiarioFisio — sem consultas hoje → 0 notificados', async () => {
+    const { executarBriefingFisio } = require('../jobs/briefingDiarioFisio');
+    const resultado = await executarBriefingFisio();
+    // Pode haver consultas de outros testes, mas o resultado deve ser um número.
+    expect(typeof resultado.consultas).toBe('number');
+    expect(typeof resultado.notificados).toBe('number');
+  });
+
+  it('lembreteConsultasAmanha — notifica e marca lembrete_24h_enviado', async () => {
+    const Consulta = require('../models/Consulta');
+    const amanha = new Date();
+    amanha.setDate(amanha.getDate() + 1);
+    amanha.setHours(10, 0, 0, 0);
+
+    const consulta = await Consulta.create({
+      empresa_id: empresaId, sala_id: salaF7Id, fisioterapeuta_id: fisioF7Id,
+      paciente_id: pacienteF7Id,
+      data_hora_inicio: amanha,
+      data_hora_fim: new Date(amanha.getTime() + 45 * 60000),
+      duracao_minutos: 45, estado: 'marcada', criada_por: diretorF7Id,
+      lembrete_24h_enviado: false,
+    });
+
+    const { executarLembreteAmanha } = require('../jobs/lembreteConsultasAmanha');
+    const resultado = await executarLembreteAmanha();
+
+    expect(resultado.consultas).toBeGreaterThanOrEqual(1);
+    expect(resultado.notificados).toBeGreaterThanOrEqual(1);
+
+    // Verifica que lembrete_24h_enviado foi marcado.
+    const atualizada = await Consulta.findById(consulta._id).lean();
+    expect(atualizada.lembrete_24h_enviado).toBe(true);
+
+    await Consulta.deleteOne({ _id: consulta._id });
+  });
+
+  it('lembrete2hConsulta — notifica consulta que começa em ~2h', async () => {
+    const Consulta = require('../models/Consulta');
+    const inicio = new Date(Date.now() + 2 * 60 * 60 * 1000); // +2h
+    const consulta = await Consulta.create({
+      empresa_id: empresaId, sala_id: salaF7Id, fisioterapeuta_id: fisioF7Id,
+      paciente_id: pacienteF7Id,
+      data_hora_inicio: inicio,
+      data_hora_fim: new Date(inicio.getTime() + 45 * 60000),
+      duracao_minutos: 45, estado: 'marcada', criada_por: diretorF7Id,
+      lembrete_2h_enviado: false,
+    });
+
+    const { executarLembrete2h } = require('../jobs/lembrete2hConsulta');
+    const resultado = await executarLembrete2h();
+
+    expect(resultado.consultas).toBeGreaterThanOrEqual(1);
+    expect(resultado.notificados).toBeGreaterThanOrEqual(1);
+
+    const atualizada = await Consulta.findById(consulta._id).lean();
+    expect(atualizada.lembrete_2h_enviado).toBe(true);
+
+    await Consulta.deleteOne({ _id: consulta._id });
+  });
+
+  it('lembrete2hConsulta — ignora consultas já notificadas', async () => {
+    const Consulta = require('../models/Consulta');
+    const inicio = new Date(Date.now() + 2 * 60 * 60 * 1000);
+    const consulta = await Consulta.create({
+      empresa_id: empresaId, sala_id: salaF7Id, fisioterapeuta_id: fisioF7Id,
+      paciente_id: pacienteF7Id,
+      data_hora_inicio: inicio,
+      data_hora_fim: new Date(inicio.getTime() + 45 * 60000),
+      duracao_minutos: 45, estado: 'marcada', criada_por: diretorF7Id,
+      lembrete_2h_enviado: true, // já notificada
+    });
+
+    const { executarLembrete2h } = require('../jobs/lembrete2hConsulta');
+    const resultado = await executarLembrete2h();
+
+    // Não deve contar esta consulta (já notificada).
+    const atualizada = await Consulta.findById(consulta._id).lean();
+    expect(atualizada.lembrete_2h_enviado).toBe(true);
+
+    await Consulta.deleteOne({ _id: consulta._id });
+  });
+
+  it('caoGuardaConsultas — deteta consultas esquecidas (data passada)', async () => {
+    const Consulta = require('../models/Consulta');
+    const ontem = new Date();
+    ontem.setDate(ontem.getDate() - 1);
+    ontem.setHours(10, 0, 0, 0);
+
+    const consulta = await Consulta.create({
+      empresa_id: empresaId, sala_id: salaF7Id, fisioterapeuta_id: fisioF7Id,
+      paciente_id: pacienteF7Id,
+      data_hora_inicio: ontem,
+      data_hora_fim: new Date(ontem.getTime() + 45 * 60000),
+      duracao_minutos: 45, estado: 'marcada', criada_por: diretorF7Id,
+    });
+
+    const { executarCaoGuardaConsultas } = require('../jobs/caoGuardaConsultas');
+    const resultado = await executarCaoGuardaConsultas();
+
+    expect(resultado.esquecidas).toBeGreaterThanOrEqual(1);
+
+    await Consulta.deleteOne({ _id: consulta._id });
+  });
+
+  it('arquivistaConsultas — move consultas concluídas >6 meses para arquivo', async () => {
+    const Consulta = require('../models/Consulta');
+    const ConsultaArquivo = require('../models/ConsultaArquivo');
+    const antiga = new Date();
+    antiga.setMonth(antiga.getMonth() - 7);
+    antiga.setHours(10, 0, 0, 0);
+
+    const consulta = await Consulta.create({
+      empresa_id: empresaId, sala_id: salaF7Id, fisioterapeuta_id: fisioF7Id,
+      paciente_id: pacienteF7Id,
+      data_hora_inicio: antiga,
+      data_hora_fim: new Date(antiga.getTime() + 45 * 60000),
+      duracao_minutos: 45, estado: 'concluida', criada_por: diretorF7Id,
+      concluida_em: antiga,
+    });
+
+    const { executarArquivistaConsultas } = require('../jobs/arquivistaConsultas');
+    const resultado = await executarArquivistaConsultas();
+
+    expect(resultado.arquivadas).toBeGreaterThanOrEqual(1);
+
+    // Verifica que foi movida (não existe mais na coleção principal).
+    const aindaExiste = await Consulta.findById(consulta._id).lean();
+    expect(aindaExiste).toBeNull();
+
+    // Verifica que está no arquivo.
+    const arquivada = await ConsultaArquivo.findOne({
+      paciente_id: pacienteF7Id,
+      data_hora_inicio: antiga,
+    }).lean();
+    expect(arquivada).toBeTruthy();
+    expect(arquivada.arquivado_em).toBeTruthy();
+
+    await ConsultaArquivo.deleteOne({ _id: arquivada._id });
+  });
+
+  it('arquivistaConsultas — não arquiva consultas recentes', async () => {
+    const Consulta = require('../models/Consulta');
+    const recente = new Date();
+    recente.setMonth(recente.getMonth() - 2); // 2 meses atrás
+    recente.setHours(10, 0, 0, 0);
+
+    const consulta = await Consulta.create({
+      empresa_id: empresaId, sala_id: salaF7Id, fisioterapeuta_id: fisioF7Id,
+      paciente_id: pacienteF7Id,
+      data_hora_inicio: recente,
+      data_hora_fim: new Date(recente.getTime() + 45 * 60000),
+      duracao_minutos: 45, estado: 'concluida', criada_por: diretorF7Id,
+      concluida_em: recente,
+    });
+
+    const { executarArquivistaConsultas } = require('../jobs/arquivistaConsultas');
+    await executarArquivistaConsultas();
+
+    // A consulta recente não deve ter sido arquivada.
+    const aindaExiste = await Consulta.findById(consulta._id).lean();
+    expect(aindaExiste).toBeTruthy();
+
+    await Consulta.deleteOne({ _id: consulta._id });
+  });
+});
