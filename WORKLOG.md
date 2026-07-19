@@ -754,3 +754,1146 @@ Stage Summary:
 - **Lixeira / soft delete:** empresas eliminadas vão para Reciclagem (restauráveis); índice único MongoDB legado removido no arranque.
 - **Staff UX:** navegação por dias (±30 dias), tarefas agrupadas por dia, morada no cartão, `nome_hospede`, Exportar PDF (`window.print`).
 - Documentação (`README.md`, `docs/BACKEND.md`, `docs/FRONTEND.md`, este `WORKLOG.md`) atualizada retroativamente para cobrir os Prompts 115-131.
+
+
+---
+
+Task ID: DOC-F0
+Agent: general-purpose
+Task: Limpeza de documentação Smoobu + criação de docs/ARQUITETURA.md
+
+Work Log:
+- Lido `WORKLOG.md` (756 linhas, última entrada A18 — Prompts 115-131) para contexto da era Alojamento Local.
+- Baseline Smoobu: `README.md` 14 refs · `docs/BACKEND.md` 77 refs · `docs/FRONTEND.md` 16 refs (total 107).
+- Confirmada estrutura backend pós-F0: `controllers/` sem `smoobuController.js`/`webhookController.js`; `routes/` sem `webhookRoutes.js`; `utils/loadBalancer.js` presente; `models/` mantém `WebhookLog.js`, `Tarefa.js`, `Propriedade.js`, `ModeloChecklist.js`, `TarefaArquivo.js` (serão migrados em F3–F8); `server.js` healthcheck já diz "API do FisioCell online e ligada à BD!".
+
+- **README.md** (0 refs Smoobu ✅):
+  - Descrição: "SaaS de gestão para Alojamento Local" → "SaaS de gestão para Clínicas de Fisioterapia".
+  - Estrutura do repositório: removidos `controllers/webhookController.js` e `routes/webhookRoutes.js`; adicionados `utils/` (loadBalancer, geocoding, scheduler, etc.) e lista de routes atualizada.
+  - Healthcheck: "API do Alojamento Local..." → "API do FisioCell...".
+  - Endpoints: removidas 10 linhas Smoobu (POST /webhooks/smoobu, /api/gestor/smoobu/*, /api/gestor/webhooks/*, /api/admin/backfill-*, /api/admin/empresas/:id/sincronizar-*/registrar-webhooks). Limpos smoobu_id de body descrições (POST/PUT /api/gestor/propriedades). Atualizado /api/admin/empresas/:id/config (API key Smoobu → morada/telefone/email).
+  - Link anchor `#32-lógica-central--atribuição-de-tarefas-webhook-smoobu` simplificado para `docs/BACKEND.md`.
+
+- **docs/BACKEND.md** (0 refs ativas ✅; 23 refs totais = 6 F0 + 17 histórico):
+  - Adicionada nota F0 no topo: "⚠️ F0 — Documentação em transição. A integração Smoobu foi removida..."
+  - Domínio: "Alojamento Local" → "Fisioterapia".
+  - Secção 2 (Estrutura): removidos `webhookController.js`/`webhookRoutes.js`; adicionados todos os controllers/routes/utils reais; `Propriedade.js` e `Tarefa.js` marcados como "será migrado para Sala/Consulta em F3/F4".
+  - Secção 3.1 (Modelos): `Empresa` ganhou campos `morada`/`telefone`/`email` (F0). `Propriedade` — removido `smoobu_id`, atualizadas descrições de `tempo_limpeza_minutos`/`capacidade_hospedes`/`ativo`. `Tarefa` — removido `smoobu_reserva_id`, atualizada `detalhes_reserva`. `Utilizador.ativo` — removida referência ao webhook.
+  - Secção 3.2 (Lógica central): substituída integralmente. Era "Atribuição de tarefas (Webhook Smoobu)" com fluxo de 9 passos; agora descreve o motor de atribuição em `utils/loadBalancer.js` (7 passos) com nota F0 explicando que a criação automática via webhook foi descontinuada.
+  - Secção 3.3 (Cron Jobs): removida referência "o mesmo usado no webhook".
+  - Secção 5 (Env vars): confirmado sem SMOOBU_API_KEY (já não estava na tabela principal).
+  - Secção 6 (API): healthcheck atualizado. Removida secção `POST /webhooks/smoobu` (payload + exemplo JSON). Removidas secções 6.5–6.9 (Webhooks logs, Webhook robustez, Sincronização massa, Listar propriedades Smoobu, Sincronizar propriedades Smoobu) — substituídas por nota F0 "Removidos". Secção 6.11 "Impacto no webhook" → "Impacto no motor de atribuição (load balancer)".
+  - Secção 6.1 (setup): "O Meu Alojamento Local" → "Clínica FisioCell Teste"; removido `smoobu_id: '99999'` do setup e da resposta JSON.
+  - GET/POST /api/admin/propriedades: removido `smoobu_id` da resposta/body/erros.
+  - Secção 9 (Histórico): adicionada nota F0 histórica no topo do changelog ("As entradas abaixo anteriores a F0 descrevem a era Alojamento Local..."). Changelog preservado como registo histórico (git log mantém o histórico completo).
+
+- **docs/FRONTEND.md** (0 refs ativas ✅; 11 refs totais = 2 F0 + 9 histórico):
+  - Adicionada nota F0 no topo: "⚠️ F0 — Documentação em transição. Páginas de webhooks Smoobu descontinuadas..."
+  - Domínio: "Alojamento Local" → "Fisioterapia".
+  - Secção 3 (Rotas): removida linha `/admin/webhooks` da tabela de rotas.
+  - Secção 3.1 (Área Admin): sidebar de 9→8 itens (removido "Webhooks"). `/admin/propriedades` — removidas dropdown Smoobu + botão "Sincronizar Smoobu" + smoobu_id read-only. `/admin/tarefas` — removido botão "Sincronizar Smoobu". Removido item "Webhooks" da lista de páginas.
+  - Secção `/admin/propriedades` (Client Component): coluna "Smoobu ID" removida da tabela; campo "Smoobu ID" removido do formulário; validação "Smoobu ID obrigatório" removida.
+  - Secção `/admin/calendario`: "Integração com webhook" → "Integração com o motor de atribuição (load balancer)".
+  - Secção 13 (Histórico): adicionada nota F0 histórica no topo do changelog (igual ao BACKEND.md).
+
+- **docs/ARQUITETURA.md** (novo ficheiro, ~300 linhas):
+  - Criado com a proposta de arquitetura v0.1 do FisioCell em pt-pt.
+  - 9 secções: Visão Geral (stack Node/Express/MongoDB + Next.js 14/TS/Tailwind/shadcn + FullCalendar v6), Princípios Herdados (8 princípios em tabela), Hierarquia de Roles (4 roles + matriz de permissões recursos×roles + middleware isDiretorClinico/isClinico/isRececionista), Mapa de Migração de Domínio (Empresa→Empresa, Propriedade→Sala, Tarefa→Consulta, smoobuController/webhookController→❌removido, novos: Paciente/HorarioFisioterapeuta/Documento), Modelos Propostos v0.1 (esquemas Mongoose para Empresa/Utilizador/Paciente/Consulta/Sala/HorarioFisioterapeuta/Documento), Cron Jobs (5 jobs adaptados: briefingDiarioFisio 08:00, lembreteConsultasAmanha 19:00, lembrete2hConsulta 15min, caoGuardaConsultas 02:00, arquivistaConsultas semanal), Decisões de Design (8 decisões justificadas), Roadmap F0–F9 (tabela com 10 fases, F0✅), Questões Respondidas (5 questões: faturação Não, portal Não, multi-clínica Não, documentos Sim→F9, grupo Não).
+
+Stage Summary:
+- **README.md**: 0 refs Smoobu (objetivo 0 atingido). Descrição, estrutura, healthcheck, endpoints e env vars atualizados para Fisioterapia.
+- **docs/BACKEND.md**: 0 refs Smoobu ATIVAS. 6 refs em notas F0 explicativas (aceitáveis per task) + 17 refs em changelog histórico (contextualizadas por nota F0 no topo do changelog). Secção 3.2 reescrita (webhook → load balancer), secções 6.5–6.9 removidas, modelos limpos de smoobu_id/smoobu_reserva_id/smoobu_api_key, setup "Clínica FisioCell Teste".
+- **docs/FRONTEND.md**: 0 refs Smoobu ATIVAS. 2 refs em notas F0 explicativas + 9 refs em changelog histórico. Páginas/itens de webhooks removidos, referências a Sincronizar Smoobu/dropdown Smoobu removidas.
+- **docs/ARQUITETURA.md**: criado (novo). Proposta v0.1 completa com 4 roles, 7 modelos Mongoose, 5 cron jobs, 8 decisões de design, roadmap F0–F9, e 5 questões respondidas pelo utilizador.
+- **WORKLOG.md**: esta entrada DOC-F0 adicionada em append.
+- Validação `rg -c -i "smoobu"`: README.md 0 · BACKEND.md 23 (6 F0 + 17 histórico) · FRONTEND.md 11 (2 F0 + 9 histórico). Objetivo "0 refs ativas" atingido — todas as refs restantes são notas F0 explicativas ou registos históricos de changelog.
+
+---
+Task ID: F0
+Agent: Z.ai Code
+Task: Reexecução da F0 — rename Autocell → FisioCell + remoção completa da integração Smoobu + criação de docs/ARQUITETURA.md. (Esta fase já tinha sido executada anteriormente mas o commit não chegou ao remote — o branch foi revertido ao estado pré-F0 pelo utilizador.)
+
+Work Log:
+
+### F0-A — Remoção da integração Smoobu (backend)
+- Eliminados 3 ficheiros: `backend/controllers/smoobuController.js`, `backend/controllers/webhookController.js`, `backend/routes/webhookRoutes.js`.
+- `backend/server.js`: removido o mount `/webhooks` + import de `webhookRoutes`; cabeçalho atualizado (Autocell→FisioCell) + mensagem do healthcheck ("API do FisioCell online e ligada à BD!").
+- `backend/routes/gestorRoutes.js`: removidas 6 rotas Smoobu + respetivo import do `smoobuController`. Endpoint `/configuracoes` GET/PUT refatorado para gerir `nome/nif/morada/telefone/email` em vez de `smoobu_api_key`.
+- `backend/routes/adminRoutes.js` (913→~450 linhas): removidas todas as rotas Smoobu (scoped + globais + backfills). Endpoints `/config-empresa` e `/empresas/:id/config` refatorados para gerir `nome/nif/morada/telefone/email`. Import do `smoobuController` removido.
+
+### F0-B — Extração do load balancer
+- Criado `backend/utils/loadBalancer.js` com `calcularCargaLimpezaDia` e `determinarUtilizadorAtribuido` extraídas do `webhookController` eliminado. Reutiliza `obterRangeDia` + `calcularTempoViagem` do `utils/scheduler.js`.
+- `backend/controllers/tarefaController.js`: import mudou de `require('./webhookController')` para `require('../utils/loadBalancer')`.
+- `backend/jobs/caoGuarda.js`: mesma alteração de import.
+- `backend/controllers/gestorController.js`: `reprocessarWebhook` transformado em stub 410 Gone.
+
+### F0-C — Limpeza dos modelos Mongoose
+- `models/Empresa.js`: removido `smoobu_api_key`; adicionados `morada`, `telefone`, `email`.
+- `models/Propriedade.js`: removido `smoobu_id` (era `required: true, unique: true`).
+- `models/Tarefa.js`: removido `smoobu_reserva_id` (topo) + `detalhes_reserva.smoobu_reserva_id`. `detalhes_reserva` mantido como vestigial (será substituído por `nota_clinica` SOAP na F4).
+- `models/TarefaArquivo.js`: mesma remoção de `smoobu_reserva_id`.
+
+### F0-D — Limpeza dos controladores
+- `gestorController.js`: `criarPropriedade` removida validação de `smoobu_id` (obrigatório + único). `atualizarPropriedade` removida lógica de `smoobu_id`. `setupClienteZero`: empresa renomeada "Clínica FisioCell Teste", utilizadores renomeados (Diretor FisioCell, Responsável Clínico, João Fisioterapeuta), propriedade procurada por `nome` em vez de `smoobu_id`.
+
+### F0-E — Limpeza dos testes
+- `tests/integration.test.js` (3985→2847 linhas): removidos 6 blocos `describe` Smoobu (POST /webhooks/smoobu, GET /api/gestor/webhooks, POST /webhooks/:id/reprocessar, POST /smoobu/sincronizar, GET /smoobu/propriedades, POST /smoobu/sincronizar-propriedades) + 2 testes de `importarPropriedades` no bloco Correções. Testes de Propriedade CRUD atualizados: removido `smoobu_id` do setup e asserções; removidos 2 testes de duplicação 409 (constraint único deixou de existir).
+- `tests/server.test.js`: mensagem do healthcheck atualizada.
+- **Resultado: 111/111 testes a passar ✓** (eram 151, removidos ~40 testes Smoobu).
+
+### F0-F — Rename Autocell → FisioCell (73+ ficheiros)
+- 4 passos `sed` em massa (excluindo `node_modules`, `package-lock.json`, `agent-ctx`, `WORKLOG.md` histórico):
+  1. `autocell_admin_token` → `fisiocell_admin_token` (cookie de impersonação)
+  2. `autocell_token` → `fisiocell_token` (cookie de sessão principal)
+  3. `Autocell` → `FisioCell` (capitalizado)
+  4. `autocell` → `fisiocell` (lowercase: emails, package names, URLs)
+- `backend/package.json`: name → "fisiocell-backend"
+- `frontend/package.json`: name → "fisiocell-frontend"
+- `frontend/public/manifest.json`: name/description atualizados para Fisioterapia
+- 0 residuais de "autocell" no código.
+
+### F0-G — Documentação
+- Criado `docs/ARQUITETURA.md` com a proposta v0.1: visão geral, princípios herdados, hierarquia de 4 roles (admin/diretor_clinico/fisioterapeuta/rececionista), matriz de permissões, mapa de migração, 7 modelos propostos (Empresa, Utilizador, Paciente, Consulta, Sala, HorarioFisioterapeuta, Documento), cron jobs, decisões de design, roadmap F0-F9, questões respondidas.
+- Task DOC-F0 (subagent): limpeza de Smoobu em README.md (0 refs), docs/BACKEND.md (notas F0 + changelog histórico preservado), docs/FRONTEND.md (notas F0 + changelog histórico). Removidos ~10 endpoints Smoobu, ~130 linhas de secções Smoobu, atualizado domínio para Fisioterapia.
+
+Stage Summary:
+- **Código:** Smoobu completamente removido (3 ficheiros eliminados, 4 modelos limpos, 2 route files reescritos, load balancer extraído para `utils/loadBalancer.js`). 111/111 testes ✓.
+- **Rename:** Autocell→FisioCell aplicado em 73+ ficheiros (cookies `fisiocell_token` + `fisiocell_admin_token`, package names, emails, manifest, docs).
+- **Documentação:** `docs/ARQUITETURA.md` criado com a proposta v0.1 + modelo `Documento` (Q4). README/BACKEND/FRONTEND limpos de Smoobu.
+- **Commit + push:** Esta reexecução garante que o trabalho chega ao remote (a execução anterior não teve commit).
+- **Próximo passo:** F1 (adaptar Empresa + Utilizador com novos roles + perfil profissional).
+
+---
+Task ID: DOC-F1
+Agent: general-purpose
+Task: Atualização de documentação para F1 (migração de roles)
+
+Work Log:
+- Lido `WORKLOG.md` (864 linhas, última entrada F0) e `docs/ARQUITETURA.md` (342 linhas) para contexto.
+- Confirmado estado pós-F1 no código: `backend/middleware/requireRole.js` (isAdmin/isDiretorClinico/isClinico/isRececionista, sem isGestor/requireStaff/requireManager/requireAdmin); `backend/models/Utilizador.js` (enum novo + `perfil_profissional` com cedula/especialidades/biografia/cor_calendario/ativo_clinico, default role 'rececionista'); `backend/models/Empresa.js` (logo_url + bloco config estruturado com horario_padrao/duracao_consulta_padrao/tolerancia_atraso_min/fuso_horario); `backend/utils/loadBalancer.js` (query `role: 'fisioterapeuta'`); `frontend/src/middleware.ts` (Role type + rotaPorRole com rececionista → /gestor); `frontend/src/components/auth/route-guard.tsx` (aceita `Role | Role[]`); `frontend/src/app/gestor/layout.tsx` (`role={["diretor_clinico", "rececionista"]}`); `frontend/src/lib/auth.ts` + `frontend/src/lib/api.ts` (Role type atualizado).
+
+- **docs/BACKEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 2 (Estrutura): adicionado `middleware/requireRole.js` à árvore de diretórios.
+  - Secção 3.1 `Empresa`: adicionado `logo_url` (F1) e bloco `config` (F1) como sub-tabela própria (horario_padrao, duracao_consulta_padrao, tolerancia_atraso_min, fuso_horario); adicionados campos `ativa`/`apagada` que estavam em falta; nota F1 explicativa.
+  - Secção 3.1 `Utilizador`: roles migradas de admin/manager/staff para admin/diretor_clinico/fisioterapeuta/rececionista (com descrições RGPD de cada uma); enum atualizado para `['admin','diretor_clinico','fisioterapeuta','rececionista']` default `'rececionista'`; `responsavel_id` agora referencia admin/diretor_clinico; adicionados campos `telefone`/`dias_folga`/`eliminado_em`/`pushSubscription` que estavam em falta; novo sub-bloco `perfil_profissional` (cedula, especialidades, biografia, cor_calendario, ativo_clinico); nota F1 sobre migração de middleware (isGestor→isDiretorClinico, etc.); novo parágrafo "Middlewares RBAC (F1)" documentando isAdmin/isDiretorClinico/isClinico/isRececionista; regra de segurança atualizada (admin/manager → admin/diretor_clinico).
+  - Secção 3.2 (load balancer): passo 1 "Procurar Staff" → "Procurar Fisioterapeutas" com query `role: 'fisioterapeuta'`.
+  - Secção 6.1 GET /api/admin/equipa: exemplo JSON atualizado (João Fisioterapeuta / joao.fisio@fisiocell.pt / role fisioterapeuta).
+  - Secção 6.1 POST /api/admin/equipa: body exemplo `role: "fisioterapeuta"`; descrição do campo role atualizada (enum + default 'rececionista' no modelo, 'fisioterapeuta' no controller).
+  - Secção 6.1 PUT /api/admin/equipa: body exemplo `role: "diretor_clinico"` (era "manager").
+  - Secção 6.1 setup Cliente Zero: descrição dos 3 utilizadores atualizada (admin/gestor@fisiocell.pt/joao.fisio@fisiocell.pt com roles admin/diretor_clinico/fisioterapeuta); resposta JSON atualizada (nomes "Diretor FisioCell"/"Responsável Clínico"/"João Fisioterapeuta"); nota F1 sobre o email `gestor@fisiocell.pt` ser mantido por compatibilidade; credenciais de teste atualizadas.
+  - Secção 6.2 POST /api/auth/login: body e resposta JSON atualizados (joao.fisio@fisiocell.pt, nome "João Fisioterapeuta", role "fisioterapeuta").
+  - Secção 6.3 GET /api/admin/ausencias: resposta JSON atualizada (João Fisioterapeuta / role fisioterapeuta).
+  - Secção 6.3 POST /api/admin/ausencias: constraints de role atualizadas (fisioterapeuta/diretor_clinico em vez de staff/manager).
+  - Secção 6.3 "Integração com o webhook": corrigida ref legacy (webhookController → utils/loadBalancer.js, staff → fisioterapeutas).
+  - Secção 9 (Histórico): nota F0 expandida para "F0 + F1 — Notas históricas" cobrindo roles antigos e middleware legacy; nova entrada F1 no topo do changelog descrevendo os 5 grupos de alterações (modelo Utilizador, modelo Empresa, middleware/requireRole.js, load balancer + controllers, setupClienteZero).
+
+- **docs/FRONTEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 3 (Rotas): tabela atualizada — adicionada linha `/gestor` (área partilhada diretor_clinico+rececionista via RouteGuard); `/staff` agora descrito como "Área do Fisioterapeuta" com `role fisioterapeuta` (era "role staff").
+  - Secção 11 (`lib/auth.ts`): `rotaPorRole` atualizada (admin → /admin, diretor_clinico/rececionista → /gestor partilhado, fisioterapeuta → /staff); nota F1 sobre o tipo Role.
+  - Secção 11 (`lib/api.ts`): nota F1 sobre o tipo Role = admin/diretor_clinico/fisioterapeuta/rececionista.
+  - Secção 11 `/login`: redirect pós-login atualizado (admin → /admin, diretor_clinico/rececionista → /gestor, fisioterapeuta → /staff).
+  - Secção 11 `/admin/equipa`: "Responsável select populado com admin+diretor_clinico" (era admin+manager); nota F1.
+  - Secção 11 `/admin/calendario`: "filtrado a fisioterapeuta+diretor_clinico" (era staff+manager); nota F1.
+  - Secção 12.1 (`middleware.ts`): exemplo "staff tenta aceder a /admin" → "fisioterapeuta tenta aceder a /admin"; nova nota F1 sobre Role type e rotaPorRole (incl. validação de rota errada que aceita diretor_clinico+rececionista em /gestor/*).
+  - Secção 12.2 (`route-guard.tsx`): nova nota F1 sobre a prop `role` aceitar `Role | Role[]` para áreas partilhadas; menção explícita de `gestor/layout.tsx` com `role={["diretor_clinico", "rececionista"]}` e `staff/layout.tsx` agora com `role="fisioterapeuta"`.
+  - Secção 12.4: `rotaPorRole` atualizada para o mapeamento F1.
+  - Secção 13 (Histórico): nota F0 expandida para "F0 + F1 — Notas históricas" cobrindo roles antigos, área /manager removida, e área /gestor partilhada; nova entrada F1 no topo do changelog descrevendo os 6 grupos de alterações (middleware.ts, lib/auth.ts+api.ts, route-guard.tsx, gestor/layout.tsx, gestor/equipa/page.tsx, admin/page.tsx).
+
+- **docs/ARQUITETURA.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Banner topo: "acompanha a fase F0" → "acompanha as fases F0 e F1".
+  - Secção 4 (Mapa de Migração): linha do `Utilizador` marcada com "F1 ✅" (era "F1").
+  - Secção 5.1 `Empresa`: título "✅ F0 concluído" → "✅ F0 + F1 concluídos"; schema atualizado para refletir a implementação real (logo_url, bloco config estruturado com horario_padrao/duracao_consulta_padrao/tolerancia_atraso_min/fuso_horario, ativa/apagada com index).
+  - Secção 5.2 `Utilizador`: título "F1" → "✅ F1 concluído"; schema atualizado para refletir a implementação real (default role 'rececionista' em vez de 'fisioterapeuta'; perfil_profissional completo com biografia e ativo_clinico; pushSubscription; ordem dos campos alinhada com o modelo real).
+  - Secção 8 (Roadmap): F1 marcado como "✅ Concluído" (era "Pendente").
+
+Stage Summary:
+- **docs/BACKEND.md**: 0 refs ativas a `'staff'`/`'gestor'`/`'manager'`/`isGestor` (3 notas F1 explicativas + 4 entradas de changelog histórico cobertas pela nota F1 no topo da secção 9). Modelo `Utilizador` com 4 roles + `perfil_profissional`; modelo `Empresa` com `logo_url` + bloco `config`; load balancer referencia `role: 'fisioterapeuta'`; setupClienteZero com 3 utilizadores novos; entrada F1 adicionada ao histórico.
+- **docs/FRONTEND.md**: 0 refs ativas a `'staff'`/`'gestor'`/`'manager'`/`isGestor` (2 entradas de changelog histórico cobertas pela nota F1 no topo da secção 13). middleware.ts e route-guard.tsx documentados com a prop `Role | Role[]`; /gestor marcado como área partilhada diretor_clinico+rececionista; /staff marcado como área do fisioterapeuta; entrada F1 adicionada ao histórico.
+- **docs/ARQUITETURA.md**: F1 marcado como ✅ Concluído no roadmap (secção 8) e no mapa de migração (secção 4); schemas de Empresa e Utilizador alinhados com a implementação real; banner topo atualizado.
+- **Validação `rg -c "'staff'|'gestor'|isGestor"`**: BACKEND.md 7 (3 F1 explicativas + 4 histórico) · FRONTEND.md 2 (2 histórico). Objetivo "0 refs ativas" atingido — todas as refs restantes são notas F1 explicativas ou registos históricos de changelog cobertos pela nota F1 no topo das secções 9 (BACKEND) e 13 (FRONTEND).
+- **WORKLOG.md**: esta entrada DOC-F1 adicionada em append.
+
+---
+Task ID: F1
+Agent: Z.ai Code
+Task: Adaptar Empresa + Utilizador para o domínio Fisioterapia — novos roles (admin/diretor_clinico/fisioterapeuta/rececionista), perfil profissional embutido, config da clínica, middleware RBAC atualizado, propagação para load balancer/controllers/routes/testes/frontend.
+
+Work Log:
+
+### F1-A — Modelo Utilizador
+- Enum de roles migrado: `['admin', 'gestor', 'staff']` → `['admin', 'diretor_clinico', 'fisioterapeuta', 'rececionista']` (default `rececionista`, indexado).
+- Adicionado bloco `perfil_profissional`: `cedula` (Ordem dos Fisioterapeutas), `especialidades` (array), `biografia`, `cor_calendario` (default `#3b82f6`), `ativo_clinico` (default true).
+- Cabeçalho reescrito com a nova hierarquia e regra RGPD (admin não vê dados clínicos).
+
+### F1-B — Modelo Empresa
+- Adicionado `logo_url`.
+- Adicionado bloco `config`: `horario_padrao` (array de {dia_semana, abertura, fecho}), `duracao_consulta_padrao` (default 45, min 15), `tolerancia_atraso_min` (default 10), `fuso_horario` (default 'Europe/Lisbon').
+
+### F1-C — Middleware requireRole.js
+- Removidos `isGestor`, `requireStaff`, `requireManager`, `requireAdmin` (legacy).
+- Adicionados: `isAdmin` (só admin), `isDiretorClinico` (admin+diretor_clinico), `isClinico` (admin+diretor_clinico+fisioterapeuta), `isRececionista` (admin+diretor_clinico+rececionista).
+
+### F1-D — Load balancer + controllers (substituições em massa)
+- `role: 'staff'` → `role: 'fisioterapeuta'` (load balancer, gestorController, tarefaController, ausenciaController, caoGuarda).
+- `role: 'gestor'` → `role: 'diretor_clinico'`.
+- `['staff', 'gestor']` → `['fisioterapeuta', 'diretor_clinico']`.
+- `isGestor` → `isDiretorClinico` em todas as routes.
+- `gestorController.criarMembroEquipa` / `atualizarMembroEquipa`: validações de role atualizadas para os 3 novos roles (diretor_clinico, fisioterapeuta, rececionista).
+- `superAdminController.criarUtilizadorEmpresa`: mesma atualização.
+- `superAdminController.impersonarGestor`: query e token geram role 'diretor_clinico'.
+- `staffController.faltaHoje`: notificação push envia para 'diretor_clinico' + 'admin'.
+- `ausenciaController.cancelarAusencia`: condição de role atualizada.
+
+### F1-E — setupClienteZero
+- Roles dos utilizadores de teste: admin → admin, gestor → diretor_clinico, staff → fisioterapeuta.
+- (Já tinha sido renomeado em F0, mas os roles internos precisavam de mudar.)
+
+### F1-F — Testes (integration.test.js)
+- Substituições em massa: `role: 'staff'` → `role: 'fisioterapeuta'`, `role: 'gestor'` → `role: 'diretor_clinico'`.
+- Asserções: `toBe('gestor')` → `toBe('diretor_clinico')`, `toContain('gestor'/'staff')` → `toContain('diretor_clinico'/'fisioterapeuta')`.
+- 1 teste corrigido manualmente (`toHaveProperty('gestor')` mantido — é o nome do campo JSON da API, não o role).
+- **Resultado: 111/111 testes a passar ✓.**
+
+### F1-G — Frontend
+- `middleware.ts`: `Role` type atualizado para os 4 roles; `rotaPorRole` trata rececionista → /gestor; `rotaErrada` permite rececionista em /gestor.
+- `route-guard.tsx`: prop `role` agora aceita `Role | Role[]` (para áreas partilhadas); lógica de redirect atualizada.
+- `gestor/layout.tsx`: `<RouteGuard role={["diretor_clinico", "rececionista"]}>` (área partilhada).
+- `lib/auth.ts`: `Role` type + `rotaPorRole` atualizados (rececionista → /gestor).
+- `lib/api.ts`: `Role` type atualizado.
+- `gestor/equipa/page.tsx`: `ROLE_LABEL` e `ROLE_VARIANT` atualizados (4 roles); options do formulário atualizadas.
+- `admin/page.tsx`: labels de role atualizados (Diretor Clínico, Fisioterapeuta, Rececionista).
+- `propriedades/page.tsx`: filtro de staff → fisioterapeuta.
+- **Validação: tsc ✓, lint ✓, build ✓ (middleware 26.8kB).**
+
+### F1-H — Documentação (Task DOC-F1 por subagent)
+- `docs/BACKEND.md`: tabelas de Empresa (logo_url + config) e Utilizador (perfil_profissional) atualizadas; middleware RBAC documentado; load balancer role atualizada; exemplos JSON atualizados; entrada F1 no histórico.
+- `docs/FRONTEND.md`: rotas, middleware, route-guard, ROLE_LABEL atualizados; entrada F1 no histórico.
+- `docs/ARQUITETURA.md`: F1 marcado como ✅ Concluído no roadmap; schemas alinhados com a implementação real.
+
+Stage Summary:
+- **Roles migrados com sucesso** para o domínio Fisioterapia: admin, diretor_clinico, fisioterapeuta, rececionista. Default `rececionista` (menos privilegiado após admin).
+- **Perfil profissional** embutido no Utilizador (cédula, especialidades, cor do calendário) — prepara o caminho para F3 (horários) e F4 (consultas).
+- **Config da clínica** embutida na Empresa (horário padrão, duração de consulta, fuso) — prepara o motor de disponibilidade de F3.
+- **Middleware RBAC** com 4 atalhos compostos: `isAdmin`, `isDiretorClinico`, `isClinico`, `isRececionista`.
+- **/gestor partilhado** por diretor_clinico + rececionista (a rececionista gere marcações; o backend limita via `isRececionista` o acesso a notas clínicas).
+- **111/111 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
+- **Próximo passo:** F2 (Criar Paciente + CRUD + permissões).
+
+---
+Task ID: DOC-F2
+Agent: general-purpose
+Task: Atualização de documentação para F2 (Pacientes)
+
+Work Log:
+- Lido `WORKLOG.md` (980 linhas, últimas entradas DOC-F0/F0/DOC-F1/F1) e `docs/ARQUITETURA.md` (357 linhas) para contexto.
+- Confirmado estado pós-F2 no código: `backend/models/Paciente.js` (empresa_id, nome, data_nascimento default null index, genero enum ['M','F','Outro','NA'] default 'NA', num_utente SNS, nif, telefone obrigatório, email/morada, contacto_emergencia {nome,telefone,relacao}, historico_medico, alergias [String], consentimento_dados {concedido,data,versao_termos}, ativo index, eliminado_em index soft delete, observacoes, origem enum ['walk_in','referenciacao','online','outro'] default 'walk_in'; índices compostos {empresa_id,nome}, {empresa_id,num_utente}, {empresa_id,ativo,eliminado_em}); `backend/controllers/pacienteController.js` (6 funções + helpers `temAcessoClinico`/`sanitizarParaNaoClinico` + auditoria); `backend/routes/pacienteRoutes.js` (middleware custom `podeVer` 4 roles para GET/POST/PUT, `isRececionista` para PATCH estado, `isDiretorClinico` para DELETE soft delete); `backend/server.js` mount `/api/gestor/pacientes`; `frontend/src/app/gestor/pacientes/page.tsx` (grid de cartões + busca + modais); `frontend/src/lib/api.ts` (PacienteDTO + PacienteListResponse); `frontend/src/components/gestor/gestor-sidebar.tsx` (item Pacientes, ícone UserRound).
+
+- **docs/BACKEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 2 (Estrutura): adicionado `pacienteController.js` à árvore de controllers; `Paciente.js` à árvore de models; `pacienteRoutes.js` à árvore de routes. Atualizada contagem "5 coleções" → "6 coleções" na secção 3.1.
+  - Secção 3.1: nova subsecção `Paciente` (após `Tarefa`) — nota F2 sobre entidade separada do Utilizador + soft delete + sanitização; tabela completa de campos (empresa_id, nome, data_nascimento, genero, num_utente, nif, telefone, email, morada, contacto_emergencia, historico_medico, alergias, consentimento_dados, ativo, eliminado_em, observacoes, origem); sub-tabela `consentimento_dados` (concedido/data/versao_termos); lista de índices compostos; nota de permissões (temAcessoClinico/sanitizarParaNaoClinico, podeVer/isRececionista/isDiretorClinico, flag dados_clinicos).
+  - Secção 6 (API): nova secção 6.12 — Pacientes (`/api/gestor/pacientes`). Bloco de permissões (podeVer/isRececionista/isDiretorClinico), bloco de sanitização (temAcessoClinico/sanitizarParaNaoClinico/dados_clinicos), nota F2 sobre filtro "fisio vê só os seus" ficar para F4. Documentados 6 endpoints: GET / (lista com query params busca/ativo/limit), GET /:id (detalhe), POST / (criar com body exemplo completo), PUT /:id (atualizar), PATCH /:id/estado (alternar ativo), DELETE /:id (soft delete). Cada um com auth, body, resposta, erros, auditoria.
+  - Secção 9 (Histórico): nova entrada F2 no topo do changelog descrevendo os 4 grupos de alterações (modelo Paciente com todos os campos + índices; controller com 6 funções + helpers + auditoria; routes com middlewares; mount em server.js). 130/130 testes ✓.
+
+- **docs/FRONTEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 3 (Rotas): adicionada linha `/gestor/pacientes` à tabela (CRUD de Pacientes F2 — grid, busca, modais, soft delete, permissões por role).
+  - Secção 11 (`lib/api.ts`): adicionado bullet `PacienteDTO`/`PacienteListResponse` (F2) — campos clínicos opcionais espelham a sanitização do backend; PacienteListResponse com flag dados_clinicos.
+  - Secção 11: nova subsecção `/gestor/pacientes (Client Component) — F2` (após `/admin/calendario`). Nota sobre item de sidebar (gestor-sidebar.tsx, href /gestor/pacientes, ícone UserRound do lucide-react, entre Propriedades e Equipa). Documentação do grid de cartões, busca (?busca=), modal criar/editar (Dialog) com campos clínicos condicionados a dados_clinicos, modal de detalhe, toggle de estado (adminPatch), editar (adminPut), eliminar (adminDelete só diretor_clinico/admin), estados visuais (loading/erro/vazio), tipos PacienteDTO/PacienteListResponse.
+  - Secção 13 (Histórico): nova entrada F2 no topo do changelog descrevendo os 3 grupos de alterações (página /gestor/pacientes; tipos PacienteDTO/PacienteListResponse em lib/api.ts; item Pacientes no gestor-sidebar com ícone UserRound). Lint + tsc + build ✓.
+
+- **docs/ARQUITETURA.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Banner topo: "acompanha as fases F0 e F1" → "acompanha as fases F0, F1 e F2" (com descrição "Paciente + CRUD + sanitização de dados clínicos").
+  - Secção 4 (Mapa de Migração): linha do `Paciente` marcada com "F2 ✅" (era "F2").
+  - Secção 5.3 `Paciente`: título "F2" → "✅ F2 concluído"; schema reescrito para refletir a implementação real (genero enum ['M','F','Outro','NA'] default 'NA'; num_utente SNS; nif; morada; contacto_emergencia estruturado {nome,telefone,relacao}; historico_medico; alergias [String]; consentimento_dados sub-documento {concedido,data,versao_termos} em vez de 3 booleans; ativo index; observacoes; origem enum; índices compostos {empresa_id,nome}/{empresa_id,num_utente}/{empresa_id,ativo,eliminado_em}). Adicionada nota "F2 — Implementação real" listando as diferenças face à proposta v0.1 (genero rename, novos campos, consentimento_dados reestruturado, índices alterados, sanitização).
+  - Secção 8 (Roadmap): F2 marcado como "✅ Concluído" (era "Pendente").
+
+Stage Summary:
+- **docs/BACKEND.md**: nova subsecção do modelo Paciente (tabela completa + sub-tabela consentimento_dados + índices + nota de permissões); nova secção 6.12 com 6 endpoints documentados (GET/GET:id/POST/PUT/PATCH estado/DELETE soft delete) + blocos de permissões e sanitização; árvore de ficheiros atualizada (pacienteController.js, Paciente.js, pacienteRoutes.js); entrada F2 no histórico. 130/130 testes ✓ referenciado.
+- **docs/FRONTEND.md**: rota /gestor/pacientes na tabela; subsecção completa da página (grid, busca, modais criar/editar/detalhe, toggle estado, soft delete, permissões via dados_clinicos); tipos PacienteDTO/PacienteListResponse documentados; item de sidebar (UserRound) documentado; entrada F2 no histórico.
+- **docs/ARQUITETURA.md**: F2 marcado ✅ no roadmap (secção 8) e no mapa de migração (secção 4); schema de Paciente (secção 5.3) alinhado com a implementação real + nota de divergências face à proposta v0.1; banner topo atualizado.
+- **WORKLOG.md**: esta entrada DOC-F2 adicionada em append.
+- **Finding (não resolvido por escopo):** a matriz de permissões da secção 3.1 de ARQUITETURA.md indica `admin` ❌ para "Pacientes (CRUD)" e a decisão de design #6 diz "admin não vê dados clínicos", mas a implementação F2 inclui `admin` no middleware `podeVer` e em `temAcessoClinico` (admin vê pacientes E dados clínicos). Esta divergência foi deixada intacta por estar fora do escopo pedido (a task pedia apenas atualizar o schema e o roadmap); fica como assunto a clarificar numa futura revisão (ou o `admin` deve ser removido do `podeVer`/`temAcessoClinico`, ou a matriz + decisão #6 devem ser atualizadas para refletir que o admin plataforma tem acesso total por conveniência operacional).
+
+
+---
+Task ID: F2
+Agent: Z.ai Code
+Task: Criar modelo Paciente + CRUD + permissões baseadas em role (rececionista/diretor vê todos, fisio vê só os seus, sanitização de dados clínicos para rececionistas).
+
+Work Log:
+
+### F2-A — Modelo Paciente
+- Criado `backend/models/Paciente.js` com 17 campos: empresa_id, nome, data_nascimento, genero (M/F/Outro/NA), num_utente (SNS), nif, telefone (obrigatório), email, morada, contacto_emergencia {nome, telefone, relacao}, historico_medico, alergias (array), consentimento_dados {concedido, data, versao_termos}, ativo, eliminado_em (soft delete), observacoes, origem (walk_in/referenciacao/online/outro).
+- Índices: {empresa_id, nome}, {empresa_id, num_utente}, {empresa_id, ativo, eliminado_em}.
+
+### F2-B — Controller (pacienteController.js)
+- 6 funções: listarPacientes, obterPaciente, criarPaciente, atualizarPaciente, eliminarPaciente (soft delete), alternarEstadoPaciente.
+- Helper `temAcessoClinico` (admin/diretor_clinico/fisioterapeuta) e `sanitizarParaNaoClinico` (remove historico_medico, alergias, contacto_emergencia).
+- Validações: nome + telefone obrigatórios, data_nascimento não pode ser futura, genero/origem enum.
+- Consentimento RGPD com data automática.
+- Campos clínicos só são guardados/editados se `temAcessoClinico` (rececionista envia mas são ignorados).
+- Auditoria registada em criar/atualizar/eliminar.
+- Resposta inclui flag `dados_clinicos: boolean` para o frontend saber se pode mostrar campos clínicos.
+
+### F2-C — Routes (pacienteRoutes.js) + server.js
+- Middleware custom `podeVer` (todos os 4 roles) para GET/POST/PUT.
+- `isRececionista` para PATCH /:id/estado.
+- `isDiretorClinico` para DELETE /:id (soft delete).
+- Montado em server.js: `app.use('/api/gestor/pacientes', pacienteRoutes)`.
+
+### F2-D — Testes (130/130 ✓)
+- Adicionados 19 testes no bloco "F2 — Pacientes (CRUD + permissões)":
+  - Criação por rececionista (201) e fisio (201 com campos clínicos).
+  - Validações (400): campos obrigatórios, data futura.
+  - Sanitização: rececionista NÃO recebe historico_medico/alergias/contacto_emergencia.
+  - Fisio RECEBE dados clínicos completos.
+  - Busca por nome.
+  - Detalhe (404 se inexistente, soft deleted).
+  - PUT (rececionista edita admin, fisio edita clínico).
+  - PATCH estado.
+  - DELETE: rececionista 403, fisio 403, diretor_clinico 200 (soft delete).
+  - 401 sem token.
+- **Resultado: 130/130 testes a passar ✓** (+19).
+
+### F2-E — Frontend (/gestor/pacientes)
+- Criada página `frontend/src/app/gestor/pacientes/page.tsx`:
+  - Grid de cartões com nome, idade, telefone, email, alergias (se clínico), consentimento RGPD.
+  - Busca por nome/Nº utente/telefone/email.
+  - Modal criar/editar com campos administrativos + bloco clínico (só se dadosClinicos=true).
+  - Modal detalhe com todos os campos.
+  - Botões: Editar, Ativar/Desativar, Eliminar (soft delete com confirm).
+  - Flag `dados_clinicos` controla visibilidade dos campos clínicos.
+- `PacienteDTO` e `PacienteListResponse` adicionados a `lib/api.ts`.
+- **Lint ✓, tsc ✓, build ✓** (rota /gestor/pacientes = 5.22 kB).
+
+### F2-F — Sidebar
+- Adicionado item "Pacientes" (ícone UserRound) ao `gestor-sidebar.tsx`, entre Propriedades e Equipa.
+
+### F2-G — Documentação (Task DOC-F2 por subagent)
+- `docs/BACKEND.md`: modelo Paciente documentado (17 campos + índices), endpoints /api/gestor/pacientes (6 endpoints), permissões por role, sanitização, entrada F2 no histórico.
+- `docs/FRONTEND.md`: rota /gestor/pacientes, PacienteDTO, página documentada, entrada F2 no histórico.
+- `docs/ARQUITETURA.md`: F2 marcado ✅ no roadmap, schema de Paciente alinhado com implementação real.
+
+Stage Summary:
+- **Paciente criado** com schema completo (dados demográficos, contactos, dados clínicos, consentimentos RGPD, soft delete).
+- **Permissões RGPD implementadas**: rececionista vê dados administrativos mas NÃO vê historico_medico/alergias/contacto_emergencia. Fisio/diretor/admin vêem tudo.
+- **Soft delete** preserva histórico (RGPD: obrigações de retenção 10-20 anos).
+- **130/130 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
+- **Nota**: o filtro "fisioterapeuta vê só os seus pacientes" será implementado em F4 (Consulta com paciente_id + fisioterapeuta_id). Por agora, todos os clínicos vêem todos os pacientes ativos da empresa.
+- **Próximo passo:** F3 (Sala de Propriedade + HorarioFisioterapeuta + motor de disponibilidade).
+
+
+---
+Task ID: DOC-F3
+Agent: general-purpose
+Task: Atualização de documentação para F3 (Horários de Fisioterapeuta + motor de disponibilidade)
+
+Work Log:
+- Lido `WORKLOG.md` (1082 linhas, últimas entradas DOC-F2/F2) e `docs/ARQUITETURA.md` (375 linhas) para contexto.
+- Confirmado estado pós-F3 no código: `backend/models/HorarioFisioterapeuta.js` (empresa_id, fisioterapeuta_id, tipo enum ['recorrente','excecao'] default 'recorrente', dia_semana 0-6 default null, hora_inicio/hora_fim com regex HH:mm, data Date default null, disponivel boolean default true, ativo boolean default true index, nota string; pre('validate') recorrente↔dia_semana/excecao↔data; índices {fisioterapeuta_id, dia_semana, ativo}, {empresa_id, fisioterapeuta_id, tipo}, {fisioterapeuta_id, data}); `backend/utils/disponibilidade.js` (expandido com `horaLisboa`, `compararHoras`, `obterHorarioDia` 3 sub-camadas, `verificarConflitoHorario`, `verificarDisponibilidadeCompleta` 3 camadas ausência→folga→horário); `backend/controllers/horarioController.js` (6 funções: listarHorarios, obterHorario, criarHorario, atualizarHorario, eliminarHorario hard delete, verificarDisponibilidade; valida fisio/diretor_clinico ativo da empresa; auditoria); `backend/routes/horarioRoutes.js` (middleware `podeVer` 4 roles para GET/disponibilidade; `isDiretorClinico` para POST/PUT/DELETE); `backend/server.js` mount `/api/gestor/horarios`; `frontend/src/app/gestor/equipa/horarios/page.tsx` (verificador de disponibilidade + lista agrupada por fisio + modal criar/editar + hard delete); `frontend/src/lib/api.ts` (HorarioFisioterapeutaDTO, HorarioListResponse, DisponibilidadeResponse); `frontend/src/components/gestor/gestor-sidebar.tsx` (item Horários, ícone Clock).
+
+- **docs/ARQUITETURA.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Banner topo: "acompanha as fases F0, F1 e F2" → "acompanha as fases F0, F1, F2 e F3" (com descrição "`HorarioFisioterapeuta` + motor de disponibilidade em 3 camadas").
+  - Secção 4 (Mapa de Migração): linha do `HorarioFisioterapeuta` marcada com "F3 ✅" (era "F3").
+  - Secção 5.6 `HorarioFisioterapeuta`: título "F3" → "✅ F3 concluído"; schema reescrito para refletir a implementação real (campos `hora_inicio`/`hora_fim` em vez de `janelas: [{inicio, fim}]`; `nota` singular em vez de `notas`; `disponivel` default `true` em vez de `false`; novo campo `ativo` indexado; `tipo` default 'recorrente' indexado; índices compostos `{fisioterapeuta_id, dia_semana, ativo}`, `{empresa_id, fisioterapeuta_id, tipo}`, `{fisioterapeuta_id, data}`). Adicionada nota "F3 — Implementação real" listando as divergências face à proposta v0.1.
+  - Secção 7 (Decisões de Design), decisão #8 ("3 camadas de disponibilidade"): reescrita para refletir o motor real (`verificarDisponibilidadeCompleta`: 1. Ausência aprovada → 2. Folga fixa semanal → 3. Horário de trabalho com `obterHorarioDia` que tem sub-camadas exceção→recorrente→sem horário, e `verificarConflitoHorario` que valida se a consulta cabe no bloco). Nota de que a 4.ª camada (conflito com consultas já marcadas) será adicionada em F4.
+  - Secção 8 (Roadmap): F3 marcado como "✅ Concluído\*" (era "Pendente") com nota explicativa que a migração `Propriedade` → `Sala` foi adiada para uma fase posterior (será retomada em F4 quando `Consulta` exigir `sala_id`); o `HorarioFisioterapeuta` + motor + endpoints + página estão concluídos.
+
+- **docs/BACKEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 2 (Estrutura): adicionado `horarioController.js` à árvore de controllers; `HorarioFisioterapeuta.js` à árvore de models; `horarioRoutes.js` à árvore de routes. Atualizada descrição de `utils/disponibilidade.js` para incluir "motor de disponibilidade F3 (horários)". Atualizada contagem "6 coleções" → "7 coleções" na secção 3.1.
+  - Secção 3.1: nova subsecção `HorarioFisioterapeuta` (após `Paciente`) — nota F3 sobre dois tipos de regra (recorrente/excecao) e coerência validada em pre('validate'); tabela completa de campos (empresa_id, fisioterapeuta_id, tipo, dia_semana, hora_inicio, hora_fim, data, disponivel, ativo, nota); bloco de validação pre('validate'); lista de índices compostos; nota de permissões (podeVer 4 roles para GET, isDiretorClinico para mutações, validação de fisio/diretor_clinico ativo da empresa, auditoria).
+  - Secção 3.4 (nova) — Motor de Disponibilidade — F3: documentação das 3 camadas verificadas por `verificarDisponibilidadeCompleta` (ausência aprovada → folga fixa semanal → horário de trabalho via verificarConflitoHorario); documentação das 3 sub-camadas de `obterHorarioDia` (exceção do dia → regra recorrente → sem horário); helpers de fuso e horas (`dataLisboa`, `horaLisboa`, `compararHoras`); nota de robustez de fuso herdada do Prompt 113; nota que a 4.ª camada (conflito com consultas) será adicionada em F4.
+  - Secção 6 (API): nova secção 6.13 — Horários (`/api/gestor/horarios`). Bloco de permissões (podeVer para GET/disponibilidade, isDiretorClinico para mutações), bloco de validação do fisioterapeuta, nota de auditoria. Documentados 6 endpoints: GET / (lista com query params fisioterapeuta_id/tipo/ativo, populate, exemplo JSON), GET /disponibilidade (verificador com query params fisioterapeuta_id/data/duracao_minutos, resposta com disponivel/horario/motivo/origem, nota de ordem de registo antes de /:id), GET /:id (detalhe), POST / (criar com body exemplo + validações), PUT /:id (atualizar), DELETE /:id (hard delete). Cada um com auth, body, resposta, erros, auditoria.
+  - Secção 9 (Histórico): nova entrada F3 no topo do changelog descrevendo os 5 grupos de alterações (modelo HorarioFisioterapeuta + validações + índices; utils/disponibilidade.js expandido com 5 funções; horarioController.js com 6 funções; horarioRoutes.js com middlewares; mount em server.js). 151/151 testes ✓ (+21 testes de Horário).
+
+- **docs/FRONTEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 3 (Rotas): adicionada linha `/gestor/equipa/horarios` à tabela (Horários de Fisioterapeuta F3 — verificador de disponibilidade, lista agrupada por fisio, modais criar/editar, soft toggle via DELETE).
+  - Secção 11 (`lib/api.ts`): adicionado bullet `HorarioFisioterapeutaDTO`/`HorarioListResponse`/`DisponibilidadeResponse` (F3) — espelham o modelo `HorarioFisioterapeuta` do backend + resposta do verificador; `fisioterapeuta_id` é `string | { _id, nome, email, role }` (populate); `dia_semana`/`data` como `number | null`/`string | null` conforme o tipo; `DisponibilidadeResponse` com `disponivel`/`horario`/`motivo`/`origem`.
+  - Secção 11: nova subsecção `/gestor/equipa/horarios (Client Component) — F3` (após `/gestor/pacientes`). Nota sobre item de sidebar (gestor-sidebar.tsx, href /gestor/equipa/horarios, ícone Clock do lucide-react, entre Equipa e Ausências / Férias). Documentação do verificador de disponibilidade (fisio + data + hora + duração → CheckCircle2/XCircle + motivo + janela), lista agrupada por fisioterapeuta (badges recorrente/excecao, dia_semana/data, janelas, nota, botões Pencil/Trash2 para diretor_clinico/admin), filtro por fisio, modal criar/editar (tipo recorrente/excecao, dia_semana/data condicional, horas, disponivel só se excecao, nota), hard delete via adminDelete, permissões client-side, estados visuais (loading/erro/vazio), tipos F3.
+  - Secção 13 (Histórico): nova entrada F3 no topo do changelog descrevendo os 3 grupos de alterações (página /gestor/equipa/horarios; tipos HorarioFisioterapeutaDTO/HorarioListResponse/DisponibilidadeResponse em lib/api.ts; item Horários no gestor-sidebar com ícone Clock). Lint + tsc + build ✓ (rota /gestor/equipa/horarios = 4.35 kB).
+
+Stage Summary:
+- **docs/BACKEND.md**: nova subsecção do modelo HorarioFisioterapeuta (tabela completa + validações pre-validate + índices + nota de permissões); nova secção 3.4 com o motor de disponibilidade (3 camadas + sub-camadas de obterHorarioDia + helpers de fuso); nova secção 6.13 com 6 endpoints documentados (GET listagem, GET /disponibilidade, GET /:id, POST, PUT, DELETE hard delete) + blocos de permissões, validação do fisioterapeuta e auditoria; árvore de ficheiros atualizada (horarioController.js, HorarioFisioterapeuta.js, horarioRoutes.js); contagem "7 coleções"; entrada F3 no histórico. 151/151 testes ✓ referenciado.
+- **docs/FRONTEND.md**: rota /gestor/equipa/horarios na tabela; subsecção completa da página (verificador, lista agrupada, modais criar/editar, hard delete, permissões, estados visuais); tipos HorarioFisioterapeutaDTO/HorarioListResponse/DisponibilidadeResponse documentados; item de sidebar (Clock) documentado; entrada F3 no histórico. Lint + tsc + build ✓ (4.35 kB).
+- **docs/ARQUITETURA.md**: F3 marcado ✅ Concluído\* no roadmap (secção 8) e no mapa de migração (secção 4) com nota explicativa que a migração Propriedade→Sala foi adiada; schema de HorarioFisioterapeuta (secção 5.6) alinhado com a implementação real + nota de divergências face à proposta v0.1; decisão de design #8 reescrita para refletir o motor real; banner topo atualizado.
+- **WORKLOG.md**: esta entrada DOC-F3 adicionada em append.
+- **Finding (não resolvido por escopo):** a matriz de permissões da secção 3.1 de ARQUITETURA.md indica `admin` ❌ para "Horários fisio", mas a implementação F3 inclui `admin` no middleware `podeVer` (e na validação `isDiretorClinico` para mutações). Esta divergência foi deixada intacta por estar fora do escopo pedido (a task pedia apenas marcar F3 como ✅ e atualizar o schema e as camadas de disponibilidade) e por ser coerente com a mesma divergência já registada em DOC-F2 para Pacientes — fica como assunto a clarificar numa futura revisão (ou o `admin` deve ser removido do `podeVer`/`isDiretorClinico`, ou a matriz + decisão #6 devem ser atualizadas para refletir que o admin plataforma tem acesso total por conveniência operacional).
+
+---
+Task ID: F3
+Agent: Z.ai Code
+Task: Criar HorarioFisioterapeuta + motor de disponibilidade (3 camadas: folga fixa / horário recorrente / exceção / ausência) + CRUD + frontend.
+
+Work Log:
+
+### F3-A — Modelo HorarioFisioterapeuta
+- Criado `backend/models/HorarioFisioterapeuta.js` com: empresa_id, fisioterapeuta_id, tipo ('recorrente'|'excecao'), dia_semana (0-6), hora_inicio/fim (HH:mm), data (Date), disponivel (boolean), ativo (boolean), nota.
+- Validação `pre('validate')`: recorrente exige dia_semana, excecao exige data.
+- Índices: {fisioterapeuta_id, dia_semana, ativo}, {empresa_id, fisioterapeuta_id, tipo}, {fisioterapeuta_id, data}.
+
+### F3-B — Motor de disponibilidade (utils/disponibilidade.js expandido)
+- Adicionadas funções:
+  - `horaLisboa(instante)` — devolve "HH:mm" no fuso de Lisboa (via Intl.DateTimeFormat).
+  - `compararHoras(a, b)` — compara duas horas HH:mm.
+  - `obterHorarioDia(fisioterapeutaId, data)` — consulta 3 camadas: exceções do dia → regra recorrente → sem horário.
+  - `verificarConflitoHorario(fisioterapeutaId, dataHoraInicio, duracaoMinutos)` — verifica se a consulta cabe no bloco de trabalho.
+  - `verificarDisponibilidadeCompleta(utilizador, dataHoraInicio, duracaoMinutos)` — ausências aprovadas + folga fixa + horários (3 camadas por ordem de prioridade).
+- Mantidas as funções existentes (verificarDisponibilidadeUtilizador, mensagemIndisponivel, dataLisboa).
+
+### F3-C — Controller + Routes
+- Criado `backend/controllers/horarioController.js` com 6 funções: listarHorarios, obterHorario, criarHorario, atualizarHorario, eliminarHorario, verificarDisponibilidade. Valida fisioterapeuta (role fisioterapeuta/diretor_clinico ativo da empresa). Auditoria registada.
+- Criado `backend/routes/horarioRoutes.js` montado em `/api/gestor/horarios`. Middleware `podeVer` (4 roles) para GET/listar/disponibilidade; `isDiretorClinico` para POST/PUT/DELETE.
+- `server.js`: montado `app.use('/api/gestor/horarios', horarioRoutes)`.
+
+### F3-D — Testes (151/151 ✓)
+- Adicionados 21 testes no bloco "F3 — Horários (CRUD + disponibilidade)":
+  - CRUD completo (criar recorrente/excecao, listar, detalhe, atualizar, eliminar).
+  - Validações (400): sem fisioterapeuta_id, recorrente sem dia_semana, excecao sem data, fisioterapeuta inexistente.
+  - Permissões (403): rececionista e fisioterapeuta não podem criar.
+  - Motor de disponibilidade: fisio disponível no horário recorrente, indisponível antes/depois do bloco, indisponível no dia de exceção (formação), sem horário definido (domingo).
+  - Fisioterapeuta vê só os seus horários.
+  - 401 sem token.
+- **Resultado: 151/151 testes a passar ✓** (+21).
+
+### F3-E — Frontend (/gestor/equipa/horarios)
+- Criada página `frontend/src/app/gestor/equipa/horarios/page.tsx`:
+  - **Verificador de disponibilidade**: fisio + data + hora + duração → resultado (disponível/indisponível com motivo).
+  - **Lista agrupada por fisioterapeuta**: badges recorrente/excecao, horários, notas, indisponível.
+  - **Modal criar/editar**: tipo recorrente/excecao, dia_semana/data, horas, disponivel, nota.
+  - **Eliminar** (hard delete com confirm).
+- `HorarioFisioterapeutaDTO`, `HorarioListResponse`, `DisponibilidadeResponse` adicionados a `lib/api.ts`.
+- Item "Horários" (ícone Clock) adicionado ao sidebar do gestor (entre Equipa e Ausências).
+- **Lint ✓, tsc ✓, build ✓** (rota /gestor/equipa/horarios = 4.35 kB).
+
+### F3-F — Documentação (Task DOC-F3 por subagent)
+- `docs/BACKEND.md`: modelo HorarioFisioterapeuta documentado, motor de disponibilidade (3 camadas), 6 endpoints, entrada F3 no histórico.
+- `docs/FRONTEND.md`: rota /gestor/equipa/horarios, tipos DTO, página documentada, entrada F3 no histórico.
+- `docs/ARQUITETURA.md`: F3 marcado ✅ no roadmap, schema de HorarioFisioterapeuta alinhado, decisão de design #8 atualizada com o motor real.
+
+Stage Summary:
+- **HorarioFisioterapeuta criado** com 2 tipos: recorrente (regra semanal) e excecao (dia específico, disponível ou bloqueio).
+- **Motor de disponibilidade** com 3 camadas por ordem de prioridade: ausência aprovada → folga fixa semanal → horário de trabalho (exceção > recorrente). Verifica também se a consulta cabe dentro do bloco de trabalho.
+- **Timezone blindado**: usa `Intl.DateTimeFormat` com `Europe/Lisbon` para calcular data e hora local (robusto a DST).
+- **151/151 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
+- **Nota**: a 4.ª camada (conflito com consultas já marcadas) será implementada em F4 (Consulta). Por agora, o motor valida disponibilidade do fisioterapeuta mas não conflitos de sala/paciente.
+- **Nota**: Propriedade→Sala foi adiada (o modelo Propriedade mantém-se, será renomeado em F8 de limpeza). O foco da F3 foi o motor de disponibilidade.
+- **Próximo passo:** F4 (Consulta de Tarefa + CRUD de marcação + validação de conflitos sala+fisio+paciente).
+
+
+---
+Task ID: DOC-F4
+Agent: general-purpose
+Task: Atualização de documentação para F4 (Consultas + validação de conflitos + cédula profissional)
+
+Work Log:
+- Lido `WORKLOG.md` (1179 linhas, últimas entradas DOC-F3/F3) e `docs/ARQUITETURA.md` (389 linhas) para contexto.
+- Confirmado estado pós-F4 no código: `backend/models/Consulta.js` (empresa_id, sala_id ref Propriedade alias Sala, fisioterapeuta_id ref Utilizador, paciente_id ref Paciente, data_hora_inicio/data_hora_fim Date, duracao_minutos default 45 min 15, tipo enum ['primeira_consulta','sessao','reavaliacao','alta','grupo'] default 'sessao', estado enum ['marcada','confirmada','em_curso','concluida','cancelada','faltou','nao_compareceu'] default 'marcada', motivo_cancelamento enum ['paciente','clinica','fisio','outro'] default null, presenca enum ['pendente','presente','ausente','atrasado'] default 'pendente', nota_clinica {subjetivo, objetivo, avaliacao, plano, tratamento_efetuado, protocolo_aplicado[] {nome, items[{texto, concluido}]}, cedula_assinante}, criada_por ref Utilizador, concluida_em, cancelada_em, cancelada_por ref Utilizador, lembrete_24h_enviado, lembrete_2h_enviado, observacoes; índices {empresa_id, fisioterapeuta_id, data_hora_inicio}, {empresa_id, sala_id, data_hora_inicio}, {empresa_id, paciente_id, data_hora_inicio -1}, {estado, data_hora_inicio}); `backend/models/Utilizador.js` (método de instância `temCedulaValida()` — true para admin/rececionista, exige `perfil_profissional.cedula` para fisio/diretor_clinico); `backend/controllers/consultaController.js` (função interna `validarConflitos` 4 dimensões + 7 funções exportadas: `listarConsultas` com filtros fisioterapeuta_id/sala_id/paciente_id/estado/inicio/fim + fisio vê só as suas, `obterConsulta`, `criarConsulta` com `forcar` soft block 409/200, `atualizarConsulta` com re-validação temporal + excluirConsultaId, `atualizarNotaClinica` endpoint separado isClinico + validação cédula + snapshot cedula_assinante, `eliminarConsulta` bloqueia concluídas RGPD hard delete, `validarConflitosEndpoint` GET para tempo real; auditoria recurso 'consulta'); `backend/routes/consultaRoutes.js` (podeVer 4 roles para GET, isRececionista para POST/PUT, isClinico para PATCH /:id/nota-clinica, isDiretorClinico para DELETE); `backend/server.js` mount `/api/gestor/consultas`; `frontend/src/app/gestor/consultas/page.tsx` (lista cartões + modal criar/editar com debounce 400ms + modal detalhe SOAP + ações rápidas Confirmar/Concluir/Eliminar); `frontend/src/lib/api.ts` (EstadoConsulta, TipoConsulta, ConsultaDTO, ConsultaListResponse, ValidarConflitosResponse); `frontend/src/components/gestor/gestor-sidebar.tsx` (item Consultas, ícone CalendarPlus, entre Calendário e Tarefas).
+
+- **docs/BACKEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 2 (Estrutura): adicionado `consultaController.js` à árvore de controllers; `Consulta.js` à árvore de models (com nota "substitui Tarefa; conflitos + SOAP + cédula"); `consultaRoutes.js` à árvore de routes; nota "temCedulaValida() (F4)" no Utilizador.js. Atualizada contagem "7 coleções" → "8 coleções" na secção 3.1.
+  - Secção 3.1: nova subsecção `Consulta` (após `HorarioFisioterapeuta`) — nota F4 sobre 3 eixos (fisio/sala/paciente) e 4 dimensões de conflito; tabela completa de campos (empresa_id, sala_id ref Propriedade alias Sala, fisioterapeuta_id, paciente_id, data_hora_inicio, data_hora_fim, duracao_minutos, tipo, estado, motivo_cancelamento, presenca, nota_clinica, criada_por, concluida_em, cancelada_em, cancelada_por, lembrete_24h_enviado, lembrete_2h_enviado, observacoes); sub-tabela `nota_clinica` (subjetivo, objetivo, avaliacao, plano, tratamento_efetuado, protocolo_aplicado[], cedula_assinante) com nota sobre imutabilidade e snapshot de cédula; lista de 4 índices compostos; nota de permissões (podeVer/isRececionista/isClinico/isDiretorClinico) + nota de imutabilidade de concluídas (RGPD) com citação exata da mensagem 403.
+  - Secção 3.1 (`Utilizador`): adicionada nota F4 sobre o método de instância `temCedulaValida()` (lógica, casos por role, obrigatoriedade para SOAP/faturação).
+  - Secção 3.4: mantida nota "a 4.ª camada (conflito com consultas já marcadas) será adicionada em F4" — atualizada para referir que está implementada na nova secção 3.5.
+  - Secção 3.5 (nova) — Validação de Conflitos — F4: documentação da função interna `validarConflitos` (4 verificações em simultâneo: fisio disponível via motor F3, sala sem sobreposição, fisio sem sobreposição, paciente sem sobreposição; filtro de consultas ativas `estado: { $nin: ['cancelada','faltou','nao_compareceu'] }`; parâmetro `excluirConsultaId` para modo edição); documentação do soft block (409 sem `forcar`, 200 com warning se `forcar: true`, 201/200 sem conflitos); nota de auditoria (`detalhes.conflitos_forcados: true`); nota sobre o endpoint `GET /validar` para validação em tempo real no frontend (debounce 400ms).
+  - Secção 6 (API): nova secção 6.14 — Consultas (`/api/gestor/consultas`). Bloco de permissões (podeVer/isRececionista/isClinico/isDiretorClinico), bloco de imutabilidade RGPD (403 em DELETE/PUT/PATCH para concluídas), bloco de cédula obrigatória (`temCedulaValida()` + snapshot `cedula_assinante`), bloco de soft block (409/200/201), nota de auditoria. Documentados 7 endpoints: GET / (lista com query params fisioterapeuta_id/sala_id/paciente_id/estado/inicio/fim/limit + populate + exemplo JSON), GET /validar (verificador com query params fisioterapeuta_id/sala_id/paciente_id/data_hora_inicio/duracao_minutos/excluir_id + resposta {ok, conflitos[], horario}), GET /:id (detalhe com 5 populates), POST / (criar com body exemplo + validações + 201/200/409/400), PUT /:id (atualizar com re-validação temporal + rejeição de nota_clinica no body), PATCH /:id/nota-clinica (endpoint separado isClinico + regras de imutabilidade/autoridade/cédula + snapshot de cédula), DELETE /:id (hard delete + bloqueio RGPD de concluídas). Cada um com auth, body, resposta, erros, auditoria.
+  - Secção 9 (Histórico): nova entrada F4 no topo do changelog descrevendo os 5 grupos de alterações (modelo Consulta + 4 índices; método temCedulaValida no Utilizador; controller consultaController com validarConflitos + 7 funções; routes consultaRoutes com 4 middlewares; mount em server.js). 176/176 testes ✓ (+25 testes de Consulta).
+
+- **docs/FRONTEND.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 3 (Rotas): adicionada linha `/gestor/consultas` à tabela (Consultas F4 — lista de cartões, modal criar/editar com validação de conflitos em tempo real debounce 400ms, modal detalhe com SOAP editável, ações rápidas Confirmar/Concluir/Eliminar).
+  - Secção 11 (`lib/api.ts`): adicionado bullet `EstadoConsulta`/`TipoConsulta`/`ConsultaDTO`/`ConsultaListResponse`/`ValidarConflitosResponse` (F4) — espelham o modelo `Consulta` + resposta do verificador; `sala_id`/`fisioterapeuta_id`/`paciente_id`/`criada_por` como `string | { _id, ... }` (populate); `nota_clinica` opcional; `ValidarConflitosResponse` = `{ ok, conflitos[], horario? }`.
+  - Secção 11: nova subsecção `/gestor/consultas (Client Component) — F4` (após `/gestor/equipa/horarios`). Nota sobre item de sidebar (gestor-sidebar.tsx, href /gestor/consultas, ícone CalendarPlus do lucide-react, entre Calendário e Tarefas). Documentação da lista de cartões (paciente/fisio/sala/data/estado/tipo/indicador SOAP), modal criar/editar com validação de conflitos em tempo real (debounce 400ms + `excluir_id` no modo edição), submissão com soft block (409 → modal "Forçar Agendamento?" → reenvio com `forcar: true`), modal de detalhe com SOAP editável (S/O/A/P + tratamento_efetuado) via PATCH /:id/nota-clinica (só isClinico; imutável se concluída), ações rápidas Confirmar/Concluir/Eliminar, permissões client-side, estados visuais (loading/erro/vazio), tipos F4.
+  - Secção 13 (Histórico): nova entrada F4 no topo do changelog descrevendo os 3 grupos de alterações (página /gestor/consultas; tipos EstadoConsulta/TipoConsulta/ConsultaDTO/ConsultaListResponse/ValidarConflitosResponse em lib/api.ts; item Consultas no gestor-sidebar com ícone CalendarPlus). Lint + tsc + build ✓ (rota /gestor/consultas = 5.6 kB).
+
+- **docs/ARQUITETURA.md** (alterações cirúrgicas via Edit/MultiEdit):
+  - Banner topo: "acompanha as fases F0, F1, F2 e F3" → "acompanha as fases F0, F1, F2, F3 e F4" (com descrição "`Consulta` + validação de conflitos + cédula profissional + nota clínica SOAP imutável").
+  - Secção 4 (Mapa de Migração): linhas do `Tarefa` → `Consulta` e `TarefaArquivo` → `ConsultaArquivo` marcadas com "F4 ✅" (era "F4").
+  - Secção 5.4 `Consulta`: título "F4 (substitui Tarefa)" → "✅ F4 concluído (substitui Tarefa)"; schema reescrito para refletir a implementação real (sala_id ref 'Propriedade' alias Sala em vez de ref 'Sala'; fisioterapeuta_id obrigatório em vez de default null; data_hora dividida em data_hora_inicio + data_hora_fim; duracao_minutos default 45 em vez de 60; enum tipo com 'sessao' e 'grupo'; enum estado com 'marcada' em vez de 'agendada' + 'nao_compareceu'; motivo_cancelamento; presenca com 'atrasado' em vez de 'justificada'; nota_clinica com tratamento_efetuado + protocolo_aplicado[] + cedula_assinante; lembretes[] → lembrete_24h_enviado/lembrete_2h_enviado; adicionados criada_por/cancelada_em/cancelada_por; índices expandidos para 4 com data_hora_inicio -1 no do paciente). Adicionada nota "F4 — Implementação real" listando as divergências face à proposta v0.1 + nota sobre imutabilidade enforced no controller + cédula via temCedulaValida + validarConflitos soft block.
+  - Secção 7 (Decisões de Design): decisão #3 ("Nota clínica SOAP embutida") reescrita para incluir F4 (imutável após conclusão + cédula obrigatória via temCedulaValida + endpoint dedicado PATCH /:id/nota-clinica); decisão #7 ("Soft delete em tudo") atualizada com exceção da Consulta (hard delete + bloqueio RGPD de concluídas); decisão #8 ("3 camadas de disponibilidade") atualizada com a 4.ª camada (validarConflitos do consultaController: 4a fisio disponível via camadas 1-3, 4b sala, 4c fisio, 4d paciente); novas decisões #9 (Soft block de conflitos — 409/200/forcar + auditoria + debounce frontend) e #10 (Cédula obrigatória para assinar SOAP — temCedulaValida + snapshot cedula_assinante para rastreabilidade).
+  - Secção 8 (Roadmap): F4 marcado como "✅ Concluído" (era "Pendente") com escopo expandido para mencionar "nota clínica SOAP imutável + cédula profissional".
+
+Stage Summary:
+- **docs/BACKEND.md**: nota F4 sobre `temCedulaValida()` no Utilizador; nova subsecção do modelo Consulta (tabela completa + sub-tabela nota_clinica + 4 índices + nota de permissões + nota de imutabilidade RGPD); nova secção 3.5 com a validação de conflitos (4 dimensões + soft block + auditoria + endpoint /validar); nova secção 6.14 com 7 endpoints documentados (GET listagem, GET /validar, GET /:id, POST, PUT, PATCH /:id/nota-clinica, DELETE) + blocos de permissões, imutabilidade RGPD, cédula obrigatória, soft block e auditoria; árvore de ficheiros atualizada (consultaController.js, Consulta.js, consultaRoutes.js); contagem "8 coleções"; entrada F4 no histórico. 176/176 testes ✓ referenciado.
+- **docs/FRONTEND.md**: rota /gestor/consultas na tabela; subsecção completa da página (lista cartões, modal criar/editar com validação de conflitos em tempo real debounce 400ms, modal detalhe SOAP via PATCH, soft block 409→forçar, ações rápidas, permissões, estados visuais); tipos EstadoConsulta/TipoConsulta/ConsultaDTO/ConsultaListResponse/ValidarConflitosResponse documentados; item de sidebar (CalendarPlus, entre Calendário e Tarefas) documentado; entrada F4 no histórico. Lint + tsc + build ✓ (5.6 kB).
+- **docs/ARQUITETURA.md**: F4 marcado ✅ no roadmap (secção 8) e no mapa de migração (secção 4 — Tarefa→Consulta e TarefaArquivo→ConsultaArquivo); schema de Consulta (secção 5.4) alinhado com a implementação real + nota de divergências face à proposta v0.1; decisões de design #3/#7/#8 atualizadas + novas decisões #9 (soft block) e #10 (cédula obrigatória); banner topo atualizado.
+- **WORKLOG.md**: esta entrada DOC-F4 adicionada em append.
+- **Finding (não resolvido por escopo):** a matriz de permissões da secção 3.1 de ARQUITETURA.md indica `admin` ❌ para "Consultas (marcar)"/"Consultas (ver todas)"/"Nota clínica SOAP", mas a implementação F4 inclui `admin` no middleware `podeVer` (ver consultas), no `isRececionista` (criar/editar marcações via POST/PUT) e no `isClinico` (PATCH /nota-clinica). Esta divergência é coerente com as mesmas divergências já registadas em DOC-F2 (Pacientes) e DOC-F3 (Horários) — o `admin` plataforma tem acesso total por conveniência operacional. Fica como assunto a clarificar numa futura revisão global da matriz (ou remover `admin` dos middlewares, ou atualizar a matriz + decisão #6 para refletir o acesso total do admin). Não foi alterada por estar fora do escopo pedido (a task pedia apenas atualizar schema, roadmap e decisões de design).
+
+---
+Task ID: F4
+Agent: Z.ai Code
+Task: Criar Consulta (substitui Tarefa) + CRUD de marcação + validação de conflitos (fisio + sala + paciente em simultâneo) + cédula profissional obrigatória para notas clínicas SOAP + imutabilidade RGPD.
+
+Work Log:
+
+### F4-A — Reforçar validação de cédula no Utilizador
+- Adicionado método de instância `temCedulaValida()` no schema Utilizador.
+- Devolve `true` para admin/rececionista (não aplicável).
+- Para fisioterapeuta/diretor_clinico: verifica se `perfil_profissional.cedula` está preenchido.
+- **Obrigatório** para assinar notas clínicas (SOAP) — prepara o caminho para faturação.
+
+### F4-B — Modelo Consulta
+- Criado `backend/models/Consulta.js` (substitui Tarefa para o novo domínio):
+  - 3 eixos: fisioterapeuta_id, sala_id (Propriedade alias Sala), paciente_id.
+  - Marcação temporal: data_hora_inicio, data_hora_fim, duracao_minutos (default 45, min 15).
+  - tipo (primeira_consulta/sessao/reavaliacao/alta/grupo), estado (7 valores), presenca (4 valores).
+  - nota_clinica SOAP: subjetivo, objetivo, avaliacao, plano, tratamento_efetuado, protocolo_aplicado[], cedula_assinante.
+  - Auditoria: criada_por, concluida_em, cancelada_em, cancelada_por.
+  - Lembretes: lembrete_24h_enviado, lembrete_2h_enviado.
+  - Índices: {empresa_id, fisioterapeuta_id, data_hora_inicio}, {empresa_id, sala_id, data_hora_inicio}, {empresa_id, paciente_id, data_hora_inicio}, {estado, data_hora_inicio}.
+
+### F4-C — Controller com validação de conflitos (ponto mais sensível)
+- Criado `backend/controllers/consultaController.js`:
+  - `validarConflitos()` (função interna) — valida em simultâneo:
+    1. Fisioterapeuta disponível (motor F3: ausência + folga + horário)
+    2. Sala sem sobreposição temporal com outra consulta ATIVA
+    3. Fisioterapeuta sem sobreposição temporal
+    4. Paciente sem sobreposição temporal
+  - Soft block: conflitos devolvem 409 (sem `forcar`) ou 200 com warning (com `forcar=true`).
+  - `criarConsulta`: valida fisio/sala/paciente existem, rejeita data no passado, valida conflitos.
+  - `atualizarConsulta`: re-valida conflitos se mudar data/duração/fisio/sala/paciente (excluindo a própria consulta).
+  - `atualizarNotaClinica` (endpoint SEPARADO, isClinico): valida cédula do assinante, guarda snapshot da cédula para auditoria legal.
+  - `eliminarConsulta`: bloqueia consultas concluídas (RGPD — nota clínica imutável).
+  - `validarConflitosEndpoint` (GET /validar): para o frontend validar em tempo real sem criar.
+
+### F4-D — Routes + server.js
+- Criado `backend/routes/consultaRoutes.js` montado em `/api/gestor/consultas`:
+  - GET /, GET /validar, GET /:id → podeVer (4 roles)
+  - POST /, PUT /:id → isRececionista (marcações)
+  - PATCH /:id/nota-clinica → isClinico (fisio/diretor/admin — SOAP)
+  - DELETE /:id → isDiretorClinico
+- `server.js`: montado `app.use('/api/gestor/consultas', consultaRoutes)`.
+
+### F4-E — Testes (176/176 ✓)
+- Adicionados 25 testes no bloco "F4 — Consultas (CRUD + conflitos)":
+  - CRUD completo (criar, listar, detalhe, atualizar, eliminar).
+  - Validações (400): campos obrigatórios, data no passado, fisio/sala/paciente inexistentes.
+  - **Validação de conflitos** (409 sem forcar):
+    - Conflito de SALA (mesma sala, mesmo horário, fisio diferente)
+    - Conflito de FISIOTERAPEUTA (mesmo fisio, mesmo horário, sala diferente)
+    - Conflito de PACIENTE (mesmo paciente, mesmo horário, fisio/sala diferentes)
+  - Soft block com `forcar=true` → 200 com warning.
+  - Sem sobreposição → 201 (sem conflitos).
+  - Fisioterapeuta vê só as suas consultas.
+  - GET /validar → 200 com conflitos sem criar.
+  - PATCH /nota-clinica (fisio com cédula) → 200 + snapshot da cédula.
+  - PATCH /nota-clinica por fisio SEM cédula → 403 (mensagem contém "cédula").
+  - PATCH /nota-clinica por rececionista → 403 (só isClinico).
+  - PATCH /nota-clinica em consulta CONCLUÍDA → 403 (imutável, RGPD).
+  - DELETE consulta concluída → 403 (RGPD).
+  - DELETE (rececionista) → 403 (só diretor).
+  - DELETE (diretor) → 200.
+  - 401 sem token.
+- **Resultado: 176/176 testes a passar ✓** (+25).
+
+### F4-F — Frontend (/gestor/consultas)
+- Criada página `frontend/src/app/gestor/consultas/page.tsx`:
+  - Lista de consultas (cartões com paciente, fisio, sala, data, estado, tipo, indicador SOAP).
+  - **Modal criar/editar com validação de conflitos em tempo real** (debounce 400ms, mostra warnings antes de submeter).
+  - Modal detalhe com nota clínica SOAP editável (S/O/A/P + tratamento_efetuado).
+  - Ações rápidas: Confirmar, Concluir, Eliminar.
+  - Botão "Forçar Agendamento" quando há conflitos.
+- `ConsultaDTO`, `ConsultaListResponse`, `ValidarConflitosResponse`, `EstadoConsulta`, `TipoConsulta` adicionados a `lib/api.ts`.
+- Item "Consultas" (ícone CalendarPlus) adicionado ao sidebar do gestor (entre Calendário e Tarefas).
+- **Lint ✓, tsc ✓, build ✓** (rota /gestor/consultas = 5.6 kB).
+
+### F4-G — Documentação (Task DOC-F4 por subagent)
+- `docs/BACKEND.md`: modelo Consulta documentado, validação de conflitos (4 dimensões), soft block, endpoint PATCH /nota-clinica, imutabilidade RGPD, temCedulaValida(), 7 endpoints, entrada F4 no histórico.
+- `docs/FRONTEND.md`: rota /gestor/consultas, 5 tipos DTO, página documentada (validação em tempo real, SOAP), entrada F4 no histórico.
+- `docs/ARQUITETURA.md`: F4 marcado ✅ no roadmap, schema de Consulta alinhado, decisões de design #9 (soft block) e #10 (cédula obrigatória) adicionadas.
+
+Stage Summary:
+- **Consulta criada** com 3 eixos (fisio + sala + paciente) e nota clínica SOAP completa.
+- **Validação de conflitos dupla** (o ponto mais sensível, conforme pedido do utilizador): valida em simultâneo se o fisioterapeuta está disponível (motor F3) E se a sala tem vaga (sem sobreposição). Adicionalmente valida fisio e paciente sem sobreposição.
+- **Soft block**: conflitos não bloqueiam (409 sem forçar, 200 com warning se forçado) — o gestor pode sobrepor em casos excecionais (dupla marcação, sobreposição intencional).
+- **Cédula profissional obrigatória** para assinar notas clínicas SOAP (RGPD/faturação). Snapshot da cédula guardado para auditoria legal.
+- **Imutabilidade RGPD**: consultas concluídas não podem ser eliminadas nem ter a nota clínica editada.
+- **176/176 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
+- **Próximo passo:** F5 (Nota clínica SOAP avançada + ModeloProtocolo de ModeloChecklist).
+
+---
+Task ID: DOC-F5
+Agent: general-purpose
+Task: Atualização de documentação para F5 (Protocolos Clínicos + snapshot na Consulta)
+
+Work Log:
+- Lido `WORKLOG.md` (entrada F4) para herdar o formato e a convenção das entradas por fase (subagent de documentação a seguir a cada fase de implementação).
+- Lido `docs/ARQUITETURA.md` (intro, secção 4 Mapa de Migração, secção 5 Modelos Propostos, secção 7 Decisões de Design, secção 8 Roadmap).
+- Lido `docs/BACKEND.md` (estrutura de ficheiros, secção 3.1 Modelos, secção 6.14 Consultas, secção 9 Histórico) e `docs/FRONTEND.md` (secção 3 Sistema de rotas, secção 11 Integração API, secção 13 Histórico).
+- Lidos os ficheiros de implementação F5 para extrair detalhes exatos: `backend/models/ModeloProtocolo.js`, `backend/controllers/protocoloController.js`, `backend/routes/protocoloRoutes.js`, `backend/server.js` (mount), integração em `backend/controllers/consultaController.js` (`protocolo_id` em `criarConsulta`, `protocolo_aplicado` em `atualizarNotaClinica`) e `frontend/src/lib/api.ts` (`AreaProtocolo`/`ModeloProtocoloDTO`/`ProtocoloListResponse`).
+
+- `docs/BACKEND.md`:
+  - Estrutura de ficheiros (secção 2): adicionados `protocoloController.js`, `ModeloProtocolo.js` e `protocoloRoutes.js` às árvores de controllers/models/routes (o `protocoloController.js` já constava da árvore de controllers — a árvore de models e routes foi completada).
+  - Secção 3.1: contador de coleções atualizado de 8 → 9.
+  - Nova subsecção `### ModeloProtocolo` (após `### Consulta`) com tabela de campos (`empresa_id`, `nome`, `descricao`, `area` enum, `seccoes[{nome, items[]}]`, `ativo`), índice composto `{empresa_id, ativo, area}`, nota F5 sobre a evolução do `ModeloChecklist`, permissões (`podeVer` 4 roles / `isDiretorClinico`) e documentação do helper `gerarSnapshotProtocolo(protocoloId, empresaId)`.
+  - Campo `nota_clinica.protocolo_aplicado` do modelo `Consulta` atualizado de "(futuro F5)" para "F5 — gerado por `gerarSnapshotProtocolo` no `criarConsulta`; atualizado via `PATCH /nota-clinica`".
+  - `POST /api/gestor/consultas`: body ganhou `protocolo_id` (opcional, default `null`); validações e erros atualizados com `400` para protocolo não encontrado/não pertence à empresa.
+  - `PATCH /api/gestor/consultas/:id/nota-clinica`: body ganhou `protocolo_aplicado` (array de `{nome, items:[{texto, concluido}]}`) com explicação de que substitui o snapshot para marcar items concluídos durante a sessão.
+  - Nova secção `6.15. Protocolos Clínicos (/api/gestor/protocolos) — F5` com header de permissões/snapshot/auditoria + 5 endpoints (`GET /`, `GET /:id`, `POST`, `PUT`, `DELETE`) documentados com body, validações, respostas, erros.
+  - Secção 9 (Histórico): adicionada entrada `**F5**` no topo da tabela (antes de `**F4**`) com o resumo completo da implementação (modelo, controller, routes, mount, integração na Consulta, 192/192 testes).
+
+- `docs/FRONTEND.md`:
+  - Secção 3 (Sistema de rotas): adicionada linha `/gestor/protocolos` à tabela de rotas (após `/gestor/consultas`).
+  - Secção 11 (`lib/api.ts`): adicionado bullet para os tipos `AreaProtocolo` / `ModeloProtocoloDTO` / `ProtocoloListResponse` (F5) com detalhe dos campos e da diferença entre `items: string[]` no template vs `{texto, concluido}` no snapshot.
+  - Nova subsecção `### /gestor/protocolos (Client Component) — F5` (após `/gestor/consultas`) com item de sidebar (ícone `Stethoscope`), lista de cartões, filtro por área clínica, modal criar/editar com secções/items dinâmicos, toggle ativo/inativo, hard delete, permissões client-side e nota de integração com a Consulta (`protocolo_id` no `POST`, `protocolo_aplicado` no `PATCH`).
+  - Secção 13 (Histórico): adicionada entrada `**F5**` no topo da tabela (antes de `**F4**`) com a nova página, tipos, item de sidebar e integração (lint/tsc/build ✓, rota 3.46 kB).
+
+- `docs/ARQUITETURA.md`:
+  - Intro: parágrafo de abertura alargado para mencionar **F5** (`ModeloProtocolo` + snapshot imutável na Consulta).
+  - Secção 4 (Mapa de Migração de Domínio): linha `ModeloChecklist → ModeloProtocolo` marcada `F5 ✅`.
+  - Secção 5 (Modelos Propostos): inserida nova subsecção `5.5 ModeloProtocolo — ✅ F5 concluído` com o schema Mongoose completo (`empresa_id`, `nome`, `descricao`, `area` enum, `seccoes`, `ativo`, índices) + nota "F5 — Implementação real" (evolução do `ModeloChecklist`, helper `gerarSnapshotProtocolo`, integração na Consulta, permissões). Secções seguintes renumeradas: `5.5 Sala → 5.6`, `5.6 HorarioFisioterapeuta → 5.7`, `5.7 Documento → 5.8`.
+  - Nota "F4 — Implementação real" atualizada: a referência a `protocolo_aplicado[]` passou de "futuro F5" para "**F5 concluído**: povoado no `criarConsulta` via `gerarSnapshotProtocolo`, atualizado via `PATCH /nota-clinica`".
+  - Secção 8 (Roadmap): linha **F5** marcada `✅ Concluído` com escopo reescrito para refletir a implementação real (`ModeloProtocolo` + CRUD + snapshot imutável na Consulta).
+
+Stage Summary:
+- **3 ficheiros de documentação atualizados** (`docs/BACKEND.md`, `docs/FRONTEND.md`, `docs/ARQUITETURA.md`) por via cirúrgica (Edit/MultiEdit — sem reescrita integral).
+- **BACKEND.md**: novo modelo `ModeloProtocolo` documentado (campos, índices, permissões, helper `gerarSnapshotProtocolo`); nova secção `6.15` com 5 endpoints de Protocolos; integração na Consulta (`protocolo_id` em `POST`, `protocolo_aplicado` em `PATCH /nota-clinica`); entrada F5 no histórico; estrutura de ficheiros + contador de coleções atualizados.
+- **FRONTEND.md**: nova rota `/gestor/protocolos` na tabela; nova subsecção de página (cartões, filtro por área, modal com secções/items dinâmicos); 3 tipos em `lib/api.ts` (`AreaProtocolo`, `ModeloProtocoloDTO`, `ProtocoloListResponse`); item de sidebar `Stethoscope`; entrada F5 no histórico.
+- **ARQUITETURA.md**: F5 marcado `✅ Concluído` no roadmap; schema de `ModeloProtocolo` (secção 5.5) alinhado com a implementação real (campos `area` + `ativo` + índice composto); migração `ModeloChecklist → ModeloProtocolo` marcada `F5 ✅`; nota F4 atualizada (snapshot já não é "futuro F5"); secções 5.5–5.8 renumeradas.
+- **Linguagem pt-pt** preservada; formatação Markdown mantida; sem informação inventada (todos os detalhes foram extraídos dos ficheiros de implementação F5 — modelo, controller, routes, server.js, controller da Consulta e `lib/api.ts`).
+- **Próximo passo:** F6 (adaptar frontend — calendário FullCalendar mostra `Consultas` em vez de `Tarefas`).
+
+---
+Task ID: F5
+Agent: Z.ai Code
+Task: Criar ModeloProtocolo (de ModeloChecklist) + CRUD + snapshot imutável na Consulta + integração com nota clínica SOAP.
+
+Work Log:
+
+### F5-A — Modelo ModeloProtocolo
+- Criado `backend/models/ModeloProtocolo.js` (evolução do ModeloChecklist com área clínica e ativo):
+  - Campos: empresa_id, nome, descricao, area (musculoesqueletica/neurologica/cardioresp/desporto/pediatria/outro), seccoes[{nome, items[]}], ativo (boolean).
+  - Índices: {empresa_id, ativo, area}.
+
+### F5-B — Controller + Helper
+- Criado `backend/controllers/protocoloController.js`:
+  - CRUD completo: listarProtocolos, criarProtocolo, obterProtocolo, atualizarProtocolo, apagarProtocolo.
+  - Helper `gerarSnapshotProtocolo(protocoloId, empresaId)` — devolve array de {nome, items: [{texto, concluido: false}]} para injectar na Consulta.
+  - Validações: nome obrigatório, área enum, pelo menos 1 secção com items.
+  - Auditoria registada em todas as mutações.
+
+### F5-C — Integração na Consulta
+- `consultaController.criarConsulta` aceita `protocolo_id` opcional:
+  - Gera snapshot imutável via `gerarSnapshotProtocolo`.
+  - Guarda em `nota_clinica.protocolo_aplicado`.
+  - 400 se protocolo não pertencer à empresa.
+- `consultaController.atualizarNotaClinica` (PATCH /nota-clinica) aceita `protocolo_aplicado`:
+  - Permite marcar items como concluídos durante a sessão.
+  - Substitui o snapshot (mantém estrutura {nome, items: [{texto, concluido}]}).
+
+### F5-D — Routes + server.js
+- Criado `backend/routes/protocoloRoutes.js` montado em `/api/gestor/protocolos`.
+  - GET /, GET /:id → podeVer (4 roles).
+  - POST /, PUT /, DELETE / → isDiretorClinico.
+- `server.js`: montado `app.use('/api/gestor/protocolos', protocoloRoutes)`.
+
+### F5-E — Testes (192/192 ✓)
+- Adicionados 16 testes no bloco "F5 — Protocolos (CRUD + snapshot)":
+  - CRUD completo (criar, listar, detalhe, atualizar, eliminar).
+  - Validações (400): sem nome, sem secções, área inválida.
+  - Permissões (403): fisioterapeuta não pode criar.
+  - GET com filtro area.
+  - **Snapshot na Consulta**: criar consulta com protocolo_id → snapshot gerado com items concluido=false.
+  - **Protocolo inexistente** → 400.
+  - **Marcar items concluídos** via PATCH /nota-clinica.
+  - 401 sem token.
+- **Resultado: 192/192 testes a passar ✓** (+16).
+
+### F5-F — Frontend (/gestor/protocolos)
+- Criada página `frontend/src/app/gestor/protocolos/page.tsx`:
+  - Lista de protocolos (cartões com nome, área, secções/items, estado ativo).
+  - Filtro por área clínica.
+  - Modal criar/editar com secções e items dinâmicos (adicionar/remover).
+- `ModeloProtocoloDTO`, `ProtocoloListResponse`, `AreaProtocolo` adicionados a `lib/api.ts`.
+- Item "Protocolos" (ícone Stethoscope) adicionado ao sidebar do gestor.
+- **Lint ✓, tsc ✓, build ✓** (rota /gestor/protocolos = 3.46 kB).
+
+### F5-G — Documentação (Task DOC-F5 por subagent)
+- `docs/BACKEND.md`: modelo ModeloProtocolo documentado, 5 endpoints, helper gerarSnapshotProtocolo, integração com Consulta, entrada F5 no histórico.
+- `docs/FRONTEND.md`: rota /gestor/protocolos, tipos DTO, página documentada, entrada F5 no histórico.
+- `docs/ARQUITETURA.md`: F5 marcado ✅ no roadmap, schema de ModeloProtocolo alinhado.
+
+Stage Summary:
+- **ModeloProtocolo criado** com área clínica (6 valores) e flag ativo.
+- **Snapshot imutável** gerado na criação da Consulta (RGPD/legal — alterações futuras no template não afetam consultas antigas).
+- **Items marcáveis** durante a sessão via PATCH /nota-clinica (protocolo_aplicado com concluido boolean).
+- **192/192 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
+- **Próximo passo:** F6 (adaptar frontend — calendário FullCalendar mostra Consultas em vez de Tarefas).
+
+---
+Task ID: DOC-F6
+Agent: general-purpose
+Task: Atualização de documentação para F6 (calendário FullCalendar com Consultas)
+
+Work Log:
+- Lido `WORKLOG.md` (1419 linhas, últimas entradas DOC-F5/F5) e `docs/ARQUITETURA.md` (437 linhas) para contexto.
+- Lidos os ficheiros de implementação F6 para extrair detalhes exatos: `frontend/src/app/gestor/calendario-consultas/page.tsx` (página FullCalendar), `frontend/src/lib/api.ts` (expansão do `UtilizadorDTO` com `perfil_profissional`) e `frontend/src/components/gestor/gestor-sidebar.tsx` (item "Agenda Consultas").
+- `docs/ARQUITETURA.md`:
+  - Cabeçalho: parágrafo de abertura alargado para mencionar **F6** (calendário FullCalendar com Consultas) após F5.
+  - Secção 8 (Roadmap de Migração): linha **F6** marcada `✅ Concluído` com escopo reescrito para refletir a implementação real (nova rota `/gestor/calendario-consultas` com cores por fisioterapeuta, filtros, legenda e modal de detalhe).
+- `docs/FRONTEND.md`:
+  - Secção 3 (Sistema de rotas): adicionada a rota `/gestor/calendario-consultas` à tabela (após `/gestor/protocolos`) com nota "FullCalendar com Consultas (substitui `/gestor/calendario` que será removido em F8)".
+  - Secção 11 (`lib/api.ts`): o bullet de `UtilizadorDTO` / `Role` foi alargado com nota **F6** — `UtilizadorDTO` expandido com `perfil_profissional?` (`cedula`, `especialidades`, `biografia`, `cor_calendario`, `ativo_clinico`), necessário para a legenda de cores.
+  - Nova subsecção `### /gestor/calendario-consultas (Client Component) — F6` (após `/gestor/protocolos`) com: item de sidebar **Agenda Consultas** (ícone `CalendarPlus`, entre **Calendário** e **Consultas**); nota de substituição progressiva (`/gestor/calendario` mantém-se até F8); documentação do FullCalendar v6 (plugins, locale `pt`, vista inicial `timeGridWeek`, `headerToolbar`, `slotMinTime` 08:00, `slotMaxTime` 20:00, `nowIndicator`, `allDaySlot: false`); blocos com duração real (`data_hora_inicio` → `data_hora_fim`); cores por fisioterapeuta (`perfil_profissional.cor_calendario` + fallback por estado); filtros por fisioterapeuta e estado (período via `datesSet`); legenda de cores por fisioterapeuta (até 8); render customizado de eventos (hora + paciente + fisio na vista semanal); modal de detalhe (paciente, fisio, sala, data/hora, duração, tipo, estado, presença, nota clínica SOAP resumida S/A/Tratamento, observações); estados visuais.
+  - Secção 13 (Histórico): adicionada entrada `**F6**` no topo da tabela (antes de `**F5**`) com a nova página, expansão do `UtilizadorDTO`, item de sidebar (lint/tsc/build ✓, rota 5.36 kB).
+
+Stage Summary:
+- **ARQUITETURA.md**: F6 marcado `✅ Concluído` no roadmap; cabeçalho atualizado para mencionar F6.
+- **FRONTEND.md**: nova rota `/gestor/calendario-consultas` na tabela; nova subsecção de página (FullCalendar v6, cores por fisioterapeuta, filtros, legenda, render customizado, modal de detalhe); `UtilizadorDTO.perfil_profissional` documentado; item de sidebar **Agenda Consultas**; entrada F6 no histórico.
+- **Linguagem pt-pt** preservada; formatação Markdown mantida; sem informação inventada (todos os detalhes foram extraídos dos ficheiros de implementação F6 — `calendario-consultas/page.tsx`, `lib/api.ts` e `gestor-sidebar.tsx`).
+- **Nota de escopo:** a rota antiga `/gestor/calendario` (Tarefas) não foi removida da documentação — mantém-se até F8 (fase de limpeza), conforme decidido na implementação F6 para não quebrar funcionalidade existente.
+
+---
+Task ID: F6
+Agent: Z.ai Code
+Task: Adaptar frontend — calendário FullCalendar mostra Consultas em vez de Tarefas, com cores por fisioterapeuta e blocos de duração real.
+
+Work Log:
+
+### F6-A — Análise do calendário atual
+- `/gestor/calendario/page.tsx` (1836 linhas) usa Tarefas com FullCalendar v6.
+- Decisão: criar nova página `/gestor/calendario-consultas` em vez de modificar a antiga (a antiga mantém-se até F8 de limpeza para não quebrar funcionalidade existente).
+
+### F6-B — Nova página /gestor/calendario-consultas
+- Criada `frontend/src/app/gestor/calendario-consultas/page.tsx`:
+  - FullCalendar v6 com plugins dayGrid, timeGrid, interaction.
+  - Vista semanal (default), diária, mensal.
+  - **Cores por fisioterapeuta** — usa `perfil_profissional.cor_calendario`, fallback por estado.
+  - **Blocos com duração real** (data_hora_inicio → data_hora_fim).
+  - Filtros por fisioterapeuta e estado.
+  - Legenda de cores por fisioterapeuta (até 8 fisios visíveis).
+  - Modal de detalhe ao clicar (paciente, fisio, sala, data/hora, tipo, estado, presença, nota clínica SOAP resumida).
+  - Render customizado de eventos (hora + nome do paciente + fisio na vista semanal).
+  - nowIndicator, slotMinTime 08:00, slotMaxTime 20:00, allDaySlot false.
+  - Carrega consultas via GET /api/gestor/consultas?inicio=&fim= (datasSet do FullCalendar).
+
+### F6-C — Sidebar + tipos
+- Adicionado item "Agenda Consultas" (ícone CalendarPlus) ao sidebar do gestor, entre "Calendário" (antigo) e "Consultas".
+- `UtilizadorDTO` em lib/api.ts expandido com `perfil_profissional` (cedula, especialidades, biografia, cor_calendario, ativo_clinico) — necessário para a legenda de cores.
+
+### F6-D — Validação
+- **Lint ✓, tsc ✓, build ✓** (rota /gestor/calendario-consultas = 5.36 kB).
+
+### F6-E — Documentação (Task DOC-F6 por subagent)
+- `docs/FRONTEND.md`: rota /gestor/calendario-consultas, página documentada (cores por fisio, filtros, legenda, modal, render customizado), UtilizadorDTO expandido, entrada F6 no histórico.
+- `docs/ARQUITETURA.md`: F6 marcado ✅ no roadmap.
+
+Stage Summary:
+- **Calendário de Consultas criado** com FullCalendar v6, mostrando Consultas com cores por fisioterapeuta e blocos de duração real.
+- **Coexistência**: a página antiga `/gestor/calendario` (Tarefas) mantém-se até F8 (limpeza) — não quebra funcionalidade existente.
+- **Lint ✓, tsc ✓, build ✓**.
+- **Próximo passo:** F7 (cron jobs — briefing fisio, lembretes paciente, arquivista de consultas).
+
+---
+Task ID: DOC-F7
+Agent: general-purpose
+Task: Atualização de documentação para F7 (cron jobs de Consultas)
+
+Work Log:
+- Lido `WORKLOG.md` (1484 linhas — herdado o formato das entradas DOC-F4/DOC-F5/DOC-F6 por subagent de documentação a seguir a cada fase de implementação).
+- Lido `docs/ARQUITETURA.md` (449 linhas — intro, secção 4 Mapa de Migração, secção 5.4 Consulta, secção 6 Cron Jobs, secção 7 Decisões de Design, secção 8 Roadmap) e `docs/BACKEND.md` (1540 linhas — secção 2 Estrutura, secção 3.1 Modelos, secção 3.3 Cron Jobs, secção 9 Histórico).
+- Lidos os ficheiros de implementação F7 para extrair detalhes exatos: `backend/models/ConsultaArquivo.js` (clone do schema Consulta + `arquivado_em`, coleção `consultas_arquivo`, 3 índices), os 5 cron jobs em `backend/jobs/` (`briefingDiarioFisio.js` 08:00, `lembreteConsultasAmanha.js` 19:00, `lembrete2hConsulta.js` */15min, `caoGuardaConsultas.js` 02:00, `arquivistaConsultas.js` domingo 03:00) e o `backend/server.js` (montagem no arranque dentro de `if (require.main === module)` após os 4 jobs legacy).
+
+- `docs/BACKEND.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Secção 2 (Estrutura de ficheiros): adicionado `models/ConsultaArquivo.js` à árvore (cópia exata de Consulta + `arquivado_em`, coleção `consultas_arquivo`, preserva SOAP para RGPD).
+  - Secção 3.1 (Modelos): contador de coleções atualizado de 9 → 10.
+  - Nova subsecção `### ConsultaArquivo` (após `### ModeloProtocolo`) com nota F7 sobre o clone do schema, tabela de campos (com `arquivado_em` + lista dos campos herdados da `Consulta`), 3 índices compostos (`{empresa_id, fisioterapeuta_id, data_hora_inicio: -1}`, `{empresa_id, paciente_id, data_hora_inicio: -1}`, `{arquivado_em: 1}`) e nota de permissões (sem endpoints REST — movimento exclusivo do cron job `arquivistaConsultas`).
+  - Secção 3.3 (Cron Jobs): parágrafo introdutório alargado para referir os **3 cron jobs legacy** (sobre `Tarefa`, mantêm-se até F8) + os **5 cron jobs F7** (sobre `Consulta`).
+  - Nova subsecção `### Cron Jobs de Consultas (F7)` (após a descrição do legacy `Agenda de Amanhã`) com tabela resumo dos 5 jobs (ficheiro, agenda cron, timezone, descrição) + 5 sub-subsecções detalhadas (`#### Briefing Diário Fisio`, `#### Lembrete Consultas Amanhã`, `#### Lembrete 2h Consulta`, `#### Cão de Guarda Consultas`, `#### Arquivista Consultas`) documentando passo-a-passo cada job (queries, filtros, destinatários, mensagens, marcação de flags `lembrete_24h_enviado`/`lembrete_2h_enviado`, retorno de estatísticas) + notas explicativas sobre (a) idempotência via flags, (b) cadência de 15 min + janela 1h45-2h15 com sobreposição, (c) destinatários do cão de guarda (diretores clínicos/admins, não fisios), (d) preservação de SOAP para RGPD no arquivista, (e) padrão de robustez (apagar originais só depois de copiados).
+  - Secção 9 (Histórico): adicionada entrada `**F7**` no topo da tabela (antes de `**F5**`) com o resumo completo da implementação (modelo `ConsultaArquivo`, 5 cron jobs com schedules/destinatários/mensagens/marcação de flags, montagem no `server.js` após os 4 jobs legacy, coexistência até F8, 200/200 testes ✓ com +8 testes).
+
+- `docs/ARQUITETURA.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Intro: parágrafo de abertura alargado para mencionar **F7** (cron jobs de Consultas + `ConsultaArquivo`).
+  - Secção 4 (Mapa de Migração de Domínio): linha `TarefaArquivo → ConsultaArquivo` marcada `F7 ✅` (era `F4 ✅` — o `ConsultaArquivo` só foi implementado em F7; em F4 só existia o `Consulta`).
+  - Secção 5.4 (`Consulta` — nota "F4 — Implementação real"): atualizada a referência às flags `lembrete_24h_enviado`/`lembrete_2h_enviado` de "futuros cron jobs F7" para "**F7 concluído**: flags usadas pelos cron jobs `lembreteConsultasAmanha` (24h) e `lembrete2hConsulta` (2h) para idempotência"; adicionada nota final **F7 — Arquivo** sobre o movimento para `consultas_arquivo` via `arquivistaConsultas`.
+  - Secção 6 (Cron Jobs — Adaptação): parágrafo introdutório alargado com nota "**F7 ✅ — Implementação real:** os 5 jobs abaixo estão implementados em `backend/jobs/` e montados no arranque do `server.js` dentro de `if (require.main === module)` (não correm nos testes). Os jobs legacy (`dailyBriefing`, `agendaAmanha`, `caoGuarda`, `arquivista`) sobre `Tarefa` mantêm-se até F8 (limpeza) — coexistem com os jobs F7.".
+  - Tabela dos 5 cron jobs reescrita para refletir a implementação real: schedules corretos (`0 8 * * *`, `0 19 * * *`, `*/15 * * * *`, `0 2 * * *`, `0 3 * * 0`), destinatários (fisios para briefing/lembretes, diretores+admins para cão de guarda, nenhum para arquivista), estados considerados, mensagens exatas, marcação de flags `lembrete_24h_enviado`/`lembrete_2h_enviado` em lote, janela 1h45-2h15 no lembrete 2h, limite de 6 meses no arquivista (era ">90 dias" na proposta).
+  - Nova nota **F7 — Padrões transversais aos 5 jobs** abaixo da tabela: timezone `Europe/Lisbon`, `require('../utils/notificar')` lazy para `jest.spyOn`, destinatários por job, idempotência via flags.
+  - Secção 7 (Decisões de Design): adicionadas 2 novas decisões: **#11 — Cron jobs de Consulta com idempotência via flags (F7)** (3 padrões: idempotência via flags + `updateMany` em lote após pushes; `require` lazy para `jest.spyOn`; janela de 30 min + cadência de 15 min com sobreposição no `lembrete2hConsulta`) e **#12 — Arquivo separado para SOAP preservar RGPD (F7)** (move para `consultas_arquivo` após 6 meses preservando SOAP, robustez — só apaga originais depois de copiados com sucesso, índices dedicados para auditoria futura).
+  - Secção 8 (Roadmap): linha **F7** marcada `✅ Concluído` com escopo reescrito para refletir a implementação real (5 cron jobs + modelo `ConsultaArquivo` — clone de `Consulta` + `arquivado_em`, coleção `consultas_arquivo`).
+
+Stage Summary:
+- **2 ficheiros de documentação atualizados** (`docs/BACKEND.md` e `docs/ARQUITETURA.md`) por via cirúrgica (Edit — sem reescrita integral). (Não houve alterações a `docs/FRONTEND.md` — a F7 não introduziu alterações no frontend.)
+- **BACKEND.md**: novo modelo `ConsultaArquivo` documentado (clone de `Consulta` + `arquivado_em`, coleção `consultas_arquivo`, 3 índices, sem endpoints REST); nova subsecção `### Cron Jobs de Consultas (F7)` com tabela resumo + 5 descrições detalhadas passo-a-passo + notas de idempotência/janela/destinatários/robustez; parágrafo introdutório da secção 3.3 atualizado para distinguir 3 legacy + 5 F7 (coexistência até F8); entrada F7 no histórico (200/200 testes ✓ +8); estrutura de ficheiros + contador de coleções (9 → 10) atualizados.
+- **ARQUITETURA.md**: F7 marcado `✅ Concluído` no roadmap; cabeçalho atualizado para mencionar F7; migração `TarefaArquivo → ConsultaArquivo` marcada `F7 ✅` (era `F4 ✅`); tabela de cron jobs reescrita para refletir a implementação real (schedules, destinatários, mensagens, flags, janela 1h45-2h15, limite 6 meses); nota F7 — Padrões transversais adicionada; nota F4 atualizada (flags `lembrete_*_enviado` já não são "futuros cron jobs F7" + nota F7 — Arquivo); 2 novas decisões de design (#11 idempotência via flags + lazy require + janela 30 min, #12 arquivo separado para SOAP preservar RGPD).
+- **Linguagem pt-pt** preservada; formatação Markdown mantida; sem informação inventada (todos os detalhes foram extraídos dos ficheiros de implementação F7 — `ConsultaArquivo.js`, 5 cron jobs em `backend/jobs/` e `server.js`).
+- **Nota de escopo:** os 4 jobs legacy sobre `Tarefa` (`dailyBriefing`, `agendaAmanha`, `caoGuarda`, `arquivista`) não foram removidos da documentação — mantêm-se até F8 (fase de limpeza), conforme decidido na implementação F7 para não quebrar funcionalidade existente.
+- **Próximo passo:** F8 (limpeza — remover `Tarefa`, `TarefaArquivo`, `Propriedade`, `ModeloChecklist` antigos + os 4 cron jobs legacy).
+
+
+---
+Task ID: F7
+Agent: Z.ai Code
+Task: Criar 5 cron jobs adaptados ao domínio Fisioterapia (briefing fisio, lembretes paciente, cão de guarda, arquivista) + modelo ConsultaArquivo.
+
+Work Log:
+
+### F7-A — Modelo ConsultaArquivo
+- Criado `backend/models/ConsultaArquivo.js`: clone do schema Consulta com campo extra `arquivado_em`.
+- Coleção `consultas_arquivo` (separada da principal para performance).
+- Preserva notas clínicas SOAP para auditoria legal/RGPD (10-20 anos).
+- Índices: {empresa_id, fisioterapeuta_id, data_hora_inicio}, {empresa_id, paciente_id, data_hora_inicio}, {arquivado_em}.
+
+### F7-B — briefingDiarioFisio.js (08:00)
+- Todos os dias às 08:00 (Europe/Lisbon).
+- Procura Consultas de hoje (estados marcada/confirmada/em_curso).
+- Agrupa por fisioterapeuta, envia push: "📋 Tens X consulta(s) hoje."
+- Filtra só fisios ativos não eliminados (role fisioterapeuta/diretor_clinico).
+
+### F7-C — lembreteConsultasAmanha.js (19:00)
+- Todos os dias às 19:00 (Europe/Lisbon).
+- Procura Consultas de amanhã sem lembrete_24h_enviado.
+- Push ao fisio: "📅 Lembrete: tens X consulta(s) amanhã."
+- Marca lembrete_24h_enviado=true (idempotente — não repete).
+
+### F7-D — lembrete2hConsulta.js (15min)
+- A cada 15 minutos.
+- Procura consultas que começam em ~2h (janela 1h45-2h15 de agora).
+- Push ao fisio: "⏰ Consulta com [Paciente] às [HH:mm] — faltam ~2 horas."
+- Marca lembrete_2h_enviado=true (idempotente).
+
+### F7-E — caoGuardaConsultas.js (02:00)
+- Todos os dias às 02:00 (Europe/Lisbon).
+- Verifica: (1) consultas de hoje sem fisio ativo (órfãs), (2) consultas de datas passadas não concluídas (esquecidas).
+- Notifica diretores clínicos + admins da empresa com alertas.
+
+### F7-F — arquivistaConsultas.js (domingo 03:00)
+- Todos os domingos às 03:00 (Europe/Lisbon).
+- Move consultas concluídas/canceladas/faltou/nao_compareceu com >6 meses para consultas_arquivo.
+- Preserva todos os campos (incluindo nota clínica SOAP).
+- Robusto: se falhar a criar no arquivo, não apaga o original.
+
+### F7-G — Montagem no server.js + testes
+- 5 jobs montados no arranque (dentro de `if (require.main === module)` após os jobs legacy).
+- Jobs legacy (dailyBriefing, agendaAmanha, caoGuarda, arquivista) mantêm-se até F8.
+- **Testes: 200/200 ✓** (+8 testes cobrindo briefing, lembrete 24h, lembrete 2h com idempotência, cão de guarda, arquivista com move e não-move).
+
+### F7-H — Documentação (Task DOC-F7 por subagent)
+- `docs/BACKEND.md`: modelo ConsultaArquivo documentado, 5 cron jobs detalhados (schedules, destinatários, mensagens, idempotência), entrada F7 no histórico.
+- `docs/ARQUITETURA.md`: F7 marcado ✅ no roadmap, secção de cron jobs reescrita, decisões de design #11 (idempotência) e #12 (arquivo separado RGPD) adicionadas.
+
+Stage Summary:
+- **5 cron jobs criados** para o domínio Fisioterapia: briefing fisio (08:00), lembrete amanhã (19:00), lembrete 2h (15min), cão de guarda (02:00), arquivista (domingo 03:00).
+- **Idempotência** via flags lembrete_24h_enviado e lembrete_2h_enviado (não repete notificações).
+- **Timezone blindado**: todos os jobs usam Europe/Lisbon (robusto em servidores UTC).
+- **ConsultaArquivo** preserva notas clínicas SOAP indefinitely (RGPD — 10-20 anos).
+- **200/200 testes ✓**.
+- **Próximo passo:** F8 (limpeza — remover Tarefa, TarefaArquivo, Propriedade, ModeloChecklist antigos + jobs legacy).
+
+---
+Task ID: F8-BACKEND-CLEANUP
+Agent: general-purpose (backend refactoring)
+Task: Limpeza de todas as referências a modelos/controllers eliminados (Tarefa, TarefaArquivo, ModeloChecklist, tarefaController, checklistController, loadBalancer, scheduler, jobs legacy, seedChecklists) nos ficheiros backend do projeto FisioCell.
+
+Work Log:
+
+### F8-1 — routes/gestorRoutes.js
+- Removidos imports de `tarefaController` e `checklistController` (eliminados).
+- Removidos do destructuring de `gestorController`: `getTarefas`, `getDadosCalendario`, `reportarFaltaSubita`, `registarBaixaProlongada`, `exportarTarefasCSV`, `getWebhooks`, `reprocessarWebhook`.
+- Removidas TODAS as routes de Tarefas: `GET /tarefas`, `GET /calendario/dados`, `GET /tarefas/export`, `POST /tarefas/:id/atraso`, `POST /tarefas`, `PATCH /tarefas/:id/atribuir`, `PATCH /tarefas/:id/reatribuir`, `PATCH /tarefas/:id/estado`, `DELETE /tarefas/futuras`, `POST /tarefas/auto-atribuir`, `GET /tarefas/indisponiveis`.
+- Removidas routes de Checklists: `GET/POST/GET /:id/PUT/DELETE /checklists`.
+- Removidas routes de Webhooks: `GET /webhooks`, `POST /webhooks/:id/reprocessar`.
+- Removidas routes de equipa que usavam Tarefa: `POST /equipa/:id/falta-subita`, `POST /equipa/:id/baixa`.
+- Removidas routes de forçar cron jobs legacy: `POST /configuracoes/forcar-daily-briefing`, `POST /configuracoes/forcer-agenda-amanha` (jobs eliminados).
+- MANTIDO: `POST /propriedades/default-checklist` (usa o campo `checklist` array de strings da Propriedade, NÃO referencia ModeloChecklist).
+- MANTIDOS: dashboard, propriedades CRUD, equipa CRUD, auditoria, configuracoes, setup.
+
+### F8-2 — routes/adminRoutes.js
+- Hard Reset global: trocado `Tarefa.deleteMany` por `Consulta.deleteMany` (Tarefa eliminado, passa a apagar Consulta).
+- Hard Reset por empresa: trocado `Tarefa.deleteMany` por `Consulta.deleteMany`, com auditoria atualizada (propriedades + consultas).
+- Removida route `POST /seed-checklists` (ModeloChecklist eliminado).
+- Removidas routes de forçar cron jobs legacy: `POST /forcar-daily-briefing`, `POST /forcar-agenda-amanha`, `POST /forcar-cao-guarda` (jobs eliminados).
+- MANTIDOS: listarEmpresas, impersonarGestor, gestão utilizadores, CRUD empresas, config-empresa, webhook-logs (WebhookLog mantido).
+
+### F8-3 — routes/staffRoutes.js
+- Removidos do destructuring: `concluirTarefa`, `reportarAvaria`, `reportarAtraso`, `toggleChecklistItem` (Tarefa eliminado).
+- Removidas routes: `PATCH /tarefas/:id/concluir`, `POST /tarefas/:id/avaria`, `POST /tarefas/:id/atraso`, `PATCH /tarefas/:id/checklist/:seccaoIndex/item/:itemIndex`.
+- MANTIDOS: ausencias (GET/POST/DELETE/cancelar), falta-hoje.
+
+### F8-4 — controllers/gestorController.js (cirúrgico, ~2000 → ~1100 linhas)
+- Removido `const Tarefa = require('../models/Tarefa')`.
+- Removido `const WebhookLog = require('../models/WebhookLog')` (só usado por getWebhooks).
+- Adicionado `const Consulta = require('../models/Consulta')`.
+- `getDashboard` REESCRITO: usa Consulta em vez de Tarefa (consultasHoje, consultasMarcadasHoje, consultasConcluidasHoje, cargaPorFisio com aggregate sobre duracao_minutos).
+- `alternarEstadoPropriedade` SIMPLIFICADO: removida a lógica de desatribuição de Tarefas futuras (Tarefa eliminado).
+- `atualizarPropriedade`: removida a referência a `modelo_checklist_id` e o require lazy de ModeloChecklist.
+- Removidas funções: `getTarefas`, `getDadosCalendario`, `exportarTarefasCSV`, `reportarFaltaSubita`, `registarBaixaProlongada`, `getWebhooks`, `reprocessarWebhook`.
+- MANTIDOS: obterEmpresaId, getDashboard (rewrite), getPropriedades, criarPropriedade, atualizarPropriedade, alternarEstadoPropriedade (simplified), getEquipa, criarMembroEquipa, atualizarMembroEquipa, alternarEstadoMembro, eliminarMembroEquipa, getAuditoria, setupClienteZero.
+
+### F8-5 — controllers/ausenciaController.js
+- Removido `const Tarefa = require('../models/Tarefa')`.
+- Removida função helper `desatribuirTarefasPeriodo` (load balancer extinto).
+- `registarAusencia`: removida chamada a `desatribuirTarefasPeriodo` e campo `desatribuicao` na resposta.
+- `aprovarRejeitarAusencia`: removida chamada a `desatribuirTarefasPeriodo` e campo `redistribuicao` na resposta.
+- `cancelarAusencia`: removida lógica de `reatribuicaoAviso` (Tarefas desatribuídas não existem mais).
+- MANTIDOS: listarAusencias, registarAusencia, eliminarAusencia, aprovarRejeitarAusencia, cancelarAusencia.
+
+### F8-6 — controllers/authController.js
+- Removido `const Tarefa = require('../models/Tarefa')`.
+- Removido `const Propriedade = require('../models/Propriedade')` (só usado por minhasTarefas).
+- `meuCalendario`: STUB — devolve `{ tarefas: [], ausencias: [...] }` (mantém Ausencia, frontend deve usar /api/gestor/consultas).
+- `minhasTarefas`: STUB — devolve `{ tarefas: [] }`.
+- `minhaTarefaDetalhe`: STUB — devolve 410 Gone.
+- `concluirMinhaTarefa`: STUB — devolve 410 Gone.
+- MANTIDOS: login, me, pushVapidPublicKey, pushSubscribe, pushUnsubscribe (não usam Tarefa).
+
+### F8-7 — controllers/staffController.js
+- Removido `const Tarefa = require('../models/Tarefa')`.
+- Removido `const Propriedade = require('../models/Propriedade')` (só usado por reportarAvaria).
+- Removidas funções: `concluirTarefa`, `reportarAvaria`, `reportarAtraso`, `toggleChecklistItem`.
+- `faltaHoje`: documentação atualizada (removida referência a "redistribuição imediata das tarefas").
+- MANTIDOS: minhasAusencias, criarAusencia, cancelarAusenciaSoft, cancelarAusencia, faltaHoje.
+
+### F8-8 — controllers/relatorioController.js
+- Removido `const Tarefa = require('../models/Tarefa')`.
+- Adicionado `const Consulta = require('../models/Consulta')`.
+- `getRelatorioProdutividade` REESCRITO para usar Consulta:
+  - Mapeamento de campos: `data` → `data_hora_inicio`, `utilizador_id` → `fisioterapeuta_id`, `propriedade_id` → `sala_id`, `tempo_limpeza_minutos` → `duracao_minutos`, `hora_conclusao` → `concluida_em`.
+  - Resposta renomeada: `totalTarefas` → `totalConsultas`, `porStaff` → `porFisio`, `porPropriedade` → `porSala`.
+  - Estados Consulta: marcada/confirmada/em_curso/concluida/cancelada/faltou/nao_compareceu.
+- `gerarPlaceholder` e `construirPrompt`: texto adaptado ao domínio Fisioterapia (consultas/fisioterapeutas/salas em vez de tarefas/limpezas/Alojamento Local).
+- `construirContexto`: aceita tanto campos novos (totalConsultas, porFisio, porSala) como legacy (totalTarefas, porStaff, porPropriedade) para retrocompatibilidade com payloads do frontend antigo.
+
+### F8-9 — controllers/superAdminController.js
+- Removido `const Tarefa = require('../models/Tarefa')`.
+- Removido `const WebhookLog = require('../models/WebhookLog')` (não usado neste controller).
+- Adicionado `const Consulta = require('../models/Consulta')`.
+- `listarEmpresas`: trocado `Tarefa.countDocuments` por `Consulta.countDocuments`, renomeado `num_tarefas` → `num_consultas` na resposta.
+
+### F8-10 — models/Propriedade.js
+- Removido campo `modelo_checklist_id` (referenciava ModeloChecklist eliminado).
+- MANTIDO `funcionario_preferencial_id` (campo da sala, pode ser usado para filtros/preferências futuras — não depende do load balancer extinto).
+- MANTIDOS: nome, morada, coordenadas, empresa_id, tempo_limpeza_minutos, ativo, checklist (array de strings), observacoes, capacidade_hospedes.
+
+### F8-11 — models/ModeloProtocolo.js
+- Verificado: NÃO referencia ModeloChecklist estruturalmente (apenas em comentário histórico "evolução do ModeloChecklist"). Sem alterações necessárias.
+
+### F8-12 — Limpezas adicionais (cosméticas)
+- `package.json`: removido script `seed:checklists` (scripts/seedChecklists.js eliminado). Description atualizada de "Alojamento Local" para "Clínicas de Fisioterapia".
+- `server.js`: atualizado comentário docblock para referir F8 e listar os ficheiros legacy removidos.
+- `models/Utilizador.js`: atualizado comentário que referia loadBalancer (extinto) — agora referencia Consulta (F4+).
+
+### Validação
+- `node -e "require('./server')"` → ✅ OK (sem erros de import).
+- Aviso esperado: Web Push não configurado (VAPID keys em falta) — não afeta imports.
+- `node --check` em todos os 13 ficheiros modificados → ✅ todos passam syntax check.
+
+Stage Summary:
+- **11 ficheiros backend limpos** de referências a Tarefa, TarefaArquivo, ModeloChecklist, tarefaController, checklistController, loadBalancer, scheduler, jobs legacy e seedChecklists.
+- **Nenhuma referência quebrada**: o servidor carrega sem erros (`require('./server')` ✅).
+- **Domínio migrado**: onde antes havia queries a Tarefa, agora usam Consulta (dashboard, relatórios, hard-reset, listarEmpresas, ausências sem redistribuição).
+- **Stubs em authController**: `meuCalendario`, `minhasTarefas`, `minhaTarefaDetalhe`, `concluirMinhaTarefa` devolvem respostas compatíveis (array vazio ou 410 Gone) para não quebrar o frontend legacy enquanto migra para /api/gestor/consultas.
+- **Funções mantidas**: todas as que NÃO usavam Tarefa/ModeloChecklist foram preservadas (autenticação, equipa CRUD, propriedades CRUD, ausências, auditoria, setup, push notifications, IA summary).
+- **Linguagem pt-pt** preservada em todos os comentários.
+- **Nota de escopo**: `tests/integration.test.js` ainda referencia Tarefa e jobs legacy (linhas 30, 1434, 1665, 2097, 2755). Como `require('./server')` não carrega testes, a validação passou. No entanto, `npm test` irá falhar — os testes precisam de ser limpos/atualizados numa tarefa separada (F8-FRONTEND ou F8-TESTS) para usar Consulta em vez de Tarefa.
+- **Próximo passo**: limpar `tests/integration.test.js` (remover testes de Tarefas, ajustar testes de ausências/relatórios para não esperar redistribuição) e atualizar o frontend para parar de chamar /api/auth/me/tarefas e /api/gestor/tarefas (migrar para /api/gestor/consultas e /api/gestor/calendario-consultas).
+
+---
+Task ID: DOC-F8
+Agent: general-purpose
+Task: Atualização de documentação para F8 (limpeza de modelos legacy — Tarefa/TarefaArquivo/ModeloChecklist removidos; Propriedade mantida como alias de Sala)
+
+Work Log:
+- Lido `WORKLOG.md` (1687 linhas — herdado o formato das entradas DOC-F4/DOC-F5/DOC-F6/DOC-F7 por subagent de documentação a seguir a cada fase de implementação; lida também a entrada F8-BACKEND-CLEANUP que descreve a limpeza de código que esta entrada documenta).
+- Lidos os 3 ficheiros de documentação: `docs/BACKEND.md` (1619 linhas — secção 2 Estrutura, secção 3.1 Modelos, secção 3.2 Lógica central, secção 3.3 Cron Jobs, secção 6 Endpoints, secção 9 Histórico), `docs/FRONTEND.md` (564 linhas — secção 3 Rotas, secção 3.1 Admin, secção 3.2 Staff, secção 11 Páginas, secção 13 Histórico) e `docs/ARQUITETURA.md` (450 linhas — secção 2 Princípios, secção 4 Mapa de Migração, secção 5.4 Consulta, secção 5.6 Sala, secção 6 Cron Jobs, secção 8 Roadmap).
+- Lido o `frontend/src/components/gestor/gestor-sidebar.tsx` (199 linhas — para confirmar a lista final de items do sidebar do gestor após F8: Dashboard, Agenda Consultas, Consultas, Salas, Pacientes, Equipa, Horários, Protocolos, Ausências / Férias, Relatórios, Notificações, Configurações) e o `frontend/src/components/admin/admin-sidebar.tsx` (161 linhas — para confirmar que o admin sidebar tem 1 item: Empresas).
+- Lido o `LS` de `/home/z/FisioCell/frontend/src/app/` (para confirmar quais páginas foram removidas vs mantidas no código real após F8).
+
+- `docs/BACKEND.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Cabeçalho (nota F0): alargada para mencionar **F8 concluída** — `Tarefa` removido (substituído por `Consulta` em F4), `ModeloChecklist` extinto (substituído por `ModeloProtocolo` em F5), `Propriedade` mantida como alias de Sala.
+  - Secção 2 (Estrutura de ficheiros): removidos da árvore `tarefaController.js`, `checklistController.js`, `Tarefa.js`, `loadBalancer.js`, `scheduler.js`; atualizado o comentário de `gestorController.js` (dashboard usa Consulta em F8), `ausenciaController.js` (sem redistribuição), `superAdminController.js` (hard-reset usa Consulta), `relatorioController.js` (reescrito sobre Consulta); `Propriedade.js` comentado como "Sala (alias Propriedade)"; adicionadas entradas para `Notificacao.js`, `Auditoria.js`, `WebhookLog.js` (modelos que já existiam mas não estavam na árvore); adicionada nova secção `├── jobs/` listando os 5 cron jobs F7 (`briefingDiarioFisio.js`, `lembreteConsultasAmanha.js`, `lembrete2hConsulta.js`, `caoGuardaConsultas.js`, `arquivistaConsultas.js`).
+  - Secção 3.1 (Modelos): contador atualizado de 10 → 9 coleções; adicionada nota F8 listando os modelos removidos e os modelos finais do projeto; modelo `Propriedade` atualizado para refletir F8 (campo `modelo_checklist_id` removido; `morada` agora opcional; mantém `funcionario_preferencial_id`, `checklist` array de strings, `observacoes`); modelo `Tarefa` substituído por uma nota "❌ Removido em F8" (em vez da tabela de campos, que foi eliminada — o histórico está no `git log`); `dias_folga` do `Utilizador` atualizado para referenciar o motor de disponibilidade F3 em vez do load balancer legacy.
+  - Secção 3.2 (Lógica central — Atribuição de tarefas): substituída por uma nota "❌ Removida em F8" explicando que o load balancer, scheduler e toda a lógica de auto-atribuição foram extintos; a marcação é agora manual via `POST /api/gestor/consultas` com validação de conflitos em tempo real (F4 secção 3.5).
+  - Secção 3.3 (Cron Jobs): parágrafo introdutório reescrito para referir apenas os 5 jobs F7 (removida a referência aos 3 jobs legacy); adicionada nota F8 explicando a remoção dos 4 jobs legacy sobre `Tarefa`; removida a tabela dos 3 jobs legacy (`dailyBriefing`, `caoGuarda`, `agendaAmanha`); removidas as subsecções detalhadas `### Cão de Guarda (jobs/caoGuarda.js)` e `### Agenda de Amanhã (jobs/agendaAmanha.js)` (com as suas Fase A/B e descrições passo-a-passo); mantida a subsecção `### Cron Jobs de Consultas (F7)` com a tabela dos 5 jobs + as 5 descrições detalhadas (briefingDiarioFisio, lembreteConsultasAmanha, lembrete2hConsulta, caoGuardaConsultas, arquivistaConsultas) — sem alterações de conteúdo (continuam accurate).
+  - Secção 6.3 (Ausências): nota "Integração com o motor de atribuição (load balancer)" substituída por "Integração com o motor de disponibilidade (F3)" — referência ao `utils/disponibilidade.js` em vez do `utils/loadBalancer.js`, com nota F8 sobre a remoção da redistribuição.
+  - Secção 6.4 (Relatórios): adicionada nota F8 sobre o `relatorioController` reescrito sobre `Consulta`; resposta JSON renomeada `totalTarefas`→`totalConsultas`, `porStaff`→`porFisio`, `porPropriedade`→`porSala`, `tempoMedioMinutos` 75→45 (duração de consulta vs tempo de limpeza); adicionada nota com o mapeamento de campos F8 (`data`→`data_hora_inicio`, `utilizador_id`→`fisioterapeuta_id`, `propriedade_id`→`sala_id`, `tempo_limpeza_minutos`→`duracao_minutos`, `hora_conclusao`→`concluida_em`).
+  - Secção 6.10 (Calendário Visual Avançado): substituída por uma nota "❌ Removido em F8" — o endpoint `GET /api/admin/calendario/dados` (que devolvia `Tarefa`) foi removido juntamente com `gestorController.getDadosCalendario`; o calendário operacional passou a ser servido pela rota `/gestor/calendario-consultas` (F6).
+  - Secção 6.11 (Fluxo de aprovação de ausências): "Lógica crítica" (que descrevia redistribuição via load balancer) substituída por "Lógica" — aprovar apenas atualiza estado, sem redistribuição; resposta JSON simplificada (removido o campo `redistribuicao`); removida a subsecção "Impacto no motor de atribuição (load balancer)"; adicionada nota F8 sobre a remoção do campo `redistribuicao`.
+  - Secção 9 (Histórico): adicionada entrada `**F8**` no topo da tabela (antes de `**F7**`) com o resumo completo da limpeza: 11 pontos cobrindo (1) modelos removidos, (2) controllers removidos, (3) utils removidos, (4) jobs legacy removidos, (5) script removido, (6) Propriedade mantida como alias, (7) controllers limpos com detalhe por controller, (8) routes limpas, (9) frontend removido + sidebar, (10) testes 116/116 ✓, (11) lista final de modelos do projeto.
+
+- `docs/FRONTEND.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Cabeçalho (nota F0): alargada para mencionar **F8 concluída** — listagem das páginas removidas + nota sobre o rename "Propriedades"→"Salas" e reposição do item "Configurações".
+  - Secção 3 (Sistema de rotas): adicionada nota F8 explicando as rotas removidas e o rename do sidebar; tabela de rotas reescrita — removidas as linhas `/admin/propriedades`, `/admin/tarefas`, `/admin/equipa`, `/admin/aprovacoes`, `/admin/calendario`, `/admin/calendario-operacional`, `/admin/relatorios` (estas páginas já tinham sido removidas em Prompt 122); adicionada a linha `/admin/empresas/[id]` (gaveta de empresa com webhook-logs + impersonação); atualizada a linha `/gestor/calendario-consultas` para referir "F8: substituiu definitivamente o antigo /gestor/calendario (removido)"; atualizada a linha `/gestor/propriedades` para "Salas (alias Propriedade)"; adicionadas linhas para `/gestor/equipa`, `/gestor/ausencias`, `/gestor/relatorios`, `/gestor/notificacoes`, `/gestor/configuracoes`, `/staff/calendario`, `/staff/notificacoes`.
+  - Secção 3.1 (Área Admin): substituída a descrição stale do admin-sidebar (8 itens: Dashboard, Propriedades, Tarefas, Equipa, Pedidos de Férias, Calendário Operacional, Calendário de Folgas, Relatórios) pela descrição atual (1 item: Empresas); adicionada nota F8 sobre a consolidação Prompt 122 + F8; descricao atualizada da página principal (`/admin` = tabela de empresas com tabs Ativas/Reciclagem) e da gaveta de empresa (`/admin/empresas/[id]` = utilizadores + webhook-logs + impersonação).
+  - Secção 3.2 (Área Staff): adicionada nota F8 explicando que a área de Staff está preservada com stubs no backend (`minhasTarefas`/`minhaTarefaDetalhe`/`concluirMinhaTarefa` devolvem array vazio ou 410 Gone) — aguarda futura migração para Consultas do fisioterapeuta; mantida a descrição da `/staff/ausencias` (única página totalmente operacional).
+  - Items de sidebar (notas F2/F4/F6): atualizadas as referências de posicionamento — "Pacientes posicionado entre **Salas** (antigo Propriedades, renomeado em F8) e Equipa"; "Consultas fica agora entre **Agenda Consultas** (F6) e **Salas**" (removida a referência aos items Calendário e Tarefas); "Agenda Consultas posicionado entre **Dashboard** e **Consultas**" (removida a referência ao antigo Calendário); nota F6 "Substituição progressiva" substituída por "F8 — Substituição concluída" (o `/gestor/calendario` foi removido).
+  - Secção 13 (Histórico): adicionada entrada `**F8**` no topo da tabela (antes de `**F6**`) com 5 pontos cobrindo (1) páginas removidas, (2) sidebar do gestor com detalhe dos items removidos/renomeados/repostos + lista final dos 12 items, (3) sidebar do admin (1 item), (4) rotas mantidas no `/staff` com nota sobre stubs, (5) nota sobre páginas legacy marcadas.
+
+- `docs/ARQUITETURA.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Cabeçalho: parágrafo de abertura alargado para mencionar **F8** (limpeza de modelos legacy — Tarefa/TarefaArquivo/ModeloChecklist removidos; Propriedade mantida como alias de Sala).
+  - Secção 2 (Princípios Herdados): linha "Modelo de arquivo" atualizada para referir F8 — o legacy `TarefaArquivo` foi removido; só o `ConsultaArquivo` (F7) está ativo.
+  - Secção 4 (Mapa de Migração de Domínio): tabela reescrita — linha `Tarefa` marcada "❌ removido (substituído por Consulta em F4 — o Tarefa foi extinto em F8) F8 ✅" (era "→ Consulta F4 ✅"); linha `ModeloChecklist` marcada "❌ removido (substituído por ModeloProtocolo em F5 — o ModeloChecklist foi extinto em F8) F8 ✅" (era "→ ModeloProtocolo F5 ✅"); linha `TarefaArquivo` marcada "❌ removido (substituído por ConsultaArquivo em F7 — o TarefaArquivo foi extinto em F8) F8 ✅" (era "→ ConsultaArquivo F7 ✅"); linha `Propriedade` atualizada para "mantida como alias de Sala (a Consulta.sala_id referencia Propriedade) — migração para um modelo Sala dedicado adiada F8 ✅ (alias mantido)" (era "→ Sala F3"); adicionadas linhas para `utils/loadBalancer.js` (removido em F8), `utils/scheduler.js` (removido em F8), `tarefaController.js` + `checklistController.js` (removidos em F8), cron jobs legacy (removidos em F8), `scripts/seedChecklists.js` (removido em F8); adicionadas linhas `— (novo) → Consulta (substitui Tarefa) F4 ✅`, `— (novo) → ModeloProtocolo (substitui ModeloChecklist) F5 ✅`, `— (novo) → ConsultaArquivo (substitui TarefaArquivo) F7 ✅` para deixar claro o mapeamento de substituição.
+  - Secção 5.6 (`Sala`): cabeçalho atualizado de "F3 (substitui Propriedade)" para "F3 (proposta — Propriedade mantida como alias em F8)"; adicionada nota F8 detalhando a decisão de adiar a migração para um modelo Sala dedicado (4 passos necessários caso venha a ser implementado) e justificando que não há pressão operacional (Propriedade já tem os campos necessários).
+  - Secção 6 (Cron Jobs — Adaptação): parágrafo introdutório atualizado — nota "F7 ✅ — Implementação real" mantida; nota "Os jobs legacy mantêm-se até F8 (limpeza) — coexistem com os jobs F7" substituída por "F8 ✅ — Limpeza: os jobs legacy (dailyBriefing, agendaAmanha, caoGuarda, arquivista) sobre Tarefa foram removidos — só os 5 jobs F7 sobre Consulta permanecem ativos".
+  - Secção 8 (Roadmap): linha **F8** marcada `✅ Concluído` (era "Pendente") com escopo reescrito para refletir a implementação real (lista detalhada dos modelos/controllers/utils/jobs/script/páginas removidos + nota sobre Propriedade mantida como alias); nota F3 (rodapé) atualizada para referir a confirmação F8 de que Propriedade é mantida como alias.
+
+Stage Summary:
+- **3 ficheiros de documentação atualizados** (`docs/BACKEND.md`, `docs/FRONTEND.md`, `docs/ARQUITETURA.md`) por via cirúrgica (Edit/MultiEdit — sem reescrita integral). Linguagem pt-pt preservada; formatação Markdown mantida; sem informação inventada (todos os detalhes foram extraídos do `WORKLOG.md` entrada F8-BACKEND-CLEANUP + dos ficheiros de implementação `gestor-sidebar.tsx` e `admin-sidebar.tsx` + do `LS` de `frontend/src/app/`).
+- **BACKEND.md**: árvore de ficheiros limpa (removidos `tarefaController`/`checklistController`/`Tarefa.js`/`loadBalancer`/`scheduler`; adicionados `Notificacao`/`Auditoria`/`WebhookLog`/`jobs/`); contador 10 → 9 coleções + nota F8; modelo `Tarefa` substituído por nota "❌ Removido em F8"; modelo `Propriedade` atualizado (campo `modelo_checklist_id` removido); secção 3.2 (load balancer) substituída por nota "❌ Removida em F8"; secção 3.3 (cron jobs) só com os 5 jobs F7; secção 6.3 (ausências) nota atualizada para motor de disponibilidade F3; secção 6.4 (relatórios) reescrita com novos nomes de campos; secção 6.10 (calendário/dados) substituída por nota "❌ Removido em F8"; secção 6.11 (aprovação ausências) sem redistribuição; entrada F8 no histórico.
+- **FRONTEND.md**: nota F0 atualizada para F8 concluída; tabela de rotas reescrita (removidas 6 rotas admin stale, adicionadas 7 rotas ativas); secção 3.1 (admin) atualizada para "1 item: Empresas"; secção 3.2 (staff) com nota F8 sobre stubs; items de sidebar (notas F2/F4/F6) atualizados para refletir rename "Propriedades"→"Salas" e remoção de "Calendário"/"Tarefas"; nota F6 "Substituição progressiva" substituída por "F8 — Substituição concluída"; entrada F8 no histórico.
+- **ARQUITETURA.md**: cabeçalho atualizado para mencionar F8; secção 2 (princípios) nota F8 sobre arquivo; secção 4 (mapa de migração) reescrita com Tarefa/TarefaArquivo/ModeloChecklist marcados "❌ removido" e Propriedade marcada "alias mantido"; secção 5.6 (Sala) nota F8 sobre adiamento da migração; secção 6 (cron jobs) nota F8 sobre remoção dos jobs legacy; secção 8 (roadmap) F8 marcado ✅ Concluído + nota F3 atualizada.
+- **Nota de escopo:** os históricos detalhados (BACKEND.md secção 9 e FRONTEND.md secção 13) preservam as entradas de Prompts anteriores (v1.x, Prompt 92/93/94/96/97/98/113/114/115/116/122/123/126/129/133/134/135/137/138/139) — essas referências a `Tarefa`/`loadBalancer`/`dailyBriefing`/etc. são registos históricos do que aconteceu em cada Prompt e não devem ser reescritos (o `git log` é a fonte de verdade). As notas F8 "❌ Removido" foram adicionadas nas secções ativas (estrutura, modelos, endpoints) onde a funcionalidade deixou de existir.
+- **Próximo passo:** F9 (Documento — anexos + fotografias clínicas com storage S3/Cloudinary + consentimento RGPD).
+
+---
+Task ID: F8
+Agent: Z.ai Code
+Task: Limpeza — remover modelos legacy (Tarefa, TarefaArquivo, ModeloChecklist), controllers, routes, jobs e páginas frontend antigas. Completa a migração para o domínio Fisioterapia.
+
+Work Log:
+
+### F8-A — Remoção de ficheiros
+- Removidos 3 modelos: Tarefa.js, TarefaArquivo.js, ModeloChecklist.js.
+- Removidos 2 controllers: tarefaController.js, checklistController.js.
+- Removidos 4 jobs legacy: dailyBriefing.js, agendaAmanha.js, caoGuarda.js, arquivista.js.
+- Removidos 2 utils: loadBalancer.js, scheduler.js (só usados por Tarefa).
+- Removido 1 script: seedChecklists.js.
+- Removidas 6 páginas frontend: /gestor/calendario, /gestor/tarefas, /gestor/configuracoes/checklists, /gestor/webhooks, /admin/webhooks, /admin/sistema.
+
+### F8-B — Limpeza de controllers (Task F8-BACKEND-CLEANUP por subagent)
+- gestorController.js (2048→~1100 linhas): removidas 9 funções Tarefa-dependentes (getTarefas, getDadosCalendario, exportarTarefasCSV, reportarFaltaSubita, registarBaixaProlongada, getWebhooks, reprocessarWebhook). getDashboard reescrito com Consulta. alternarEstadoPropriedade simplificado (sem desatribuição).
+- ausenciaController.js: removida lógica de redistribuição de Tarefas (load balancer eliminado).
+- authController.js: minhasTarefas → stub (array vazio); minhaTarefaDetalhe/concluirMinhaTarefa → 410 Gone.
+- staffController.js: removidas 4 funções Tarefa (concluirTarefa, reportarAvaria, reportarAtraso, toggleChecklistItem).
+- relatorioController.js: getRelatorioProdutividade reescrito com Consulta.
+- superAdminController.js: hard-reset troca Tarefa por Consulta.
+
+### F8-C — Limpeza de routes
+- gestorRoutes.js: removidas ~15 routes Tarefa/Checklist/Webhook.
+- adminRoutes.js: hard-reset usa Consulta; removido seed-checklists; removidos forçar-cron legacy.
+- staffRoutes.js: removidas routes Tarefa.
+
+### F8-D — Limpeza de modelos
+- Propriedade.js: removido campo modelo_checklist_id (ModeloChecklist eliminado).
+- ModeloProtocolo.js: verificado, sem referências estruturais a ModeloChecklist.
+
+### F8-E — Limpeza do server.js
+- Removidos imports dos 4 jobs legacy.
+- Removidas chamadas de arranque dos 4 jobs legacy.
+- Mantidos os 5 jobs F7 (briefingDiarioFisio, lembreteConsultasAmanha, lembrete2hConsulta, caoGuardaConsultas, arquivistaConsultas).
+
+### F8-F — Limpeza do frontend
+- Sidebar do gestor atualizado: removidos "Calendário" (antigo), "Tarefas", "Checklists"; renomeado "Propriedades" → "Salas"; adicionado "Configurações".
+- Lint ✓, tsc ✓, build ✓ (sem as 6 páginas removidas).
+
+### F8-G — Limpeza de testes
+- Removidos imports de Tarefa e WebhookLog.
+- Removidos todos os blocos describe Tarefa-dependentes (linhas 317-2853): calendario/dados, dashboard (old), relatorios (old), ausências (old), notificações push, super admin (old), staff/tarefas, cron jobs legacy, prompt 97, cão de guarda/fail-safe, correções, prompt 114, prompt 116.
+- Removida função helper `esperar` (não usada por F2-F7).
+- Corrigida rota 401: /api/gestor/tarefas → /api/gestor/consultas.
+- **Resultado: 116/116 testes a passar ✓** (eram 200, removidos ~84 testes Tarefa-dependentes).
+
+### F8-H — Documentação (Task DOC-F8 por subagent)
+- docs/BACKEND.md: removidas secções Tarefa/TarefaArquivo/ModeloChecklist, jobs legacy, endpoints legacy. Entrada F8 no histórico.
+- docs/FRONTEND.md: removidas 6 rotas antigas, sidebar atualizado. Entrada F8 no histórico.
+- docs/ARQUITETURA.md: F8 marcado ✅ no roadmap. Mapa de migração atualizado (Tarefa/TarefaArquivo/ModeloChecklist → ❌ removido).
+
+Stage Summary:
+- **Modelos legacy completamente removidos**: Tarefa, TarefaArquivo, ModeloChecklist. O projeto FisioCell agora usa exclusivamente os modelos do domínio Fisioterapia: Empresa, Utilizador, Propriedade (alias Sala), Paciente, Consulta, ConsultaArquivo, HorarioFisioterapeuta, ModeloProtocolo, Ausencia, Notificacao, Auditoria, WebhookLog.
+- **12 ficheiros backend eliminados**, 6 páginas frontend eliminadas.
+- **Controllers limpos**: ~950 linhas removidas do gestorController. getDashboard e relatorioController reescritos com Consulta.
+- **Sidebar limpo**: 12 items (era 14), sem referências a Tarefas/Calendário antigo/Checklists.
+- **116/116 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
+- **Migração completa** (F0-F8). Próxima fase: F9 (Documentos — anexos + fotografias clínicas).
+
+---
+Task ID: DOC-F9
+Agent: general-purpose
+Task: Atualização de documentação para F9 (Documentos — anexos clínicos: modelo Documento + storage local via multer + consentimento RGPD + 5 endpoints + página frontend /gestor/documentos)
+
+Work Log:
+- Lido `WORKLOG.md` (1795 linhas — herdado o formato das entradas DOC-F4/DOC-F5/DOC-F6/DOC-F7/DOC-F8 por subagent de documentação a seguir a cada fase de implementação; lida a entrada DOC-F8 que descreve a documentação F8 e a entrada F8 que descreve a implementação da limpeza).
+- Lidos os 3 ficheiros de documentação: `docs/BACKEND.md` (1534 linhas — secção 2 Estrutura, secção 3.1 Modelos, secção 6 Endpoints, secção 9 Histórico), `docs/FRONTEND.md` (567 linhas — secção 3 Rotas, secção 11 Páginas/lib/api.ts, secção 13 Histórico) e `docs/ARQUITETURA.md` (462 linhas — secção 4 Mapa de Migração, secção 5.8 Documento, secção 8 Roadmap).
+- Lidos os ficheiros de implementação F9: `backend/models/Documento.js` (105 linhas — 13 campos, 2 índices compostos), `backend/controllers/documentoController.js` (266 linhas — 5 funções exportadas: listarDocumentos, obterDocumento, downloadDocumento, uploadDocumento, eliminarDocumento), `backend/routes/documentoRoutes.js` (96 linhas — middleware podeVer + isDiretorClinico + multer diskStorage/fileFilter/limits 20MB), `backend/server.js` (mount `app.use('/api/gestor/documentos', documentoRoutes)` + serve estático `/uploads`), `frontend/src/lib/api.ts` (tipos `TipoDocumento`/`DocumentoDTO`/`DocumentoListResponse`), `frontend/src/components/gestor/gestor-sidebar.tsx` (item "Documentos" com ícone `FileText`, posicionado entre Protocolos e Ausências/Férias).
+
+- `docs/BACKEND.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Cabeçalho (nota F0): alargada para mencionar **F9 concluída** — novo modelo `Documento` + 5 endpoints em `/api/gestor/documentos` + storage local via multer (`uploads/`, filtro PDF/imagens/DOC/TXT, limite 20MB) + consentimento RGPD + soft delete.
+  - Secção 2 (Estrutura de ficheiros): adicionadas entradas para `controllers/documentoController.js`, `models/Documento.js`, `routes/documentoRoutes.js` na árvore; adicionada nota F9 explicando o storage local em `uploads/` (servido em estático pelo `server.js`, no `.gitignore`, `url_storage` preparado para futuro S3/Cloudinary).
+  - Secção 3.1 (Modelos): contador atualizado de 9 → 10 coleções; adicionada nota F9 listando o modelo `Documento` (anexos clínicos + storage local + consentimento RGPD + soft delete); adicionada subsecção `### Documento` com tabela de 13 campos (empresa_id, paciente_id obrigatório, consulta_id opcional, uploaded_by, tipo enum 6 valores, nome_original, url_storage, content_type, tamanho_bytes, descricao, consentimento_obtido, data_consentimento, eliminado_em) + 2 índices compostos (`{empresa_id, paciente_id, eliminado_em}` e `{empresa_id, consulta_id, eliminado_em}`) + notas F9 sobre consentimento RGPD, permissões (podeVer para GET/upload, isDiretorClinico para DELETE), validações no upload (paciente/consulta/tipo + multer fileFilter + 20MB + apagar ficheiro em falha pós-gravação), download (`res.download` com nome_original) e soft delete (`eliminado_em` preserva metadados para auditoria RGPD).
+  - Secção 6.16 (Nova — Documentos): adicionada secção completa com os 5 endpoints (`GET /api/gestor/documentos` com filtros `paciente_id`/`consulta_id`/`tipo`, `GET /:id` detalhe, `GET /:id/download` com `res.download`, `POST /upload` multipart/form-data com validações, `DELETE /:id` soft delete) + nota de auth/permissões (podeVer para 4 endpoints, isDiretorClinico para DELETE) + nota sobre storage local via multer (diskStorage, nome de ficheiro `<timestamp>-<random>.<ext>`, fileFilter 8 MIME types, limite 20MB) + nota de auditoria (`upload_documento`/`eliminar_documento`).
+  - Secção 9 (Histórico): adicionada entrada `**F9**` no topo da tabela (antes de `**F8**`) com 5 pontos cobrindo (1) novo modelo Documento com 13 campos + 2 índices compostos, (2) novo documentoController com 5 funções + auditoria, (3) novas documentoRoutes montadas em `/api/gestor/documentos` + middleware `podeVer`/`isDiretorClinico` + configuração multer (diskStorage em `uploads/`, fileFilter 8 MIME types, limite 20MB), (4) server.js mount + serve estático `/uploads`, (5) storage local em `uploads/` com `.gitignore` + `url_storage` preparado para S3/Cloudinary; 130/130 testes ✓ (+14 testes).
+
+- `docs/FRONTEND.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Cabeçalho (nota F0): alargada para mencionar **F9 concluída** — nova página `/gestor/documentos` + novo item **Documentos** (ícone `FileText`) no sidebar.
+  - Secção 3 (Sistema de rotas): adicionada a linha `/gestor/documentos` à tabela de rotas (Documentos — lista de cartões + filtros + modal upload multipart + download + soft delete).
+  - Secção 11 (Páginas): adicionada subsecção `### /gestor/documentos (Client Component) — F9` com nota do item de sidebar (Documentos, ícone FileText, entre Protocolos e Ausências/Férias) + descrição da lista de cartões (tipo/nome/paciente/tamanho/consentimento RGPD) + filtros (Paciente + Tipo, server-side) + modal upload (input file + select Paciente + select Tipo + textarea Descrição + checkbox Consentimento RGPD; submissão em `FormData` multipart) + download (link temporário) + eliminar (soft delete, só diretor_clinico/admin) + estados visuais (loading/erro/vazio) + tipos reutilizados.
+  - Secção 11 (`src/lib/api.ts` — Helpers de fetch): adicionada a descrição dos novos tipos `TipoDocumento` (6 valores do enum), `DocumentoDTO` (`paciente_id`/`uploaded_by` como `string | { _id, nome }` para suportar populate; `consulta_id` `string | null`; `consentimento_obtido` boolean + `data_consentimento` `string | null`; `eliminado_em` opcional) e `DocumentoListResponse` (`{ documentos, total }`) — resposta do `GET /api/gestor/documentos` com filtros.
+  - Secção 13 (Histórico): adicionada entrada `**F9**` no topo da tabela (antes de `**F8**`) com 3 pontos cobrindo (1) nova página `/gestor/documentos` com filtros + modal upload multipart (`FormData`) + download + eliminar (soft delete) + estados visuais, (2) novos tipos em `lib/api.ts` (`TipoDocumento`/`DocumentoDTO`/`DocumentoListResponse`), (3) novo item **Documentos** no sidebar (`FileText`) entre Protocolos e Ausências/Férias (items do sidebar do gestor passam a 13); lint + tsc + build ✓ (rota `/gestor/documentos` = 5.9 kB).
+
+- `docs/ARQUITETURA.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Cabeçalho: parágrafo de abertura alargado para mencionar **F9** (Documento — anexos clínicos com storage local via multer + consentimento RGPD + soft delete).
+  - Secção 4 (Mapa de Migração de Domínio): linha `Documento` atualizada de `F9` para `F9 ✅` (era pendente) com descrição "anexos clínicos + storage local + RGPD".
+  - Secção 5.8 (`Documento`): cabeçalho atualizado de "F9" para "✅ F9 concluído"; schema reescrito para refletir a implementação real (13 campos com defaults/notas em comentário; enum `tipo` ajustado para `['receita','relatorio','termo_consentimento','foto','exame','outro']`; `nome_ficheiro`→`nome_original`; `storage_url`+`storage_key` consolidados em `url_storage`; `consentimento_fotografias`→par `consentimento_obtido`+`data_consentimento`; índices compostos ajustados para incluir `eliminado_em` em vez de `tipo`); adicionada nota "F9 — Implementação real" detalhando as 5 divergências em relação à proposta v0.1; adicionada nota de permissões (podeVer para 4 endpoints + isDiretorClinico para DELETE + auditoria + 5 endpoints montados em `/api/gestor/documentos`).
+  - Secção 8 (Roadmap): linha **F9** marcada `✅ Concluído` (era "Pendente") com escopo reescrito para refletir a implementação real (storage local via multer em vez de S3/Cloudinary direto; 5 endpoints; permissões podeVer/isDiretorClinico; página `/gestor/documentos` + item sidebar Documentos; 130/130 testes ✓).
+
+Stage Summary:
+- **3 ficheiros de documentação atualizados** (`docs/BACKEND.md`, `docs/FRONTEND.md`, `docs/ARQUITETURA.md`) por via cirúrgica (Edit/MultiEdit — sem reescrita integral). Linguagem pt-pt preservada; formatação Markdown mantida; sem informação inventada (todos os detalhes foram extraídos dos ficheiros de implementação F9 + do contexto fornecido).
+- **BACKEND.md**: árvore de ficheiros atualizada (documentoController/Documento.js/documentoRoutes + nota storage local); contador 9 → 10 coleções + nota F9; nova subsecção `### Documento` (13 campos + 2 índices + notas RGPD/permissões/validações/download/soft delete); nova secção 6.16 com 5 endpoints completos; entrada F9 no histórico.
+- **FRONTEND.md**: nota F0 atualizada para F9 concluída; linha `/gestor/documentos` na tabela de rotas; nova subsecção da página `/gestor/documentos` (cartões + filtros + modal multipart + download + soft delete); novos tipos `TipoDocumento`/`DocumentoDTO`/`DocumentoListResponse` documentados; entrada F9 no histórico.
+- **ARQUITETURA.md**: cabeçalho atualizado para mencionar F9; secção 4 (mapa de migração) linha Documento marcada `F9 ✅`; secção 5.8 schema reescrito para refletir a implementação real + nota "F9 — Implementação real" + nota de permissões; secção 8 (roadmap) F9 marcado ✅ Concluído com escopo reescrito.
+- **Nota de escopo:** o storage local via multer (em vez de S3/Cloudinary direto) é uma decisão de implementação — o design do campo `url_storage` (string livre) permite a migração para S3/Cloudinary numa fase posterior sem alterar a API ou o modelo. Esta decisão está documentada em BACKEND.md (secção 2 nota F9 + secção 3.1 subsecção Documento) e em ARQUITETURA.md (secção 5.8 nota "F9 — Implementação real").
+- **Roadmap F0–F9 concluído.** Todas as 10 fases do roadmap de migração Autocell→FisioCell estão agora marcadas como ✅ Concluído no `docs/ARQUITETURA.md` secção 8.
+
+---
+Task ID: F9
+Agent: Z.ai Code
+Task: Criar modelo Documento (anexos clínicos: receitas, relatórios, fotografias) + storage local via multer + CRUD + consentimento RGPD. Última fase da migração F0-F9.
+
+Work Log:
+
+### F9-A — Modelo Documento
+- Criado `backend/models/Documento.js`: empresa_id, paciente_id (obrigatório), consulta_id (opcional), uploaded_by, tipo (6 valores), nome_original, url_storage, content_type, tamanho_bytes, descricao, consentimento_obtido (RGPD), data_consentimento, eliminado_em (soft delete).
+- Índices: {empresa_id, paciente_id, eliminado_em}, {empresa_id, consulta_id, eliminado_em}.
+
+### F9-B — Storage local (multer)
+- Instalado `multer` para upload de ficheiros.
+- Configuração em `documentoRoutes.js`: storage local em `uploads/`, fileFilter (PDF/JPEG/PNG/GIF/WEBP/DOC/DOCX/TXT), limite 20MB.
+- Nome de ficheiro único: timestamp + random + extensão original.
+- `uploads/` adicionado ao `.gitignore` (com .gitkeep).
+- Preparação para S3/Cloudinary: o campo `url_storage` é uma string livre que pode ser trocada por URL S3 sem alterar a API.
+
+### F9-C — Controller (documentoController.js)
+- 5 funções: listarDocumentos (com filtros paciente_id/consulta_id/tipo), obterDocumento, downloadDocumento (res.download), uploadDocumento (multipart), eliminarDocumento (soft delete).
+- Valida paciente/consulta existem antes de criar.
+- Auditoria registada em upload e delete.
+- Se o upload falha após o ficheiro ser gravado, apaga-o (cleanup).
+
+### F9-D — Routes + server.js
+- Criado `backend/routes/documentoRoutes.js` montado em `/api/gestor/documentos`.
+  - GET /, GET /:id, GET /:id/download → podeVer (4 roles).
+  - POST /upload → podeVer + multer.single('file').
+  - DELETE /:id → isDiretorClinico.
+- `server.js`: montado routes + serve estático `/uploads`.
+
+### F9-E — Testes (130/130 ✓)
+- Adicionados 14 testes no bloco "F9 — Documentos (CRUD)":
+  - Upload de PDF (receita) → 201 com consentimento.
+  - Upload de JPEG (foto) → 201.
+  - Validações (400): sem ficheiro, sem paciente_id, tipo inválido.
+  - Listagem com filtro tipo=foto.
+  - Detalhe, download (content-disposition com nome original).
+  - Soft delete: rececionista 403, diretor 200, após delete 404.
+  - 401 sem token.
+- **Resultado: 130/130 testes a passar ✓** (+14).
+
+### F9-F — Frontend (/gestor/documentos)
+- Criada página `frontend/src/app/gestor/documentos/page.tsx`:
+  - Lista de documentos (cartões com tipo, nome, paciente, tamanho, consentimento RGPD).
+  - Filtros por paciente e tipo.
+  - Modal upload (FormData multipart, seleção de ficheiro, tipo, descrição, consentimento).
+  - Download e eliminar (soft delete).
+- `DocumentoDTO`, `DocumentoListResponse`, `TipoDocumento` adicionados a `lib/api.ts`.
+- Item "Documentos" (ícone FileText) adicionado ao sidebar do gestor.
+- **Lint ✓, tsc ✓, build ✓** (rota /gestor/documentos = 5.9 kB).
+
+### F9-G — Documentação (Task DOC-F9 por subagent)
+- `docs/BACKEND.md`: modelo Documento documentado, 5 endpoints, storage multer, consentimento RGPD, entrada F9 no histórico.
+- `docs/FRONTEND.md`: rota /gestor/documentos, tipos DTO, página documentada, entrada F9 no histórico.
+- `docs/ARQUITETURA.md`: F9 marcado ✅ no roadmap, schema de Documento alinhado com implementação real.
+
+Stage Summary:
+- **Documento criado** com 6 tipos (receita, relatorio, termo_consentimento, foto, exame, outro) e consentimento RGPD.
+- **Storage local** via multer em `uploads/` (preparação para S3/Cloudinary — url_storage é string livre).
+- **Upload multipart** via FormData (PDF, imagens, docs) com limite 20MB.
+- **Download** com nome original via content-disposition.
+- **Soft delete** preserva metadados para auditoria.
+- **130/130 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
+- **MIGRAÇÃO F0-F9 COMPLETA** 🏁 — todas as 10 fases concluídas.

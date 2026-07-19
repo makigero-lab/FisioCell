@@ -17,6 +17,11 @@ import {
   LogOut,
   Bell,
   ListChecks,
+  UserRound,
+  Clock,
+  CalendarPlus,
+  Stethoscope,
+  FileText,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -50,15 +55,18 @@ interface NavItem {
  */
 const gestorNavItems: NavItem[] = [
   { label: "Dashboard", href: "/gestor", icon: LayoutDashboard },
-  { label: "Calendário", href: "/gestor/calendario", icon: CalendarRange },
-  { label: "Tarefas", href: "/gestor/tarefas", icon: ClipboardList },
-  { label: "Propriedades", href: "/gestor/propriedades", icon: Building2 },
+  { label: "Agenda Consultas", href: "/gestor/calendario-consultas", icon: CalendarRange },
+  { label: "Consultas", href: "/gestor/consultas", icon: CalendarPlus },
+  { label: "Salas", href: "/gestor/propriedades", icon: Building2 },
+  { label: "Pacientes", href: "/gestor/pacientes", icon: UserRound },
   { label: "Equipa", href: "/gestor/equipa", icon: Users },
+  { label: "Horários", href: "/gestor/equipa/horarios", icon: Clock },
+  { label: "Protocolos", href: "/gestor/protocolos", icon: Stethoscope },
+  { label: "Documentos", href: "/gestor/documentos", icon: FileText },
   { label: "Ausências / Férias", href: "/gestor/ausencias", icon: CalendarOff },
   { label: "Relatórios", href: "/gestor/relatorios", icon: BarChart3 },
   { label: "Notificações", href: "/gestor/notificacoes", icon: Bell },
-  // Prompt 134 — Modelos de Checklist (configuração).
-  { label: "Checklists", href: "/gestor/configuracoes/checklists", icon: ListChecks },
+  { label: "Configurações", href: "/gestor/configuracoes", icon: ListChecks },
 ];
 
 /**
@@ -109,7 +117,7 @@ export function GestorSidebar() {
         <Sparkles className="h-5 w-5" />
       </div>
       <div className="flex flex-col leading-none">
-        <span className="text-sm font-bold">Autocell</span>
+        <span className="text-sm font-bold">FisioCell</span>
         <span className="text-[11px] text-muted-foreground">Gestor</span>
       </div>
     </div>
@@ -127,7 +135,7 @@ export function GestorSidebar() {
         >
           <Menu className="h-5 w-5" />
         </Button>
-        <span className="flex-1 text-sm font-semibold">Autocell — Gestor</span>
+        <span className="flex-1 text-sm font-semibold">FisioCell — Gestor</span>
         <NotificationBell />
       </header>
 
@@ -153,7 +161,7 @@ export function GestorSidebar() {
             Terminar Sessão
           </Button>
           <p className="text-xs text-muted-foreground">
-            © {new Date().getFullYear()} Autocell
+            © {new Date().getFullYear()} FisioCell
           </p>
         </div>
       </aside>
@@ -172,7 +180,7 @@ export function GestorSidebar() {
                 <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
                   <Sparkles className="h-5 w-5" />
                 </div>
-                <span className="text-sm font-bold">Autocell</span>
+                <span className="text-sm font-bold">FisioCell</span>
               </div>
               <Button
                 variant="ghost"

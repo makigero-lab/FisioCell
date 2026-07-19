@@ -1,19 +1,17 @@
 /**
- * Modelo: Propriedade
- * Representa um alojamento (apartment) sincronizado com o Smoobu.
- * Cada propriedade pertence a uma empresa.
+ * Modelo: Propriedade (futuro: Sala)
+ * Representa um espaço físico da clínica.
+ *
+ * F0: Removido smoobu_id (integração Smoobu eliminada).
+ * F3: Será transformado em Sala (nome, capacidade, equipamentos).
+ * F8: Removido modelo_checklist_id (ModeloChecklist eliminado).
  */
 const mongoose = require('mongoose');
 
 const propriedadeSchema = new mongoose.Schema(
   {
-    // ID da propriedade no Smoobu ( usado para cruzar com o webhook )
-    smoobu_id: {
-      type: String,
-      required: true,
-      unique: true,
-      index: true,
-    },
+    // F0 — smoobu_id removido (integração Smoobu eliminada).
+    // O identificador único passará a ser (empresa_id + nome) na F3 (Sala).
     nome: {
       type: String,
       required: true,
@@ -52,18 +50,11 @@ const propriedadeSchema = new mongoose.Schema(
     // O staff vê esta lista ao concluir a tarefa e pode marcar cada item.
     // Definida pelo gestor no painel de propriedades.
     // Ex: ['Verificar toalhas', 'Esvaziar lixo', 'Trocar roupa de cama']
+    // F8 — Mantido como array de strings (legacy). O fluxo de Consultas
+    // (F4+) usa ModeloProtocolo para checklists clínicas dinâmicas.
     checklist: {
       type: [String],
       default: [],
-    },
-    // Prompt 133 — Referência ao ModeloChecklist (template dinâmico).
-    // Se definido, as novas tarefas de limpeza copiam as secções/items
-    // deste modelo para checklist_dinamica na Tarefa (snapshot).
-    modelo_checklist_id: {
-      type: mongoose.Schema.Types.ObjectId,
-      ref: 'ModeloChecklist',
-      default: null,
-      index: true,
     },
     // Prompt 125 — Observações livres da propriedade (notas internas do gestor).
     observacoes: {
@@ -80,11 +71,8 @@ const propriedadeSchema = new mongoose.Schema(
       min: 0,
     },
     // Prompt 92 (Fase 1.5) — Funcionário preferencial desta propriedade.
-    // Quando definido, o load balancer do webhook deve dar prioridade a este
-    // staff (desde que esteja disponível: ativo, sem ausência/folga no dia e
-    // dentro do SLA de capacidade). Preparado para Fase 1.5 — o campo existe
-    // no modelo mas a lógica de preferência no webhook será ativada num
-    // prompt seguinte.
+    // F8 — Mantido: campo da sala (não depende do load balancer, que foi
+    // extinto). Pode ser usado para filtros/preferências futuras.
     funcionario_preferencial_id: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Utilizador',

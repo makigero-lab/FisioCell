@@ -1,6 +1,8 @@
-# Documentação Técnica — Backend (Autocell)
+# Documentação Técnica — Backend (FisioCell)
 
-API REST do SaaS de gestão para Alojamento Local, construída com **Node.js**, **Express** e **MongoDB** (via **Mongoose**).
+> ⚠️ **F0 — Documentação em transição (F9 concluída).** O projeto migrou de Alojamento Local para Fisioterapia. A integração Smoobu foi removida. **F8 — Limpeza:** o modelo `Tarefa` foi **removido** (substituído por `Consulta` em F4); o `ModeloChecklist` foi extinto (substituído por `ModeloProtocolo` em F5); o modelo `Propriedade` foi **mantido como alias de Sala** (ainda referenciado por `Consulta.sala_id` — a migração para um modelo `Sala` dedicado foi adiada). **F9 — Documentos:** novo modelo `Documento` (anexos clínicos) + 5 endpoints em `/api/gestor/documentos` + storage local via multer (pasta `uploads/`, filtro PDF/imagens/DOC/TXT, limite 20MB) + consentimento RGPD + soft delete. Ver [`docs/ARQUITETURA.md`](ARQUITETURA.md) para o roadmap completo F0–F9.
+
+API REST do SaaS de gestão para Fisioterapia, construída com **Node.js**, **Express** e **MongoDB** (via **Mongoose**).
 
 ---
 
@@ -26,22 +28,64 @@ backend/
 ├── .env.example              # Modelo das variáveis de ambiente (a copiar para .env)
 ├── .gitignore                # Ignora node_modules, .env, logs, etc.
 ├── controllers/
-│   ├── webhookController.js  # Webhook do Smoobu: atribuição de tarefas (lógica central)
 │   ├── adminController.js    # Painel de Administração + setup Cliente Zero
-│   └── authController.js     # Autenticação: login (JWT) + /me
+│   ├── authController.js     # Autenticação: login (JWT) + /me
+│   ├── gestorController.js   # Painel do Gestor (dashboard, salas, equipa) — getDashboard usa Consulta (F8)
+│   ├── consultaController.js # CRUD de Consultas (F4) + validação de conflitos + nota clínica SOAP + cédula
+│   ├── protocoloController.js # CRUD de Modelos de Protocolo (F5) + helper gerarSnapshotProtocolo
+│   ├── horarioController.js # CRUD de HorarioFisioterapeuta (F3) + verificador de disponibilidade
+│   ├── pacienteController.js # CRUD de Pacientes (F2) — permissões por role + sanitização de dados clínicos
+│   ├── documentoController.js # CRUD de Documentos (F9) — upload/listar/detalhe/download + soft delete + RGPD
+│   ├── staffController.js    # Painel do Staff
+│   ├── ausenciaController.js # Ausências (folgas/férias) — sem redistribuição de Tarefas (F8)
+│   ├── superAdminController.js # Gestão cross-tenant de empresas — hard-reset usa Consulta (F8)
+│   ├── relatorioController.js # Relatórios/analytics — reescrito sobre Consulta (F8)
+│   └── notificacaoController.js # Notificações in-app
 ├── middleware/
-│   └── auth.js               # Verifica JWT (strito), injeta req.user — sem fallback legacy
+│   ├── auth.js               # Verifica JWT (strito), injeta req.user — sem fallback legacy
+│   └── requireRole.js        # Middlewares RBAC: isAdmin, isDiretorClinico, isClinico, isRececionista (F1)
 ├── models/                   # Modelos Mongoose (ODM do MongoDB)
 │   ├── Empresa.js            #   Entidade principal (multi-tenant)
-│   ├── Propriedade.js        #   Alojamento sincronizado com o Smoobu
-│   ├── Utilizador.js         #   Admin / Staff de uma empresa (email + password_hash)
+│   ├── Propriedade.js        #   Sala (alias Propriedade — referenciado por Consulta.sala_id; modelo mantido em F8)
+│   ├── Utilizador.js         #   Admin / Staff de uma empresa (email + password_hash) + temCedulaValida() (F4)
 │   ├── Ausencia.js           #   Indisponibilidade de Staff num dia
-│   └── Tarefa.js             #   Tarefa de limpeza gerada por reserva
+│   ├── Paciente.js           #   Paciente da clínica (F2) — soft delete + dados clínicos sanitizados
+│   ├── HorarioFisioterapeuta.js # Limites de agenda do fisio (F3) — recorrente/excecao + motor de disponibilidade
+│   ├── Consulta.js           #   Marcação/sessão de fisioterapia (F4) — substitui Tarefa; conflitos + SOAP + cédula
+│   ├── ConsultaArquivo.js    #   Cópia exata de Consulta + arquivado_em (F7) — coleção `consultas_arquivo`; preserva SOAP para RGPD
+│   ├── Notificacao.js        #   Notificações in-app + push (destinatário, tipo, lida)
+│   ├── Auditoria.js          #   Log de auditoria (empresa_id, utilizador_id, recurso, acao, detalhes)
+│   ├── WebhookLog.js         #   Log de webhooks (mantido para auditoria)
+│   ├── ModeloProtocolo.js    #   Template de protocolo clínico (F5) — substitui ModeloChecklist; área + ativo + snapshot
+│   └── Documento.js          #   Anexo clínico (F9) — receita/relatório/termo/foto/exame/outro + storage local + RGPD
+├── utils/
+│   ├── geocoding.js          # Geocoding de moradas (Nominatim)
+│   ├── disponibilidade.js    # Filtros de ausência/folga + motor de disponibilidade F3 (horários)
+│   ├── distancia.js          # Haversine (tempo de viagem)
+│   ├── notificar.js          # Notificações in-app + push
+│   ├── push.js               # Web Push (VAPID)
+│   └── auditoria.js          # Registo de auditoria
+├── jobs/                     # Cron jobs F7 (todos timezone: 'Europe/Lisbon')
+│   ├── briefingDiarioFisio.js           # 08:00 — briefing diário por fisio
+│   ├── lembreteConsultasAmanha.js       # 19:00 — lembrete 24h (idempotente via flag)
+│   ├── lembrete2hConsulta.js            # */15 min — lembrete 2h (janela 1h45–2h15)
+│   ├── caoGuardaConsultas.js            # 02:00 — alertas órfãs + esquecidas (diretores)
+│   └── arquivistaConsultas.js           # domingo 03:00 — move >6 meses para consultas_arquivo
 └── routes/
-    ├── webhookRoutes.js      # POST /webhooks/smoobu
-    ├── adminRoutes.js        # GET/POST /api/admin/propriedades, GET /api/admin/setup
-    └── authRoutes.js         # POST /api/auth/login, GET /api/auth/me
+    ├── adminRoutes.js        # Rotas /api/admin/*
+    ├── gestorRoutes.js       # Rotas /api/gestor/*
+    ├── pacienteRoutes.js     # Rotas /api/gestor/pacientes/* (F2)
+    ├── horarioRoutes.js      # Rotas /api/gestor/horarios/* (F3)
+    ├── consultaRoutes.js     # Rotas /api/gestor/consultas/* (F4)
+    ├── protocoloRoutes.js    # Rotas /api/gestor/protocolos/* (F5)
+    ├── documentoRoutes.js    # Rotas /api/gestor/documentos/* (F9) — multer storage local
+    ├── staffRoutes.js        # Rotas /api/staff/*
+    ├── authRoutes.js         # POST /api/auth/login, GET /api/auth/me
+    ├── ausenciaRoutes.js     # Rotas de ausências
+    └── relatorioRoutes.js    # Rotas de relatórios
 ```
+
+> **F9 — Storage local:** os ficheiros carregados via `POST /api/gestor/documentos/upload` são gravados na pasta `uploads/` (à raiz do backend) pelo `multer`. O `server.js` serve esta pasta em estático via `app.use('/uploads', express.static(...))`. A pasta `uploads/` está no `.gitignore` (não é commitada). O campo `url_storage` do modelo `Documento` guarda um caminho relativo que poderá ser trocado por uma URL S3/Cloudinary numa futura migração sem alterar a API.
 
 ---
 
@@ -54,7 +98,7 @@ O fluxo de arranque segue uma sequência segura:
 3. **Middlewares:**
    - `cors()` — habilita respostas a pedidos vindos de outras origens (essencial para o frontend na Vercel comunicar com a API no Render).
    - `express.json()` — faz parse do corpo dos pedidos em JSON, disponibilizando-os em `req.body`.
-4. **Rotas** — `GET /` (healthcheck), montagem de `/webhooks` e `/api/admin` (ver secção 6).
+4. **Rotas** — `GET /` (healthcheck), montagem de `/api/admin`, `/api/gestor`, `/api/staff`, `/api/auth` (ver secção 6).
 5. **Ligação ao MongoDB** — `mongoose.connect(process.env.MONGODB_URI)`.
    - Em **caso de sucesso**: regista mensagem e **só depois** arranca o servidor HTTP com `app.listen(PORT)`. Isto garante que a API só recebe tráfego quando a base de dados está acessível.
    - Em **caso de erro**: regista o erro e termina o processo (`process.exit(1)`), evitando arrancar um servidor sem acesso à BD.
@@ -66,40 +110,67 @@ O fluxo de arranque segue uma sequência segura:
 
 ## 3.1. Modelos de dados (Mongoose)
 
-O sistema gira em torno de 5 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
+O sistema gira em torno de 10 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
+
+> **F8 — Limpeza de modelos legacy:** os modelos `Tarefa`, `TarefaArquivo` e `ModeloChecklist` foram **removidos** (juntamente com `tarefaController.js`, `checklistController.js`, `utils/loadBalancer.js`, `utils/scheduler.js`, `scripts/seedChecklists.js` e os 4 cron jobs legacy `dailyBriefing`/`agendaAmanha`/`caoGuarda`/`arquivista`). O modelo `Propriedade` foi mantido como **alias de Sala** (continua referenciado por `Consulta.sala_id`). Modelo final: `Empresa`, `Utilizador`, `Propriedade` (Sala), `Paciente`, `Consulta`, `ConsultaArquivo`, `HorarioFisioterapeuta`, `ModeloProtocolo`, `Ausencia`, `Notificacao`, `Auditoria`, `WebhookLog` (alguns partilham coleção — ver detalhe em cada secção).
+>
+> **F9 — Documentos:** adicionado o modelo `Documento` (anexos clínicos — receitas, relatórios, termos de consentimento, fotografias, exames, outros) com storage local via `multer` em `uploads/`, consentimento RGPD obrigatório para dados clínicos e soft delete (`eliminado_em`) para preservar metadados de auditoria.
 
 ### `Empresa`
 Entidade principal do SaaS (multi-tenant). Cada empresa agrupa Propriedades e Utilizadores.
+
+> **F0:** Os campos `morada`, `telefone`, `email` foram adicionados (substituem o antigo `smoobu_api_key`).
+> **F1:** Adicionado `logo_url` (URL do logótipo da clínica) e o bloco `config` (horário padrão, duração de consulta, tolerância de atraso, fuso horário).
 
 | Campo         | Tipo    | Notas                                              |
 |---------------|---------|----------------------------------------------------|
 | `nome`        | String  | Obrigatório, trim, indexado.                       |
 | `nif`         | String  | Opcional, trim.                                    |
+| `morada`      | String  | Opcional, trim. Morada da clínica (F0).            |
+| `telefone`    | String  | Opcional, trim. Telefone da clínica (F0).          |
+| `email`       | String  | Opcional, trim. Email de contacto da clínica (F0). |
+| `logo_url`    | String  | Opcional, trim. URL do logótipo da clínica (F1). Default `''`. |
 | `plano_ativo` | Boolean | Default `true`.                                    |
+| `ativa`       | Boolean | Default `true`, indexado. Empresa suspensa (`ativa: false`) bloqueia login (Prompt 116). |
+| `apagada`     | Boolean | Default `false`, indexado. Soft delete (Lixeira) — restaurável (Prompt 122). |
+
+#### `config` (sub-documento) — F1
+
+Configuração operacional da clínica. Default: objeto vazio `{}`.
+
+| Campo                      | Tipo     | Notas                                                              |
+|----------------------------|----------|--------------------------------------------------------------------|
+| `horario_padrao`           | [Object] | Default `[]`. Array de `{ dia_semana: 0-6, abertura: 'HH:mm', fecho: 'HH:mm' }` (0=Dom…6=Sáb). Regra semanal recorrente de funcionamento. |
+| `duracao_consulta_padrao`  | Number   | Default `45`, `min: 15`. Duração padrão de uma consulta em minutos. |
+| `tolerancia_atraso_min`    | Number   | Default `10`, `min: 0`. Tolerância de atraso do paciente em minutos (antes de marcar como "atrasado"). |
+| `fuso_horario`             | String   | Default `'Europe/Lisbon'`. Fuso horário da clínica (calendário + lembretes). |
 
 ### `Propriedade`
-Representa um alojamento sincronizado com o Smoobu.
+Representa uma **Sala** da clínica (alias — o modelo `Propriedade` foi mantido em F8 porque a `Consulta.sala_id` o referencia; a migração para um modelo `Sala` dedicado foi adiada para uma fase futura). **F0:** o campo `smoobu_id` foi removido. **F8:** o campo `modelo_checklist_id` foi removido (o `ModeloChecklist` foi extinto — o `ModeloProtocolo` é a sua evolução F5, mas usa snapshots por consulta e não referência direta à Propriedade).
 
 | Campo                        | Tipo     | Notas                                                              |
 |------------------------------|----------|--------------------------------------------------------------------|
-| `smoobu_id`                  | String   | Único, indexado. ID do apartment no Smoobu (cruzamento webhook).   |
 | `nome`                       | String   | Obrigatório, trim.                                                 |
-| `morada`                     | String   | Obrigatório, trim. Geocoding automático (Nominatim) ao criar/editar. |
+| `morada`                     | String   | Opcional, trim. Geocoding automático (Nominatim) ao criar/editar (mantido para retrocompatibilidade; salas de clínica nem sempre têm morada própria). |
 | `coordenadas`                | Object   | `{ lat: Number, lng: Number }`. Preenchidas via geocoding (default null). |
 | `empresa_id`                 | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
-| `tempo_limpeza_minutos`      | Number   | Default `45`, `min: 0`. Usado se o payload do Smoobu não trouxer valor. |
-| `ativo`                      | Boolean  | Default `true`. Inativas são ignoradas pelo webhook.               |
-| `checklist`                  | [String] | Default `[]`. Itens de limpeza definidos pelo gestor (v1.34.0).    |
-| `capacidade_hospedes`        | Number   | Default `null`, `min: 0`. Vinda do Smoobu (v1.61.0 / Prompt 84).   |
-| `funcionario_preferencial_id`| ObjectId | `ref: 'Utilizador'`, default `null`, indexado. **Prompt 92 (Fase 1.5)** — staff preferencial da propriedade; a lógica de prioridade no load balancer será ativada num prompt seguinte. |
+| `tempo_limpeza_minutos`      | Number   | Default `45`, `min: 0`. Unidade de carga (legacy — ainda usado em alguns relatórios operacionais). |
+| `ativo`                      | Boolean  | Default `true`.                                                    |
+| `checklist`                  | [String] | Default `[]`. Itens livres definidos pelo gestor (array de strings; não referencia `ModeloChecklist` desde F8). |
+| `capacidade_hospedes`        | Number   | Default `null`, `min: 0`. Capacidade (v1.61.0 / Prompt 84).        |
+| `funcionario_preferencial_id`| ObjectId | `ref: 'Utilizador'`, default `null`, indexado. **Prompt 92 (Fase 1.5)** — staff preferencial da sala (mantido em F8 — não depende do load balancer extinto, pode ser usado para filtros/preferências futuras). |
+| `observacoes`                | String   | Default `''`, trim. Notas administrativas livres sobre a sala.     |
 
 ### `Utilizador`
-Admin, Manager ou Staff de uma empresa. Credenciais de login (email + password_hash).
+Admin, Diretor Clínico, Fisioterapeuta ou Rececionista de uma empresa (clínica). Credenciais de login (email + password_hash).
 
-**Roles (hierarquia):**
-- `admin` — dono da conta (gestão total: empresas, planos, utilizadores).
-- `manager` — responsável de limpezas (gere equipa de staff, vê dashboard alargado, pode executar limpezas).
-- `staff` — executante de limpezas (vê apenas as suas tarefas no mobile).
+**Roles (hierarquia) — F1:**
+- `admin` — Super Admin da plataforma (cross-tenant). Gere empresas, planos, sistema. **NÃO vê dados clínicos** por RGPD.
+- `diretor_clinico` — acesso TOTAL à clínica: pacientes, consultas, equipa, relatórios. Pode atender pacientes (é um fisioterapeuta com poderes de gestão).
+- `fisioterapeuta` — vê SÓ os seus pacientes e consultas. Regista notas SOAP. Não vê dados de outros fisioterapeutas.
+- `rececionista` — gere marcações de TODOS os fisioterapeutas. **NÃO vê notas clínicas/SOAP** — princípio RGPD need-to-know.
+
+> **F1:** O enum foi migrado de `['admin','manager','staff']` para `['admin','diretor_clinico','fisioterapeuta','rececionista']`. O middleware legacy `isGestor`/`requireStaff`/`requireManager`/`requireAdmin` foi substituído por `isAdmin`/`isDiretorClinico`/`isClinico`/`isRececionista` em `middleware/requireRole.js`.
 
 | Campo            | Tipo     | Notas                                                              |
 |------------------|----------|--------------------------------------------------------------------|
@@ -107,11 +178,35 @@ Admin, Manager ou Staff de uma empresa. Credenciais de login (email + password_h
 | `email`          | String   | Obrigatório, lowercase, trim, **único** (indexado). Credencial de login. |
 | `password_hash`  | String   | Hash bcrypt da password (nunca a password em claro). Opcional (utilizador migrado sem password → login recusa). |
 | `empresa_id`     | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
-| `role`           | String   | `enum: ['admin','manager','staff']`, default `'staff'`.           |
-| `responsavel_id` | ObjectId | `ref: 'Utilizador'`, default `null`. Superior hierárquico (admin/manager). O admin não tem responsavel_id (topo da hierarquia). Indexado. |
-| `ativo`          | Boolean  | Default `true`. Utilizador inativo é ignorado pelo webhook e pelo login. |
+| `role`           | String   | `enum: ['admin','diretor_clinico','fisioterapeuta','rececionista']`, default `'rececionista'`. Indexado. |
+| `responsavel_id` | ObjectId | `ref: 'Utilizador'`, default `null`. Superior hierárquico (admin/diretor_clinico). O admin não tem responsavel_id (topo da hierarquia). Indexado. |
+| `telefone`       | String   | Opcional, trim. Telemóvel para notificações (formato internacional). |
+| `dias_folga`     | [Number] | Default `[]`. Folgas fixas semanais (0=Dom…6=Sáb). **F8:** o motor de disponibilidade F3 (`utils/disponibilidade.js` — `verificarDisponibilidadeCompleta`) continua a consultar este array para excluir fisioterapeutas em folga fixa (camada 2 do motor); o load balancer legacy foi removido, mas o `dias_folga` mantém-se por retrocompatibilidade até ser totalmente substituído por regras `HorarioFisioterapeuta` recorrentes. |
+| `ativo`          | Boolean  | Default `true`. Utilizador inativo é ignorado pelo login.         |
+| `eliminado_em`   | Date     | Default `null`, indexado. Soft delete (preserva integridade referencial de consultas/notas históricas). |
+| `pushSubscription` | Mixed  | Default `null`. Subscrição Web Push (VAPID) gerada pelo browser. |
 
-> **Regras de segurança (v1.7.0):** não é possível criar/editar utilizadores com role `admin` via `/api/admin/equipa` (403). Não é possível editar/eliminar/desativar utilizadores que já sejam `admin` (403 "Não é possível modificar um administrador"). O `responsavel_id` tem de ser um admin/manager da mesma empresa (validado no backend).
+#### `perfil_profissional` (sub-documento) — F1
+
+Só faz sentido para `fisioterapeuta`/`diretor_clinico` (para `admin`/`rececionista` fica vazio).
+
+| Campo            | Tipo     | Notas                                                              |
+|------------------|----------|--------------------------------------------------------------------|
+| `cedula`         | String   | Nº de cédula da Ordem dos Fisioterapeutas. Default `''`.            |
+| `especialidades` | [String] | Default `[]`. Ex.: `'Desporto'`, `'Neurologia'`, `'Pediatria'`.     |
+| `biografia`      | String   | Default `''`. Bio curta para mostrar no perfil público (futuro portal paciente). |
+| `cor_calendario` | String   | Default `'#3b82f6'`. Cor (hex) do fisioterapeuta no FullCalendar.   |
+| `ativo_clinico`  | Boolean  | Default `true`. `false` = inativo clinicamente (impede novas marcações) mas mantém o histórico. |
+
+> **F4 — Método de instância `temCedulaValida()`:** adicionado ao schema `Utilizador` (`utilizadorSchema.methods.temCedulaValida`). Devolve `true` para `admin`/`rececionista` (não aplicável — não assinam notas clínicas); para `fisioterapeuta`/`diretor_clinico` devolve `true` apenas se `perfil_profissional.cedula` for uma string não vazia (após `trim()`). A cédula da Ordem dos Fisioterapeutas é **OBRIGATÓRIA** para assinar notas clínicas (SOAP) e para a futura faturação (F4 — ver `consultaController.atualizarNotaClinica`).
+
+> **Regras de segurança (v1.7.0):** não é possível criar/editar utilizadores com role `admin` via `/api/admin/equipa` (403). Não é possível editar/eliminar/desativar utilizadores que já sejam `admin` (403 "Não é possível modificar um administrador"). O `responsavel_id` tem de ser um admin/diretor_clinico da mesma empresa (validado no backend).
+>
+> **Middlewares RBAC (F1):** definidos em `middleware/requireRole.js`:
+> - `isAdmin` — só `admin` (ações sensíveis: criar admins, setup, gestão cross-tenant).
+> - `isDiretorClinico` — `admin` + `diretor_clinico` (gestão operacional da clínica: propriedades/salas, equipa, ausências, consultas).
+> - `isClinico` — `admin` + `diretor_clinico` + `fisioterapeuta` (ações clínicas: ver ficha de paciente, registar SOAP).
+> - `isRececionista` — `admin` + `diretor_clinico` + `rececionista` (marcações, gestão admin de pacientes).
 
 ### `Ausencia`
 Indisponibilidade (férias/folga) de um Staff num intervalo de datas. Todas as datas são **normalizadas para meia-noite UTC**.
@@ -129,99 +224,341 @@ Indisponibilidade (férias/folga) de um Staff num intervalo de datas. Todas as d
 
 Índice único composto `{ utilizador_id, data_inicio }` → evita duplicar o mesmo início para o mesmo utilizador. A validação de **sobreposição de intervalos** é feita no controller (mensagem clara de 409).
 
-> **v1.8.0:** o modelo passou de dia único (`data`) para intervalos (`data_inicio`/`data_fim`) com `tipo` e `notas`. O webhook foi atualizado para verificar sobreposição de intervalos (mantém a query `data` legacy para retrocompatibilidade).
+> **v1.8.0:** o modelo passou de dia único (`data`) para intervalos (`data_inicio`/`data_fim`) com `tipo` e `notas`. A verificação de sobreposição de intervalos mantém a query `data` legacy para retrocompatibilidade.
 
-### `Tarefa`
-Tarefa de limpeza gerada a partir de uma reserva do Smoobu.
+### `Tarefa` — ❌ Removido em F8
+
+> **F8 — Limpeza:** o modelo `Tarefa` (e a respetiva coleção `tarefas`) foi **removido** do código-base. A migração para o domínio Fisioterapia está concluída desde F4 — a `Consulta` é o nó central da clínica (substitui `Tarefa` em todos os fluxos: marcação, dashboard, relatórios, hard-reset, arquivamento). Os cron jobs legacy que operavam sobre `Tarefa` (`dailyBriefing`, `agendaAmanha`, `caoGuarda`, `arquivista`) foram substituídos pelos 5 cron jobs F7 sobre `Consulta` (ver secção 3.3). Os controllers que dependiam de `Tarefa` (`gestorController.getDashboard`, `relatorioController.getRelatorioProdutividade`, `ausenciaController.aprovarRejeitarAusencia`, `superAdminController` hard-reset, `staffController` ações do staff) foram reescritos para usar `Consulta` ou foram stubbed (authController). O histórico da tabela de campos do `Tarefa` está preservado no `git log`.
+
+### `Paciente`
+Paciente de uma clínica (empresa). **F2** — novo modelo do domínio Fisioterapia.
+
+> **F2:** O `Paciente` é uma entidade **separada** do `Utilizador` — pacientes não fazem login (não têm JWT nem `password_hash`). Soft delete via `eliminado_em` para preservar histórico clínico (RGPD: direito ao esquecimento vs. integridade referencial de consultas/notas históricas). Os campos clínicos (`historico_medico`, `alergias`, `contacto_emergencia`) só são devolvidos a `isClinico` (admin/diretor_clinico/fisioterapeuta); a `rececionista` recebe uma versão sanitizada (ver `pacienteController.sanitizarParaNaoClinico`).
 
 | Campo                   | Tipo     | Notas                                                              |
 |-------------------------|----------|--------------------------------------------------------------------|
-| `empresa_id`            | ObjectId | Obrigatório, indexado.                                             |
-| `propriedade_id`        | ObjectId | `ref: 'Propriedade'`. Obrigatório, indexado.                       |
-| `smoobu_reserva_id`     | String   | ID da reserva no Smoobu (auditoria / idempotência). Indexado.      |
-| `utilizador_id`         | ObjectId | `ref: 'Utilizador'`, **default `null`** → tarefa por atribuir.     |
-| `data`                  | Date     | Dia do check-in (meia-noite UTC). Obrigatório, indexado.           |
-| `tempo_limpeza_minutos` | Number   | Obrigatório, default `45`, `min: 0`. Unidade de carga.             |
-| `tipo`                  | String   | `enum: ['limpeza','check_in','check_out','manutencao','outro']`.   |
-| `estado`                | String   | `enum: ['por_atribuir','atribuida','em_curso','concluida','cancelada']`. |
-| `observacoes`           | String   | Observações gerais (gestor/admin). Default `''`.                   |
-| `observacoes_staff`     | String   | Observações do staff ao concluir (v1.34.0). Default `''`.          |
-| `concluida_em`          | Date     | Data de conclusão (relatórios). Default `null`.                    |
-| `hora_conclusao`        | Date     | Timestamp preciso de conclusão (v1.34.0, auditoria). Default `null`. |
-| `avarias`               | [String] | Avarias reportadas pelo staff (v1.38.0). Default `[]`.             |
-| `checklist`             | [String] | Snapshot da checklist da propriedade na criação (v1.55.0 / Prompt 77). Default `[]`. |
-| `detalhes_reserva`      | Object   | **Prompt 92 (Fase 1.5)** — snapshot da reserva Smoobu. Sub-campos: `checkin` (String), `checkout` (String), `pax` (Number), `nome_hospede` (String). Preparado para Fase 1.5; o preenchimento via webhook/sincronização será feito num prompt seguinte. |
+| `empresa_id`            | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
+| `nome`                  | String   | Obrigatório, trim, indexado.                                       |
+| `data_nascimento`       | Date     | Default `null`, indexado. Não pode ser futura (validado no controller). |
+| `genero`                | String   | `enum: ['M','F','Outro','NA']`, default `'NA'`.                    |
+| `num_utente`            | String   | Nº de Utente de Saúde (SNS). Default `''`, trim, indexado. Para futuras integrações com Saúde 24. |
+| `nif`                   | String   | Default `''`, trim.                                                |
+| `telefone`              | String   | Obrigatório, trim. Único contacto obrigatório.                    |
+| `email`                 | String   | Default `''`, lowercase, trim.                                     |
+| `morada`                | String   | Default `''`, trim.                                                |
+| `contacto_emergencia`   | Object   | Sub-documento `{ nome, telefone, relacao }` (todos default `''`). **Dado clínico** — sanitizado para rececionista. |
+| `historico_medico`      | String   | Default `''`. Histórico clínico relevante (patologias, medicação). **Dado clínico** — sanitizado para rececionista. |
+| `alergias`              | [String] | Default `[]`. **Dado clínico** — sanitizado para rececionista.     |
+| `consentimento_dados`   | Object   | Sub-documento RGPD (ver tabela abaixo).                            |
+| `ativo`                 | Boolean  | Default `true`, indexado. `false` = paciente inativo (alta/férias clínicas) mas não eliminado. |
+| `eliminado_em`          | Date     | Default `null`, indexado. **Soft delete** (RGPD: preserva histórico). |
+| `observacoes`           | String   | Default `''`, trim. Notas administrativas livres.                  |
+| `origem`                | String   | `enum: ['walk_in','referenciacao','online','outro']`, default `'walk_in'`. |
 
-> Nota: `empresa_id` é uma referência a `Empresa` (modelo criado na v1.2.0).
+#### `consentimento_dados` (sub-documento) — F2
+
+| Campo            | Tipo    | Notas                                                              |
+|------------------|---------|--------------------------------------------------------------------|
+| `concedido`      | Boolean | Default `false`. `true` = paciente consentiu o tratamento de dados. |
+| `data`           | Date    | Default `null`. Preenchida com `new Date()` quando `concedido: true`. |
+| `versao_termos`  | String  | Default `'1.0'`. Versão dos termos consentidos.                    |
+
+**Índices compostos:**
+- `{ empresa_id: 1, nome: 1 }` — listagem ordenada por nome.
+- `{ empresa_id: 1, num_utente: 1 }` — procura por SNS.
+- `{ empresa_id: 1, ativo: 1, eliminado_em: 1 }` — listagem de pacientes ativos (query mais frequente).
+
+> **Permissões (F2):** o controller `pacienteController` exporta o helper `temAcessoClinico(req)` (true para admin/diretor_clinico/fisioterapeuta) e `sanitizarParaNaoClinico(p)` (remove `historico_medico`, `alergias` e `contacto_emergencia`). Todas as respostas incluem a flag `dados_clinicos: boolean` para o frontend saber se pode mostrar os campos clínicos. As rotas usam um middleware custom `podeVer` (todos os 4 roles) para GET/POST/PUT, `isRececionista` para `PATCH /:id/estado` e `isDiretorClinico` para `DELETE /:id` (soft delete).
+
+### `HorarioFisioterapeuta`
+Limites de agenda de cada fisioterapeuta. **F3** — novo modelo do domínio Fisioterapia, suporta dois tipos de regra:
+
+- `tipo: 'recorrente'` — regra semanal (ex.: segundas 09:00–13:00, terças 14:00–19:00).
+- `tipo: 'excecao'` — dia específico (ex.: "26/12 só manhã" ou "15/12 bloqueado por formação").
+
+> **F3:** O modelo distingue-se do `dias_folga` (legacy em `Utilizador`, folga fixa semanal) por permitir definir janelas de trabalho em vez de apenas dia completo. Para um dia com manhã+tarde criam-se **dois** documentos `recorrente` com o mesmo `dia_semana` (ex.: 09:00–13:00 e 14:00–19:00). A coerência `tipo`/`dia_semana`/`data` é validada em `pre('validate')`. As exceções têm prioridade sobre a regra recorrente quando ambas existem no mesmo dia (ver `obterHorarioDia` em `utils/disponibilidade.js`).
+
+| Campo                | Tipo     | Notas                                                              |
+|----------------------|----------|--------------------------------------------------------------------|
+| `empresa_id`         | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
+| `fisioterapeuta_id`  | ObjectId | `ref: 'Utilizador'`. Obrigatório, indexado. Validado no controller como fisio/diretor_clinico ativo da empresa. |
+| `tipo`               | String   | `enum: ['recorrente','excecao']`, default `'recorrente'`. Indexado. |
+| `dia_semana`         | Number   | `min: 0, max: 6, default null`. 0=Dom…6=Sáb. **Obrigatório se `tipo='recorrente'`**; `null` se `tipo='excecao'` (forçado em `pre('validate')`). |
+| `hora_inicio`        | String   | Default `'09:00'`. Formato `HH:mm` validado por regex `/^([01]\d|2[0-3]):([0-5]\d)$/`. Início da janela de trabalho. |
+| `hora_fim`           | String   | Default `'19:00'`. Formato `HH:mm` (mesma regex). Fim da janela de trabalho. |
+| `data`               | Date     | Default `null`. **Obrigatória se `tipo='excecao'`**; `null` se `tipo='recorrente'` (forçado em `pre('validate')`). |
+| `disponivel`         | Boolean  | Default `true`. Só relevante para `tipo='excecao'`: `true` = horário extra disponível; `false` = bloqueio (formação, feriado, indisponibilidade pontual). |
+| `ativo`              | Boolean  | Default `true`, indexado. Soft toggle: permite desativar uma regra sem a apagar (preserva histórico e facilita reativação). |
+| `nota`               | String   | Default `''`, trim. Nota interna livre (ex.: "Formação em Pilates Clínico"). |
+
+**Validação `pre('validate')`:**
+- Se `tipo='recorrente'` → `dia_semana` obrigatório (0–6); `data` forçada a `null`.
+- Se `tipo='excecao'` → `data` obrigatória; `dia_semana` forçada a `null`.
+
+**Índices compostos:**
+- `{ fisioterapeuta_id: 1, dia_semana: 1, ativo: 1 }` — lookup da regra recorrente de um fisio num dia da semana.
+- `{ empresa_id: 1, fisioterapeuta_id: 1, tipo: 1 }` — listagens por fisioterapeuta filtradas por tipo.
+- `{ fisioterapeuta_id: 1, data: 1 }` — procura de exceções de um fisio num dia específico.
+
+> **Permissões (F3):** as routes (`routes/horarioRoutes.js`) usam um middleware custom `podeVer` (todos os 4 roles) para `GET /`, `GET /:id` e `GET /disponibilidade` — fisioterapeuta vê só os seus horários (filtro aplicado no controller), diretor_clinico/admin/rececionista vêem todos. As mutações (`POST`, `PUT`, `DELETE`) exigem `isDiretorClinico` (admin + diretor_clinico). O controller valida que `fisioterapeuta_id` corresponde a um utilizador com role `fisioterapeuta` ou `diretor_clinico` ativo (não eliminado) da mesma empresa. Auditoria registada em criar/atualizar/eliminar via `utils/auditoria.js` (`recurso: 'horario_fisioterapeuta'`).
+>
+> **Motor de disponibilidade:** este modelo é consultado pelo motor em `utils/disponibilidade.js` (funções `obterHorarioDia`, `verificarConflitoHorario`, `verificarDisponibilidadeCompleta` — ver secção 3.4).
+
+### `Consulta`
+Marcação/sessão de fisioterapia. **F4** — substitui `Tarefa` no domínio Fisioterapia. Cada consulta cruza 3 eixos: `fisioterapeuta_id` (quem atende), `sala_id` (onde — `Propriedade` alias Sala até F8) e `paciente_id` (a quem).
+
+> **F4:** A `Consulta` é o nó central da clínica — a sua criação/atualização dispara a **validação de conflitos** (ver secção 3.5) em simultâneo sobre 4 dimensões: (1) fisioterapeuta disponível (motor F3), (2) sala sem sobreposição, (3) fisioterapeuta sem sobreposição, (4) paciente sem sobreposição. A nota clínica SOAP é um sub-documento embutido e **imutável após conclusão** (RGPD/legal). A cédula do fisioterapeuta assinante é **snapshot**'d em `nota_clinica.cedula_assinante` para auditoria legal. Consultas concluídas **não podem ser eliminadas** (RGPD — preservar SOAP) — apenas canceladas.
+
+| Campo                   | Tipo     | Notas                                                              |
+|-------------------------|----------|--------------------------------------------------------------------|
+| `empresa_id`            | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
+| `sala_id`               | ObjectId | `ref: 'Propriedade'` (alias Sala até F8). Obrigatório, indexado. Validado no controller como `Propriedade` ativa da empresa. |
+| `fisioterapeuta_id`     | ObjectId | `ref: 'Utilizador'`. Obrigatório, indexado. Validado no controller como fisio/diretor_clinico ativo da empresa. |
+| `paciente_id`           | ObjectId | `ref: 'Paciente'`. Obrigatório, indexado. Validado no controller como paciente não eliminado da empresa. |
+| `data_hora_inicio`      | Date     | Obrigatório, indexado. Timestamp exato do início (não meia-noite). Não pode ser no passado (validado no controller). |
+| `data_hora_fim`         | Date     | Obrigatório. Calculado pelo controller como `inicio + duracao_minutos`. |
+| `duracao_minutos`       | Number   | Obrigatório, default `45`, `min: 15`. Duração prevista da sessão. |
+| `tipo`                  | String   | `enum: ['primeira_consulta','sessao','reavaliacao','alta','grupo']`, default `'sessao'`. Indexado. |
+| `estado`                | String   | `enum: ['marcada','confirmada','em_curso','concluida','cancelada','faltou','nao_compareceu']`, default `'marcada'`. Indexado. |
+| `motivo_cancelamento`   | String   | `enum: ['paciente','clinica','fisio','outro']`, default `null`. Preenchido quando `estado='cancelada'`. |
+| `presenca`              | String   | `enum: ['pendente','presente','ausente','atrasado']`, default `'pendente'`. Preenchido pela rececionista no momento. |
+| `nota_clinica`          | Object   | Sub-documento SOAP (ver tabela abaixo). **Imutável após `estado='concluida'`** (RGPD/legal). |
+| `criada_por`            | ObjectId | `ref: 'Utilizador'`. Obrigatório. Quem criou a marcação (auditoria). |
+| `concluida_em`          | Date     | Default `null`. Preenchida quando `estado='concluida'`. |
+| `cancelada_em`          | Date     | Default `null`. Preenchida quando `estado='cancelada'`. |
+| `cancelada_por`         | ObjectId | `ref: 'Utilizador'`, default `null`. Quem cancelou. |
+| `lembrete_24h_enviado`  | Boolean  | Default `false`. Flag para o futuro cron job de lembrete 24h (F7). |
+| `lembrete_2h_enviado`   | Boolean  | Default `false`. Flag para o futuro cron job de lembrete 2h (F7). |
+| `observacoes`           | String   | Default `''`, trim. Notas administrativas (não clínicas) — visíveis à rececionista. |
+
+#### `nota_clinica` (sub-documento SOAP) — F4
+
+> Preenchida pelo fisioterapeuta durante/após a sessão. Endpoint dedicado `PATCH /api/gestor/consultas/:id/nota-clinica` (permissão `isClinico`, separada do PUT geral). Uma vez `estado='concluida'`, torna-se **read-only** (RGPD/legal). O assinante tem de ter cédula profissional válida (`Utilizador.temCedulaValida()`); o nº de cédula é guardado como snapshot em `cedula_assinante` para auditoria legal.
+
+| Campo                   | Tipo     | Notas                                                              |
+|-------------------------|----------|--------------------------------------------------------------------|
+| `subjetivo`             | String   | Default `''`. **S** — queixas do paciente (o que ele relata).      |
+| `objetivo`              | String   | Default `''`. **O** — observações/exame físico (o que o fisio mede/observa). |
+| `avaliacao`             | String   | Default `''`. **A** — diagnóstico clínico / hipótese diagnóstica.  |
+| `plano`                 | String   | Default `''`. **P** — plano terapêutico (exercícios, frequência, etc.). |
+| `tratamento_efetuado`   | String   | Default `''`. O que foi efetivamente feito nesta sessão.           |
+| `protocolo_aplicado`    | [Object] | Default `[]`. Snapshot do `ModeloProtocolo` aplicado (F5 — gerado por `gerarSnapshotProtocolo` no `criarConsulta` quando o body traz `protocolo_id`; atualizado via `PATCH /nota-clinica` para marcar items `concluido`). Cada item: `{ nome: String (obrigatório), items: [{ texto: String, concluido: Boolean }] }`. |
+| `cedula_assinante`      | String   | Default `''`. Snapshot da cédula do fisioterapeuta que assinou a nota (auditoria legal — garante que quem assinou tinha cédula válida no momento). |
+
+**Índices compostos:**
+- `{ empresa_id: 1, fisioterapeuta_id: 1, data_hora_inicio: 1 }` — lookup de consultas de um fisio por data.
+- `{ empresa_id: 1, sala_id: 1, data_hora_inicio: 1 }` — lookup de consultas numa sala por data (validação de conflito de sala).
+- `{ empresa_id: 1, paciente_id: 1, data_hora_inicio: -1 }` — histórico do paciente (ordenado do mais recente para o mais antigo).
+- `{ estado: 1, data_hora_inicio: 1 }` — queries operacionais (ex.: consultas ativas por data).
+
+> **Permissões (F4):** as routes (`routes/consultaRoutes.js`) usam um middleware custom `podeVer` (todos os 4 roles) para `GET /`, `GET /:id` e `GET /validar` — fisioterapeuta vê só as suas consultas (filtro `fisioterapeuta_id = req.user.id` aplicado no controller); os restantes roles vêem todas. As mutações de marcação (`POST`, `PUT`) exigem `isRececionista` (admin + diretor_clinico + rececionista — todos podem marcar). O endpoint dedicado `PATCH /:id/nota-clinica` exige `isClinico` (admin + diretor_clinico + fisioterapeuta) — SOAP. O `DELETE /:id` exige `isDiretorClinico` (admin + diretor_clinico). Auditoria registada em criar/atualizar/atualizar_nota_clinica/eliminar via `utils/auditoria.js` (`recurso: 'consulta'`).
+>
+> **Imutabilidade de concluídas (RGPD):** o `DELETE /:id` bloqueia consultas com `estado='concluida'` (403 — "Não é possível eliminar uma consulta concluída (RGPD — nota clínica é imutável). Cancela em vez de eliminar."). O `PUT /:id` rejeita `nota_clinica` no body (400 — deve ser atualizada via `PATCH /:id/nota-clinica`) e bloqueia edições de `nota_clinica` se a consulta já estiver concluída (403). O `PATCH /:id/nota-clinica` bloqueia consultas concluídas (403) e valida que o assinante tem cédula (`Utilizador.temCedulaValida()`).
+
+### `ModeloProtocolo`
+Template de protocolo clínico reutilizável. **F5** — substitui `ModeloChecklist` no domínio Fisioterapia. Cada protocolo agrupa-se em **secções** (cada uma com nome + lista de items de texto). Quando uma `Consulta` é criada com `protocolo_id`, o controller gera um **snapshot** (cópia imutável com `concluido: false` em cada item) que é guardado em `nota_clinica.protocolo_aplicado` — alterações futuras no template **não** afetam consultas antigas (RGPD/legal).
+
+> **F5:** O `ModeloProtocolo` evolui o `ModeloChecklist` (Prompt 133) com dois campos novos: `area` (área clínica — para filtrar no formulário de marcação) e `ativo` (soft toggle — permite desativar um protocolo sem apagar, preservando os snapshots já guardados em consultas antigas). O helper `gerarSnapshotProtocolo(protocoloId, empresaId)` (em `protocoloController.js`) é invocado por `consultaController.criarConsulta` quando o body traz `protocolo_id`. O `DELETE /:id` é **hard delete** (não há soft delete) — para "desativar" sem perder histórico usa-se `PUT /:id` com `ativo: false`.
+
+| Campo         | Tipo     | Notas                                                              |
+|---------------|----------|--------------------------------------------------------------------|
+| `empresa_id`  | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
+| `nome`        | String   | Obrigatório, trim, indexado. Ex.: "Avaliação Ombro", "Sessão Lombalgia", "Reabilitação Pós-Cirúrgica". |
+| `descricao`   | String   | Default `''`, trim. Descrição opcional do protocolo.               |
+| `area`        | String   | `enum: ['musculoesqueletica','neurologica','cardioresp','desporto','pediatria','outro']`, default `'musculoesqueletica'`. Indexado. Área clínica (para filtrar no formulário de marcação). |
+| `seccoes`     | [Object] | Default `[]`. Array de `{ nome: String (obrigatório, trim), items: [String] (obrigatório, ≥1 item, trim) }`. Ex.: `{ nome: "Avaliação Inicial", items: ["Inspeção","Palpação","Testes ortopédicos"] }`. |
+| `ativo`       | Boolean  | Default `true`, indexado. `false` = desativado (não aparece na seleção ao marcar consulta) mas preserva snapshots já guardados. |
+
+**Índice composto:**
+- `{ empresa_id: 1, ativo: 1, area: 1 }` — listagem de protocolos ativos por empresa + área (query mais frequente no formulário de marcação).
+
+> **Permissões (F5):** as routes (`routes/protocoloRoutes.js`) usam um middleware custom `podeVer` (todos os 4 roles — admin, diretor_clinico, fisioterapeuta, rececionista) para `GET /` e `GET /:id` — o fisioterapeuta precisa de ver os protocolos para os aplicar na consulta; a rececionista precisa de os listar para os selecionar ao marcar. As mutações (`POST`, `PUT`, `DELETE`) exigem `isDiretorClinico` (admin + diretor_clinico — só a direção clínica gere protocolos clínicos). Auditoria registada em criar/atualizar/eliminar via `utils/auditoria.js` (`recurso: 'modelo_protocolo'`).
+>
+> **Helper `gerarSnapshotProtocolo(protocoloId, empresaId)`:** exportado por `protocoloController.js` e invocado por `consultaController.criarConsulta` quando o body traz `protocolo_id`. Procura o protocolo (`_id` + `empresa_id`) e devolve um array de `{ nome, items: [{ texto, concluido: false }] }` (cópia das secções com todos os items marcados como não concluídos). Devolve `null` se o protocolo não existir ou não pertencer à empresa → o `criarConsulta` responde `400` ("Protocolo não encontrado (ou não pertence a esta empresa)."). O snapshot é guardado em `nota_clinica.protocolo_aplicado` e **não é alterado** por edições futuras no template (RGPD/legal — o protocolo aplicado numa sessão tem de refletir o template no momento da marcação).
+
+### `ConsultaArquivo`
+Cópia exata do schema `Consulta` usada para arquivar consultas concluídas/canceladas com mais de 6 meses. **F7** — coleção dedicada `consultas_arquivo` (via `mongoose.model('ConsultaArquivo', consultaArquivoSchema, 'consultas_arquivo')`), separada da coleção principal `consultas` para manter o calendário e as queries operacionais leves. As notas clínicas SOAP são **preservadas indefinitely** para auditoria legal/RGPD (obrigações de retenção de dados clínicos: tipicamente 10–20 anos).
+
+> **F7:** O modelo `ConsultaArquivo` é um **clone do schema `Consulta`** com um campo extra (`arquivado_em`). O movimento de consultas para o arquivo é feito pelo cron job `arquivistaConsultas` (ver secção 3.3) todos os domingos às 03:00 (Europe/Lisbon): procura consultas com `estado` ∈ `{ 'concluida','cancelada','faltou','nao_compareceu' }` e `data_hora_inicio` anterior a 6 meses, cria o documento no arquivo (preserva todos os campos da consulta original, incluindo `nota_clinica` SOAP) e depois apaga o original da coleção `consultas`. As referências (`empresa_id`, `sala_id`, `fisioterapeuta_id`, `paciente_id`, `criada_por`, `cancelada_por`) são mantidas (não há re-populate retroativo — o snapshot do SOAP fica imutável).
+
+| Campo           | Tipo     | Notas                                                              |
+|-----------------|----------|--------------------------------------------------------------------|
+| `arquivado_em`  | Date     | **F7** — default `Date.now`. Data em que a consulta foi movida para o arquivo. |
+| (demais campos) | —        | **Clone exato do schema `Consulta`** — `empresa_id`, `sala_id`, `fisioterapeuta_id`, `paciente_id`, `data_hora_inicio`, `data_hora_fim`, `duracao_minutos`, `tipo`, `estado`, `motivo_cancelamento`, `presenca`, `nota_clinica` (SOAP completo com `protocolo_aplicado[]` + `cedula_assinante`), `criada_por`, `concluida_em`, `cancelada_em`, `cancelada_por`, `lembrete_24h_enviado`, `lembrete_2h_enviado`, `observacoes`. |
+
+**Índices compostos:**
+- `{ empresa_id: 1, fisioterapeuta_id: 1, data_hora_inicio: -1 }` — histórico arquivado por fisio (desc).
+- `{ empresa_id: 1, paciente_id: 1, data_hora_inicio: -1 }` — histórico arquivado do paciente (desc).
+- `{ arquivado_em: 1 }` — lookup por data de arquivo (auditoria).
+
+> **Permissões (F7):** não há endpoints REST dedicados à leitura/escrita direta de `ConsultaArquivo` — o movimento é feito exclusivamente pelo cron job `arquivistaConsultas`. O acesso ao histórico arquivado para auditoria legal/RGPD será exposto numa futura fase (relatórios / portal de auditoria). A imutabilidade da `nota_clinica` herdada do schema `Consulta` é preservada (o documento em arquivo é apenas para leitura histórica).
+
+### `Documento`
+Anexo clínico de um `Paciente` (e opcionalmente de uma `Consulta`). **F9** — suporta receitas, relatórios, termos de consentimento, fotografias, exames e outros. O ficheiro é guardado em storage local (`uploads/`) via `multer` (configuração no `routes/documentoRoutes.js`); o campo `url_storage` guarda um caminho relativo que poderá ser trocado por uma URL S3/Cloudinary sem alterar a API. Soft delete (`eliminado_em`) preserva metadados para auditoria RGPD.
+
+> **F9 — Consentimento RGPD:** o campo `consentimento_obtido` (boolean) regista que o paciente autorizou o tratamento do documento; `data_consentimento` é carimbada automaticamente pelo controller no momento do upload quando `consentimento_obtido === true`. O frontend inclui uma checkbox obrigatória no modal de upload para garantir que o utilizador confirma o consentimento antes de carregar o ficheiro. Não há bloqueio server-side (a checkbox é do frontend), mas o metadado fica registado para auditoria.
+
+| Campo                    | Tipo     | Notas                                                              |
+|--------------------------|----------|--------------------------------------------------------------------|
+| `empresa_id`             | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
+| `paciente_id`            | ObjectId | `ref: 'Paciente'`. Obrigatório, indexado. A quem pertence o documento. Validado no controller como paciente não eliminado da empresa. |
+| `consulta_id`            | ObjectId | `ref: 'Consulta'`, default `null`, indexado. Se anexado a uma sessão específica. Validado no controller quando fornecido. |
+| `uploaded_by`            | ObjectId | `ref: 'Utilizador'`. Obrigatório. Quem carregou o ficheiro (lido de `req.user.id`). |
+| `tipo`                   | String   | `enum: ['receita','relatorio','termo_consentimento','foto','exame','outro']`, default `'outro'`, indexado. Categoria do documento. |
+| `nome_original`          | String   | Obrigatório, trim. Nome original do ficheiro carregado (`req.file.originalname`). |
+| `url_storage`            | String   | Obrigatório. Caminho relativo no storage (`uploads/<timestamp>-<rand>.<ext>`) — futuro S3: URL completa do bucket. |
+| `content_type`           | String   | Default `'application/octet-stream'`. MIME type do ficheiro (`req.file.mimetype`). |
+| `tamanho_bytes`          | Number   | Default `0`, `min: 0`. Tamanho do ficheiro em bytes (`req.file.size`). |
+| `descricao`              | String   | Default `''`, trim. Descrição opcional (metadados clínicos). |
+| `consentimento_obtido`   | Boolean  | Default `false`. RGPD — confirma que o paciente consentiu o tratamento do documento. |
+| `data_consentimento`     | Date     | Default `null`. Carimbada automaticamente pelo controller quando `consentimento_obtido === true` no upload. |
+| `eliminado_em`           | Date     | Default `null`, indexado. Soft delete — preserva metadados para auditoria RGPD. |
+
+**Índices compostos:**
+- `{ empresa_id: 1, paciente_id: 1, eliminado_em: 1 }` — listagem de documentos ativos de um paciente.
+- `{ empresa_id: 1, consulta_id: 1, eliminado_em: 1 }` — listagem de documentos ativos anexados a uma consulta.
+
+> **Permissões (F9):** as routes (`routes/documentoRoutes.js`) usam um middleware custom `podeVer` (todos os 4 roles: `admin`, `diretor_clinico`, `fisioterapeuta`, `rececionista`) para os 4 endpoints de leitura/upload (`GET /`, `GET /:id`, `GET /:id/download`, `POST /upload`) — todos os roles podem ver e carregar documentos. O `DELETE /:id` exige `isDiretorClinico` (admin + diretor_clinico) — só a direção clínica elimina documentos. Auditoria registada em upload/eliminar via `utils/auditoria.js` (`recurso: 'documento'`, `acao: 'upload_documento' | 'eliminar_documento'`).
+>
+> **Validações no upload (F9):** o controller valida `paciente_id` (obrigatório, tem de existir e não estar eliminado na empresa), `consulta_id` (se fornecido, tem de existir na empresa), `tipo` (tem de pertencer ao enum). O `multer` rejeita ficheiros com MIME type fora da lista aceite (`application/pdf`, `image/jpeg`, `image/png`, `image/gif`, `image/webp`, `application/msword`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, `text/plain`) e ficheiros maiores que 20MB. Em caso de falha do controller após o ficheiro já ter sido gravado, o ficheiro é apagado do disco (`fs.unlinkSync`) para evitar órfãos.
+>
+> **Download (F9):** o `GET /:id/download` envia o ficheiro com `res.download(filePath, doc.nome_original)` — o browser recebe o ficheiro com o nome original. Se o ficheiro não existir no storage (foi apagado manualmente do disco), devolve `404` "Ficheiro não encontrado no storage."
+>
+> **Soft delete (F9):** o `DELETE /:id` não apaga o ficheiro do disco nem o documento da coleção — apenas marca `eliminado_em = new Date()`. Os endpoints de leitura/listagem filtram `{ eliminado_em: null }` — o documento desaparece da UI mas os metadados ficam preservados para auditoria RGPD.
 
 ---
 
-## 3.2. Lógica central — Atribuição de tarefas (Webhook Smoobu)
+## 3.2. Lógica central — Atribuição de tarefas — ❌ Removida em F8
 
-Quando o Smoobu notifica uma **nova reserva** (`POST /webhooks/smoobu`), a API executa o seguinte fluxo **estrito**:
-
-1. **Receber o payload** — extrai o ID da propriedade, a data de check-in, o ID da reserva e os **detalhes da reserva** (checkin, checkout, pax, nome_hospede) do payload do Smoobu. **Mapeamento primário (estrutura oficial):** `payload.data.apartment.id`, `payload.data.arrival`, `payload.data.id`; `departure`, `guests`/`guestName` para os detalhes (Prompt 93). Fallbacks com `??` para variantes (`content.*`, campos achatados).
-2. **Encontrar a empresa** — procura a `Propriedade` por `smoobu_id` e obtém o respetivo `empresa_id`. Se não existir → erro (a tarefa não pode ser criada sem saber a empresa).
-3. **Procurar Staff** — lista todos os `Utilizador` com `role: 'staff'`, `ativo: true`, `eliminado_em: null` dessa empresa (v1.45.0: gestores já não recebem tarefas de limpeza).
-4. **Filtro de Ausências + Folgas** — exclui os Staff que tenham uma `Ausencia` **aprovada** que cubra o dia do check-in (`data_inicio <= dia AND data_fim >= dia`) e os Staff cujo dia da semana do check-in esteja no seu `dias_folga` (folgas fixas semanais).
-5. **Algoritmo VIP — Funcionário Preferencial (Prompt 93 / Fase 1.5)** — *antes* do load balancer geral, verifica se a propriedade tem `funcionario_preferencial_id`. Se tiver, e esse funcionário estiver **disponível** (passou os filtros de ausência + folga) e **dentro do SLA de 8h/dia** (`cargaLimpeza + tempoNovaTarefa ≤ CAPACIDADE_MAXIMA_MINUTOS` = 480 min), a tarefa é-lhe atribuída **obrigatoriamente**, ignorando o cálculo de distância/carga dos outros. Só se o preferencial não puder (folga/ausência/inativo ou excede o SLA) é que o sistema faz **fallback** para o load balancer geral.
-6. **Cálculo de Carga + Tempo de Viagem (Load Balancing geral)** — para cada Staff disponível, soma `tempo_limpeza_minutos` das tarefas já atribuídas nesse dia (excluindo `cancelada`/`concluida`) + tempo de viagem (Haversine entre a última tarefa do dia e a nova propriedade) + tempo da nova tarefa. Se a `carga_total > 480 min` (SLA de 8h), o utilizador é excluído (v1.15.0).
-7. **Atribuição** — a nova Tarefa é atribuída ao Staff com **menor `carga_total`** (empate → primeiro encontrado).
-8. **Sem disponíveis** — se não houver Staff disponível (ou a lógica de atribuição falhar), a Tarefa é **mesmo assim criada** com `utilizador_id: null` e `estado: 'por_atribuir'`, para o Admin atribuir manualmente.
-9. **Scheduler sequencial** — se a tarefa for atribuída, calcula a hora exata de início (11:00 por defeito; após a última tarefa do dia + viagem, com proteção de almoço 13h-14h). Guarda os **`detalhes_reserva`** (checkin, checkout, pax, nome_hospede) extraídos do payload (Prompt 93).
-
-> **Reação a ações do Smoobu (v1.19.0):** `newReservation` cria; `updateReservation` atualiza data/propriedade/tempo + `detalhes_reserva` (Prompt 93) e reavalia atribuição se a data mudou; `cancellation` cancela (respeita concluídas). Idempotente por `smoobu_reserva_id`.
-
-### Regra de resposta (anti-timeout)
-> O handler devolve **`200 OK` imediato** (`{ status: 'recebido' }`) **antes** de qualquer acesso à BD. O processamento das regras decorre de forma **assíncrona** (`setImmediate`), porque o Smoobu cancela pedidos demorados. Erros do processamento assíncrono são capturados em `try/catch` e registados (não propagam para o cliente).
-
-### Regra de robustez
-> A criação da Tarefa (passo 8) **nunca** é impedida por falhas na lógica de atribuição (passos 3–7): se algo falhar ao determinar o utilizador, a tarefa é criada com `utilizador_id: null` e o erro é registado. Apenas a falha nos passos 1–2 (payload inválido / propriedade inexistente) impede a criação, por serem pré-requisitos.
+> **F8 — Limpeza:** o motor de atribuição (`utils/loadBalancer.js`), o scheduler sequencial (`utils/scheduler.js`) e toda a lógica de auto-atribuição/reatribuição de `Tarefa` foram **removidos**. Na era Fisioterapia a marcação é manual (via `POST /api/gestor/consultas` pelo `isRececionista`) com validação de conflitos em tempo real (ver secção 3.5) — não há load balancing automático. A aprovação de ausências (`PATCH /api/admin/ausencias/:id/estado`) deixou de redistribuir tarefas (não há `Tarefa` para redistribuir). O histórico do algoritmo VIP (Algoritmo do Funcionário Preferencial — Prompt 93) + Haversine + SLA 8h está preservado no `git log`.
 
 ---
 
 ## 3.3. Cron Jobs (node-cron)
 
-O backend tem três cron jobs diários, todos iniciados no arranque (`server.js`, dentro de `if (require.main === module)` — não correm nos testes):
+O backend tem **5 cron jobs** (todos sobre o modelo `Consulta`, domínio Fisioterapia — implementados em F7), todos iniciados no arranque do `server.js` dentro de `if (require.main === module)` (não correm nos testes). Todos usam `timezone: 'Europe/Lisbon'` (estável em servidores UTC como o Render — acompanha horário de Verão/Inverno de Portugal) e o `require('../utils/notificar')` é feito **lazy** (dentro das funções) para permitir `jest.spyOn` nos testes.
+
+> **F8 — Limpeza:** os 4 cron jobs legacy sobre `Tarefa` (`dailyBriefing`, `agendaAmanha`, `caoGuarda`, `arquivista`) foram **removidos**. As suas contrapartes F7 cobrem todos os casos de uso (briefing, lembretes, cão de guarda, arquivista) sobre o modelo `Consulta`.
+
+### Cron Jobs de Consultas (F7)
 
 | Job | Ficheiro | Agenda (cron) | Timezone | Descrição |
 |-----|----------|---------------|----------|-----------|
-| **Daily Briefing** | `jobs/dailyBriefing.js` | `0 8 * * *` | servidor (configurar `TZ=Europe/Lisbon` no Render) | 08:00 — envia via WhatsApp (mock) + push o plano de limpezas de **hoje** a cada staff. |
-| **Cão de Guarda** (Prompt 96 + 98) | `jobs/caoGuarda.js` | `0 18 * * *` | `Europe/Lisbon` (opção nativa do node-cron) | 18:00 — **Fase A:** auto-atribui (load balancer) as tarefas órfãs de **amanhã** (Fail-Safe); **Fase B:** envia push por cada tarefa de limpeza de **hoje** ainda não concluída. |
-| **Agenda de Amanhã** (Prompt 94) | `jobs/agendaAmanha.js` | `0 19 * * *` | `Europe/Lisbon` (opção nativa do node-cron) | 19:00 — envia push a cada staff com trabalho **amanhã**: `📅 Agenda de Amanhã: Tens X tarefa(s) agendada(s). Entra na app para ver o itinerário`. |
+| **Briefing Diário Fisio** | `jobs/briefingDiarioFisio.js` | `0 8 * * *` | `Europe/Lisbon` | 08:00 — envia push a cada fisioterapeuta com consultas **hoje** (estados `'marcada'`/`'confirmada'`/`'em_curso'`). Mensagem: `📋 Tens X consulta(s) hoje. Entra na app para ver a agenda.` |
+| **Lembrete Consultas Amanhã** | `jobs/lembreteConsultasAmanha.js` | `0 19 * * *` | `Europe/Lisbon` | 19:00 — envia push a cada fisioterapeuta com consultas **amanhã** (estados `'marcada'`/`'confirmada'`, `lembrete_24h_enviado ≠ true`). Mensagem: `📅 Lembrete: tens X consulta(s) amanhã.` Marca `lembrete_24h_enviado=true` em lote. |
+| **Lembrete 2h Consulta** | `jobs/lembrete2hConsulta.js` | `*/15 * * * *` | `Europe/Lisbon` | A cada 15 min — procura consultas que começam dentro da janela +1h45 a +2h15 (estados `'marcada'`/`'confirmada'`, `lembrete_2h_enviado ≠ true`), envia push ao fisio e marca `lembrete_2h_enviado=true`. Mensagem: `Consulta com [Paciente] às [HH:mm] — faltam ~2 horas.` |
+| **Cão de Guarda Consultas** | `jobs/caoGuardaConsultas.js` | `0 2 * * *` | `Europe/Lisbon` | 02:00 — verifica (1) consultas de **hoje** sem fisio ativo (órfãs) e (2) consultas de datas **passadas** não concluídas (esquecidas). Notifica diretores clínicos/admins da empresa. |
+| **Arquivista Consultas** | `jobs/arquivistaConsultas.js` | `0 3 * * 0` | `Europe/Lisbon` | Domingo 03:00 — move consultas concluídas/canceladas/faltou/nao_compareceu com `data_hora_inicio` anterior a 6 meses para a coleção `consultas_arquivo` (preserva `nota_clinica` SOAP para RGPD). |
 
-### Cão de Guarda (`jobs/caoGuarda.js`) — Prompt 96 + Prompt 98
-Executa **duas fases** todos os dias às 18:00 (Europe/Lisbon):
+#### Briefing Diário Fisio (`jobs/briefingDiarioFisio.js`) — F7
+1. Calcula o intervalo de **hoje** (meia-noite UTC).
+2. Procura `Consulta` com `data_hora_inicio` nesse intervalo e `estado` ∈ `{ 'marcada', 'confirmada', 'em_curso' }`, com populate de `fisioterapeuta_id` (nome, ativo, eliminado_em, role).
+3. Agrupa por `fisioterapeuta_id` — só fisios **ativos** e não eliminados, com `role` ∈ `{ 'fisioterapeuta', 'diretor_clinico' }`.
+4. Para cada fisio, chama `notificarUtilizador(fisioId, '📅 Briefing Diário', '📋 Tens X consulta(s) hoje. Entra na app para ver a agenda.', '/staff', { criarInApp: true, tipo: 'sistema' })` (fire-and-forget; skip silencioso se não houver `pushSubscription` ou Web Push não configurado).
+5. Devolve `{ processados, notificados, consultas }` (estatísticas para testes/logs).
 
-**FASE A — Auto-Atribuição de Emergência (Fail-Safe, Prompt 98):** corre **antes** dos alertas.
-1. Calcula o intervalo do dia **seguinte** (meia-noite UTC).
-2. Procura todas as `Tarefa` com `data` nesse intervalo, `estado: 'por_atribuir'` e `utilizador_id: null` (órfãs), com populate de `propriedade_id` (nome + coordenadas).
-3. Para cada tarefa órfã, invoca `determinarUtilizadorAtribuido` (load balancer: Algoritmo VIP + Haversine + SLA 8h) — o mesmo usado no webhook e na auto-atribuição manual.
-4. Se encontrar staff: recalcula a hora de início via scheduler sequencial (Haversine + almoço 13h-14h), atualiza a tarefa (`utilizador_id`, `estado: 'atribuida'`, nova `data`) e envia push `🧹 Nova Limpeza Atribuída` (fire-and-forget).
-5. Se não houver staff disponível: mantém `por_atribuir` (órfã).
-6. Devolve `{ encontradas, atribuidas, orfas }`.
+#### Lembrete Consultas Amanhã (`jobs/lembreteConsultasAmanha.js`) — F7
+1. Calcula o intervalo de **amanhã** (meia-noite UTC).
+2. Procura `Consulta` com `data_hora_inicio` nesse intervalo, `estado` ∈ `{ 'marcada', 'confirmada' }` e `lembrete_24h_enviado: { $ne: true }` (não notificadas), com populate de `fisioterapeuta_id`.
+3. Agrupa por fisio (mesmo filtro: ativo, não eliminado, `role` fisio/diretor_clinico).
+4. Para cada fisio, envia push `📅 Agenda de Amanhã` com mensagem `📅 Lembrete: tens X consulta(s) amanhã.`
+5. Atualiza as consultas em lote via `Consulta.updateMany({ _id: { $in: [...] } }, { $set: { lembrete_24h_enviado: true } })` — evita reenviar no dia seguinte caso o job volte a correr.
+6. Devolve `{ processados, notificados, consultas }`.
 
-> **Objetivo (Prompt 98):** garantir que o dia seguinte está sempre coberto **antes** do relógio das 19:00 (Agenda de Amanhã) correr. Assim, quando os funcionários recebem a notificação das 19:00, as escalas já estão 100% preenchidas. Complementa o Prompt 97 (desligar a histeria automática): as tarefas desatribuídas por ausências/falta súbita/baixa/desativação de propriedade são reatribuídas aqui de forma centralizada e controlada.
+> **Marcação de lembrete:** o `lembrete_24h_enviado=true` é o mecanismo de idempotência — uma consulta só recebe o lembrete 24h **uma vez**. Se o job falhar a meio, na execução seguinte só as consultas por notificar são processadas (a query filtra `lembrete_24h_enviado: { $ne: true }`).
 
-**FASE B — Alertas de Tarefas Incompletas (Prompt 96):** os alertas.
-1. Calcula o intervalo do dia **atual** (meia-noite UTC).
-2. Procura todas as `Tarefa` com `data` nesse intervalo, `tipo: 'limpeza'`, `utilizador_id` ≠ null e `estado` ∈ `{ atribuida, em_curso }` (atribuídas mas não concluídas), com populate de `propriedade_id` (nome) e `utilizador_id` (ativo, eliminado_em).
-3. Para cada tarefa "esquecida", chama `notificarUtilizador(staffId, '⚠️ Tarefa Incompleta', 'Ainda não marcaste a limpeza da [nome da propriedade] como concluída. Por favor, atualiza a app!', '/staff')` (fire-and-forget; skip silencioso se não houver `pushSubscription` ou Web Push não configurado).
-4. Ignora tarefas cujo staff foi entretanto desativado/eliminado.
-5. Devolve `{ encontradas, notificadas }`.
+#### Lembrete 2h Consulta (`jobs/lembrete2hConsulta.js`) — F7
+1. Calcula a janela temporal: `inicioJanela = agora + 1h45` (105 min) e `fimJanela = agora + 2h15` (135 min). A janela é deliberadamente mais larga do que os 15 min de cadência do cron para garantir que **nenhuma consulta escap** caso o job corra alguns minutos tarde.
+2. Procura `Consulta` com `data_hora_inicio` ∈ `[inicioJanela, fimJanela[`, `estado` ∈ `{ 'marcada', 'confirmada' }` e `lembrete_2h_enviado: { $ne: true }`, com populate de `fisioterapeuta_id` (nome, ativo, eliminado_em, role) e `paciente_id` (nome).
+3. Para cada fisio elegível (ativo, não eliminado, fisio/diretor_clinico), envia push `⏰ Consulta em 2 horas` com mensagem `Consulta com [nome do paciente] às [HH:mm] — faltam ~2 horas.` (a hora é formatada via `toLocaleTimeString('pt-PT', { hour: '2-digit', minute: '2-digit' })`).
+4. Atualiza em lote `lembrete_2h_enviado=true` nas consultas notificadas.
+5. Devolve `{ notificados, consultas }`.
 
-> **Nota sobre estados:** o modelo `Tarefa` tem os estados `['por_atribuir','atribuida','em_curso','concluida','cancelada']`. Não existe `'pendente'` — o equivalente (atribuída mas ainda não iniciada) é `'atribuida'`. O prompt pede 'pendente' ou 'em_curso', pelo que o job usa `{ atribuida, em_curso }` (= atribuídas + não concluídas).
->
-> **Uma push por tarefa (Fase B):** ao contrário do `Agenda de Amanhã` (que agrupa por staff), os alertas do Cão de Guarda enviam **uma push por tarefa esquecida** (a mensagem inclui o nome da propriedade, pelo que cada push é específica). Se um staff tiver 3 limpezas por concluir, recebe 3 pushes.
+> **Cadência de 15 min + janela 1h45–2h15:** o cron `*/15 * * * *` corre 4× por hora (às :00, :15, :30, :45). A janela de 30 min (de 1h45 a 2h15) garante sobreposição entre execuções consecutivas: cada consulta é apanhada por pelo menos uma execução, mesmo que o job seja lançado alguns minutos tarde. O `lembrete_2h_enviado=true` impede duplicação.
 
-### Agenda de Amanhã (`jobs/agendaAmanha.js`) — Prompt 94
-1. Calcula o intervalo do dia **seguinte** (meia-noite UTC).
-2. Procura todas as `Tarefa` com `data` nesse intervalo e `estado` ∈ `{ atribuida, por_atribuir }`, com populate de `utilizador_id` (nome, ativo, eliminado_em).
-3. Agrupa por `utilizador_id` — só interessam as atribuídas a staff **ativos** e não eliminados. Tarefas `por_atribuir` (sem utilizador) não têm destinatário → não geram push.
-4. Para cada staff, chama `notificarUtilizador(staffId, '📅 Agenda de Amanhã', 'Tens X tarefa(s) agendada(s). Entra na app para ver o itinerário', '/staff')` (fire-and-forget; skip silencioso se não houver `pushSubscription` ou Web Push não configurado).
-5. Devolve `{ processados, notificados, tarefas }` (estatísticas para testes/logs).
+#### Cão de Guarda Consultas (`jobs/caoGuardaConsultas.js`) — F7
+Executa **duas verificações** todos os dias às 02:00 (Europe/Lisbon):
 
-> **Timezone:** o `Cão de Guarda` e o `Agenda de Amanhã` usam a opção `timezone: 'Europe/Lisbon'` do node-cron, pelo que os horários são estáveis mesmo que o servidor esteja em UTC (caso do Render) — acompanham automaticamente as mudanças legais de horário de Verão/Inverno de Portugal. O `Daily Briefing` usa o fuso do servidor (definir `TZ=Europe/Lisbon` no ambiente para alinhar).
+1. **Consultas órfãs (de hoje)** — procura `Consulta` com `data_hora_inicio` no intervalo de hoje, `estado` ∈ `{ 'marcada', 'confirmada', 'em_curso' }`, com populate de `fisioterapeuta_id` e `paciente_id`. Filtra as que têm fisio inativo/eliminado/inexistente (`!f || f.eliminado_em || !f.ativo`).
+2. **Consultas esquecidas (datas passadas)** — procura `Consulta` com `data_hora_inicio < inicioHoje` (qualquer dia anterior) e `estado` ∈ `{ 'marcada', 'confirmada', 'em_curso' }` (ainda por concluir/cancelar).
+3. Agrupa os alertas por `empresa_id` (conta órfãs e esquecidas por empresa).
+4. Para cada empresa, procura os `diretor_clinico`/`admin` ativos não eliminados e envia push `🐕 Cão de Guarda — Alerta` com mensagem `🐕 Alerta: X consulta(s) órfã(s), Y consulta(s) esquecida(s). Verifica o painel.` (rota `/gestor/consultas`, `tipo: 'aviso'`).
+5. Devolve `{ orfas, esquecidas, alertas }`.
+
+> **Destinatários:** ao contrário do `briefingDiarioFisio`/`lembreteConsultasAmanha` (que notificam os fisioterapeutas), o Cão de Guarda Consultas notifica apenas os **diretores clínicos e admins** da empresa — são eles que têm de intervir (reatribuir a consulta órfã ou concluir/cancelar a esquecida).
+
+#### Arquivista Consultas (`jobs/arquivistaConsultas.js`) — F7
+1. Calcula a data limite (6 meses atrás a partir de `agora`).
+2. Procura `Consulta` com `estado` ∈ `{ 'concluida', 'cancelada', 'faltou', 'nao_compareceu' }` e `data_hora_inicio < limite` (`.lean()` para evitar validações Mongoose).
+3. Para cada consulta, cria um documento em `ConsultaArquivo` com **todos os campos** da consulta original (removendo `_id`, `__v`, `createdAt`, `updatedAt`) + `arquivado_em: new Date()`. Em caso de erro individual, regista no log e incrementa o contador de erros (não interrompe o resto do lote).
+4. Apaga as consultas originais via `Consulta.deleteMany({ _id: { $in: idsParaApagar } })` (só as que foram copiadas com sucesso para o arquivo).
+5. Devolve `{ arquivadas, erros }`.
+
+> **Preservação de SOAP (RGPD):** o `arquivistaConsultas` move fisicamente o documento da coleção `consultas` para `consultas_arquivo`, preservando integralmente a `nota_clinica` SOAP (incluindo `protocolo_aplicado[]` e `cedula_assinante`). Isto mantém a coleção principal leve (calendário + queries operacionais rápidas) mas garante a retenção legal de dados clínicos por 10–20 anos. O acesso ao histórico arquivado será exposto numa futura fase (relatórios / portal de auditoria).
+
+> **Padrão de robustez:** o `arquivistaConsultas` só apaga os originais **depois** de os ter copiado com sucesso para `consultas_arquivo`. Se o processo Mongo falhar a meio do lote, as consultas já copiadas são apagadas, mas as que falharam ficam na coleção principal — serão reprocessadas na execução seguinte (domingo seguinte às 03:00).
+
+---
+
+## 3.4. Motor de Disponibilidade — F3
+
+O utilitário `utils/disponibilidade.js` implementa o motor de disponibilidade que valida se um fisioterapeuta pode receber uma consulta numa dada data/hora. É consultado por `horarioController.verificarDisponibilidade` (endpoint `GET /api/gestor/horarios/disponibilidade`) e será reutilizado em F4 pela marcação de `Consulta`.
+
+### 3 camadas (verificadas por ordem de prioridade)
+
+A função `verificarDisponibilidadeCompleta(utilizador, dataHoraInicio, duracaoMinutos)` percorre as 3 camadas por ordem e **falha cedo** (devolve `{ ok: false, motivo }` assim que uma camada bloqueia):
+
+1. **Ausência aprovada** — `verificarDisponibilidadeUtilizador(utilizador_id, data)` consulta `Ausencia` com `estado: 'aprovada'` que cubra o dia (intervalo `[data_inicio, data_fim]` em data de calendário de Lisboa). A janela de pesquisa é alargada ±1 dia para tolerar diferenças de fuso (UTC midnight vs local midnight); a comparação final é feita em JS pela data de Lisboa (`dataLisboa(instante)` via `Intl.DateTimeFormat` com `timeZone: 'Europe/Lisbon'`). Se houver ausência → indisponível, com mensagem humanizada ("Férias de YYYY-MM-DD a YYYY-MM-DD." via `mensagemIndisponivel`).
+2. **Folga fixa semanal** — verifica `utilizador.dias_folga` (array de 0–6, legado do `Utilizador`). Se o dia da semana (calculado em Lisboa) estiver no array → indisponível ("Folga fixa semanal (Terça)."). Esta camada mantém-se por retrocompatibilidade — a médio prazo será substituída por regras `HorarioFisioterapeuta` recorrentes.
+3. **Horário de trabalho** — `verificarConflitoHorario(fisioterapeuta_id, dataHoraInicio, duracaoMinutos)` chama `obterHorarioDia` para descobrir a janela de trabalho do dia (ver abaixo) e depois valida se a consulta proposta (`dataHoraInicio` + `duracaoMinutos`) cabe dentro do bloco `[hora_inicio, hora_fim]` (comparações via `compararHoras(a, b)` que converte `HH:mm` para minutos). Se a consulta começar antes de `hora_inicio` ou acabar depois de `hora_fim` → conflito.
+
+> **Nota F3:** a 4.ª camada (conflito com **consultas já marcadas**) será adicionada em F4 quando o modelo `Consulta` existir. Atualmente a verificação só cobre "o fisioterapeuta trabalha neste dia e a esta hora?" — não valida sobreposição com outras consultas.
+
+### `obterHorarioDia(fisioterapeutaId, data)` — 3 sub-camadas por prioridade
+
+A função `obterHorarioDia` consulta o modelo `HorarioFisioterapeuta` para um dia específico e devolve `{ disponivel, horario: { hora_inicio, hora_fim } | null, origem: 'excecao' | 'recorrente' | null, motivo? }`:
+
+1. **Exceções do dia** (`tipo='excecao'` com `data` = dia, `ativo: true`):
+   - Se houver uma exceção com `disponivel: false` (bloqueio) → `{ disponivel: false, origem: 'excecao', motivo: nota || 'Indisponível neste dia (exceção).' }`.
+   - Se houver exceção com `disponivel: true` (horário extra) → usa essas horas (`origem: 'excecao'`). Primeira encontrada vence.
+2. **Regra recorrente** (`tipo='recorrente'` com `dia_semana` = dia da semana em Lisboa, `ativo: true`):
+   - Devolve as horas da regra (`origem: 'recorrente'`).
+3. **Sem regra** → `{ disponivel: false, origem: null, motivo: 'Sem horário definido para este dia.' }` (o fisioterapeuta não trabalha nesse dia).
+
+### Helpers de fuso e horas
+
+- `dataLisboa(instante)` — devolve `"YYYY-MM-DD"` no fuso de Lisboa (via `Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Lisbon' })`). Robusto a horário de Verão/Inverno.
+- `horaLisboa(instante)` — devolve `"HH:mm"` no fuso de Lisboa (via `Intl.DateTimeFormat('pt-PT', { timeZone: 'Europe/Lisbon', hour12: false })`).
+- `compararHoras(a, b)` — compara duas strings `"HH:mm"` (devolve `-1/0/1`); converte para minutos totais.
+
+> **Robustez de fuso (herdada do Prompt 113):** todas as comparações de data usam a **data de calendário de Lisboa** (não o instante UTC midnight). Isto garante que uma tarefa/consulta criada às 00:00 local (23:00Z do dia anterior em UTC) conta como "mesmo dia" para efeitos de ausências/horários — mesmo quando o `Ausencia.data_inicio` está armazenado em UTC midnight.
+
+---
+
+## 3.5. Validação de Conflitos — F4
+
+O controller `controllers/consultaController.js` expõe a função interna `validarConflitos({ empresaId, fisioterapeutaId, salaId, pacienteId, dataHoraInicio, duracaoMinutos, excluirConsultaId })` que valida **em simultâneo** 4 dimensões antes de criar/atualizar uma `Consulta`. Devolve `{ ok: boolean, warnings: string[], horario?: { hora_inicio, hora_fim } }`:
+
+1. **Fisioterapeuta disponível** (motor F3) — procura o utilizador (`fisioterapeuta`/`diretor_clinico`, `ativo: true`, `eliminado_em: null`, da empresa) e invoca `verificarDisponibilidadeCompleta(fisio, inicio, duracaoMinutos)` (ver secção 3.4). Se o fisio não existir ou estiver inativo clinicamente (`perfil_profissional.ativo_clinico === false`) → warning. Se a disponibilidade falhar → warning com o `motivo` devolvido pelo motor (ausência/folga/horário). Em caso de sucesso, `horario` é preenchido com a janela de trabalho do dia.
+2. **Sala sem sobreposição** — procura outra `Consulta` ativa (`estado: { $nin: ['cancelada','faltou','nao_compareceu'] }`) com `sala_id` igual e sobreposição de intervalos (`inicio < data_hora_fim_existente AND fim > data_hora_inicio_existente`). Se houver, gera um warning com o nome do paciente e fisio conflitantes + janela temporal.
+3. **Fisioterapeuta sem sobreposição** — mesmo filtro, com `fisioterapeuta_id` igual. Warning com o nome do paciente e sala.
+4. **Paciente sem sobreposição** — mesmo filtro, com `paciente_id` igual. O paciente não pode ter 2 consultas em paralelo. Warning com o nome do fisio e sala.
+
+> **Parâmetro `excluirConsultaId`:** passado pelo `PUT /:id` (atualização) para excluir a própria consulta da verificação — caso contrário, atualizar a duração de uma consulta geraria sempre um "conflito" consigo mesma.
+
+### Soft block (padrão de conflitos)
+
+O comportamento do controller em `criarConsulta` e `atualizarConsulta` segue o padrão **soft block**:
+
+- **Sem `forcar: true`** e há conflitos → **`409 Conflict`** com `{ erro, conflitos: string[] }`. A marcação é recusada; o frontend mostra os warnings e pode optar por forçar.
+- **Com `forcar: true`** e há conflitos → a marcação é criada/atualizada com sucesso, devolvendo **`200 OK`** (não 201) com `{ consulta, warning: 'Consulta criada/atualizada com conflitos (forçado).', conflitos: string[] }`. O gestor pode forçar marcações em situações excecionais (ex.: 2 pacientes em grupo na mesma sala, sobreposição curta por atraso de um fisio).
+- **Sem conflitos** → `201 Created` (POST) ou `200 OK` (PUT) com `{ consulta }`.
+
+> **Auditoria:** em ambos os casos (forçado ou não), o `criarConsulta`/`atualizarConsulta` regista a ação em `utils/auditoria.js` (`acao: 'criar'`/`'atualizar'`, `recurso: 'consulta'`). O campo `detalhes.conflitos_forcados: true` sinaliza as marcações forçadas — útil para auditoria posterior.
+
+### Validação em tempo real (frontend)
+
+O endpoint `GET /api/gestor/consultas/validar` (função `validarConflitosEndpoint`) expõe a mesma função `validarConflitos` sem criar a consulta — usado pelo frontend para mostrar warnings em tempo real no modal de criar/editar (debounce 400ms antes de submeter).
 
 ---
 
@@ -272,38 +609,9 @@ Rota de verificação de estado (healthcheck).
 **Resposta (200 OK):**
 ```json
 {
-  "status": "API do Alojamento Local online e ligada à BD!"
+  "status": "API do FisioCell online e ligada à BD!"
 }
 ```
-
-### `POST /webhooks/smoobu`
-Recebe o webhook do Smoobu (nova reserva) e cria a respetiva Tarefa de limpeza, aplicando a lógica de atribuição descrita na secção 3.2.
-
-- **Resposta imediata (200 OK):** `{ "status": "recebido" }` — o processamento decorre em segundo plano.
-- **Payload esperado (estrutura OFICIAL do Smoobu — `data` + sub-objeto `apartment`):**
-
-  | Campo lido (prioritário) | Fallbacks | Uso |
-  |---|---|---|
-  | `payload.data.apartment.id` | `data.apartmentId` / `data.apartment_id` / `data.propertyId` / `data.property_id` / `content.apartmentId` / `content.property_id` / `content.propriedade_id` | Identifica a propriedade no Smoobu |
-  | `payload.data.arrival` | `data.check_in` / `data.checkIn` / `data.data_check_in` / `data.startDate` / `content.arrival` / `content.startDate` | Data de check-in (dia da tarefa) |
-  | `payload.data.id` | `data.reservationId` / `data.reservation_id` / `content.id` / `content.reservation_id` | ID da reserva (auditoria) |
-  | — | `content.tempo_limpeza_minutos` / `content.cleaning_minutes` | (Opcional) sobrepõe-se ao default da propriedade |
-
-- **Exemplo de payload Smoobu (estrutura oficial documentada):**
-```json
-{
-  "action": "newReservation",
-  "data": {
-    "id": 292,
-    "arrival": "2024-07-15",
-    "apartment": {
-      "id": 38,
-      "name": "Apartment 1"
-    }
-  }
-}
-```
-- **Resultado (assíncrono):** é criado um documento `Tarefa` com `utilizador_id` preenchido (Staff com menor carga) ou `null` (sem disponíveis / erro). O resultado é registado nos logs do servidor.
 
 ### 6.1. Painel de Administração (`/api/admin`)
 
@@ -320,7 +628,7 @@ Devolve as propriedades da empresa (ordenadas por `nome`).
 ```json
 {
   "propriedades": [
-    { "_id": "...", "smoobu_id": "99999", "nome": "Casa Teste", "empresa_id": "...", "tempo_limpeza_minutos": 60, "ativo": true, "createdAt": "...", "updatedAt": "..." }
+    { "_id": "...", "nome": "Casa Teste", "empresa_id": "...", "tempo_limpeza_minutos": 60, "ativo": true, "createdAt": "...", "updatedAt": "..." }
   ]
 }
 ```
@@ -333,16 +641,14 @@ Cria uma propriedade para a empresa.
 - **Body:**
 ```json
 {
-  "smoobu_id": "99999",
   "nome": "Casa Teste",
   "tempo_limpeza_minutos": 60
 }
 ```
-  - `smoobu_id` (obrigatório, único global) — ID do apartment no Smoobu.
   - `nome` (obrigatório).
   - `tempo_limpeza_minutos` (opcional, default `60`, tem de ser `>= 0`).
 - **Resposta (201 Created):** `{ "propriedade": { ... } }`
-- **Erros:** `400` campos em falta / `tempo_limpeza_minutos` inválido; `401` não autenticado; `409` se `smoobu_id` já existir; `500` erro interno.
+- **Erros:** `400` campos em falta / `tempo_limpeza_minutos` inválido; `401` não autenticado; `500` erro interno.
 
 #### `GET /api/admin/equipa`
 Lista todos os utilizadores da empresa (qualquer role), ordenados por `nome`.
@@ -352,7 +658,7 @@ Lista todos os utilizadores da empresa (qualquer role), ordenados por `nome`.
 ```json
 {
   "utilizadores": [
-    { "_id": "...", "nome": "João Limpezas", "email": "joao.limpezas@autocell.pt", "empresa_id": "...", "role": "staff", "ativo": true, "createdAt": "...", "updatedAt": "..." }
+    { "_id": "...", "nome": "João Fisioterapeuta", "email": "joao.fisio@fisiocell.pt", "empresa_id": "...", "role": "fisioterapeuta", "ativo": true, "createdAt": "...", "updatedAt": "..." }
   ]
 }
 ```
@@ -367,15 +673,15 @@ Cria um novo membro de equipa (Utilizador) para a empresa.
 ```json
 {
   "nome": "Maria Ferreira",
-  "email": "maria.ferreira@autocell.pt",
+  "email": "maria.ferreira@fisiocell.pt",
   "password": "segredo123",
-  "role": "staff"
+  "role": "fisioterapeuta"
 }
 ```
   - `nome` (obrigatório).
   - `email` (obrigatório, único global, normalizado para lowercase).
   - `password` (obrigatória, mín. 6 caracteres — guardada como hash bcrypt, nunca em claro).
-  - `role` (opcional, default `'staff'`; enum `['admin','manager','staff']`).
+  - `role` (opcional, default `'rececionista'` no modelo; o controller `/api/admin/equipa` usa `'fisioterapeuta'` quando omitido; enum `['admin','diretor_clinico','fisioterapeuta','rececionista']`).
 - **Resposta (201 Created):** `{ "utilizador": { ... } }` (sem `password_hash`).
 - **Erros:** `400` campos em falta / password < 6 / role inválido; `401` não autenticado; `409` email duplicado; `500` erro interno.
 
@@ -385,7 +691,7 @@ Atualiza Nome, Email e/ou Role de um utilizador, e opcionalmente a password.
 - **Auth:** JWT (strito, sem fallback legacy). **Protegido.**
 - **Body (todos opcionais, mas pelo menos um):**
 ```json
-{ "nome": "Maria Ferreira", "email": "maria@x.pt", "role": "manager", "password": "novapass123" }
+{ "nome": "Maria Ferreira", "email": "maria@x.pt", "role": "diretor_clinico", "password": "novapass123" }
 ```
   - `password`: se vier, é guardada como **nova hash bcrypt** (mín. 6 chars). Se não vier, a atual é mantida.
 - **Regras de segurança:**
@@ -417,30 +723,32 @@ Remove permanentemente o utilizador da base de dados.
 #### `GET /api/admin/setup`  *(PÚBLICO — sem auth)*
 **Bootstrap do “Cliente Zero”** — cria dados iniciais para testes (idempotente):
 
-- 1 **Empresa** «O Meu Alojamento Local» (procura por `nome`).
+- 1 **Empresa** «Clínica FisioCell Teste» (procura por `nome`).
 - 3 **Utilizadores** (procura por `email` único), cada um com `password_hash` bcrypt:
-  - `admin@autocell.pt` (admin — dono da conta)
-  - `manager@autocell.pt` (manager — responsável de limpezas)
-  - `joao.limpezas@autocell.pt` (staff — executante de limpezas)
-- 1 **Propriedade** «Casa Teste» (`smoobu_id: '99999'`).
+  - `admin@fisiocell.pt` (admin — Super Admin da plataforma)
+  - `gestor@fisiocell.pt` (diretor_clinico — acesso total à clínica)
+  - `joao.fisio@fisiocell.pt` (fisioterapeuta — vê só os seus pacientes/consultas)
+- 1 **Propriedade** «Casa Teste».
+
+> **F1:** O `setupClienteZero` foi atualizado para os novos roles (`admin`/`diretor_clinico`/`fisioterapeuta`). O email `gestor@fisiocell.pt` é mantido por compatibilidade (a string do email não muda; só a role).
 
 - **Resposta (200 OK):**
 ```json
 {
   "mensagem": "Cliente Zero criado com sucesso.",
   "empresa_id": "<ObjectId>",
-  "empresa":  { "id": "...", "nome": "O Meu Alojamento Local", "plano_ativo": true, "criada": true },
+  "empresa":  { "id": "...", "nome": "Clínica FisioCell Teste", "plano_ativo": true, "criada": true },
   "utilizadores": [
-    { "id": "...", "nome": "Gestor Autocell", "email": "admin@autocell.pt", "role": "admin", "criado": true, "password_definida": true, "credenciais_teste": { "email": "admin@autocell.pt", "password": "autocell123" } },
-    { "id": "...", "nome": "Responsável Limpezas", "email": "manager@autocell.pt", "role": "manager", "criado": true, "password_definida": true, "credenciais_teste": { "email": "manager@autocell.pt", "password": "autocell123" } },
-    { "id": "...", "nome": "João Limpezas", "email": "joao.limpezas@autocell.pt", "role": "staff", "criado": true, "password_definida": true, "credenciais_teste": { "email": "joao.limpezas@autocell.pt", "password": "autocell123" } }
+    { "id": "...", "nome": "Diretor FisioCell", "email": "admin@fisiocell.pt", "role": "admin", "criado": true, "password_definida": true, "credenciais_teste": { "email": "admin@fisiocell.pt", "password": "fisiocell123" } },
+    { "id": "...", "nome": "Responsável Clínico", "email": "gestor@fisiocell.pt", "role": "diretor_clinico", "criado": true, "password_definida": true, "credenciais_teste": { "email": "gestor@fisiocell.pt", "password": "fisiocell123" } },
+    { "id": "...", "nome": "João Fisioterapeuta", "email": "joao.fisio@fisiocell.pt", "role": "fisioterapeuta", "criado": true, "password_definida": true, "credenciais_teste": { "email": "joao.fisio@fisiocell.pt", "password": "fisiocell123" } }
   ],
-  "propriedade": { "id": "...", "nome": "Casa Teste", "smoobu_id": "99999", "criada": true }
+  "propriedade": { "id": "...", "nome": "Casa Teste", "criada": true }
 }
 ```
 - Se já existir tudo, devolve `mensagem: "Cliente Zero já existia (nada foi alterado)."` com `criada/criado: false`.
 - **Retrocompatibilidade:** se um utilizador já existir sem `password_hash` (criado antes do auth), o setup define-lhe a password e garante o role correto.
-- **Credenciais de teste (3 contas):** `admin@autocell.pt`, `manager@autocell.pt`, `joao.limpezas@autocell.pt` — todas com password `autocell123` (remover em produção).
+- **Credenciais de teste (3 contas):** `admin@fisiocell.pt` (admin), `gestor@fisiocell.pt` (diretor_clinico), `joao.fisio@fisiocell.pt` (fisioterapeuta) — todas com password `fisiocell123` (remover em produção).
 
 ### 6.2. Autenticação (`/api/auth`)
 
@@ -449,7 +757,7 @@ Login com email + password. Valida a hash bcrypt e devolve um JWT.
 
 - **Body:**
 ```json
-{ "email": "joao.limpezas@autocell.pt", "password": "autocell123" }
+{ "email": "joao.fisio@fisiocell.pt", "password": "fisiocell123" }
 ```
 - **Resposta (200 OK):**
 ```json
@@ -457,9 +765,9 @@ Login com email + password. Valida a hash bcrypt e devolve um JWT.
   "token": "<jwt>",
   "utilizador": {
     "id": "...",
-    "nome": "João Limpezas",
-    "email": "joao.limpezas@autocell.pt",
-    "role": "staff",
+    "nome": "João Fisioterapeuta",
+    "email": "joao.fisio@fisiocell.pt",
+    "role": "fisioterapeuta",
     "empresa_id": "..."
   }
 }
@@ -490,7 +798,7 @@ Lista as ausências da empresa, com o utilizador populado.
     {
       "_id": "...",
       "utilizador_id": "...",
-      "utilizador": { "_id": "...", "nome": "João Limpezas", "email": "...", "role": "staff" },
+      "utilizador": { "_id": "...", "nome": "João Fisioterapeuta", "email": "...", "role": "fisioterapeuta" },
       "empresa_id": "...",
       "data_inicio": "2024-07-15T00:00:00.000Z",
       "data_fim": "2024-07-20T00:00:00.000Z",
@@ -514,12 +822,12 @@ Regista uma nova ausência (folga ou férias).
   "notas": "férias pagas"
 }
 ```
-  - `utilizador_id` (obrigatório) — tem de ser staff/manager da empresa (não admin).
+  - `utilizador_id` (obrigatório) — tem de ser fisioterapeuta/diretor_clinico da empresa (não admin).
   - `data_inicio` / `data_fim` (obrigatórias) — `data_fim >= data_inicio`.
   - `tipo` (opcional, default `'folga'`) — `enum: ['ferias','folga']`.
   - `notas` (opcional).
 - **Validações:**
-  - Utilizador existe e pertence à empresa com role staff/manager.
+  - Utilizador existe e pertence à empresa com role fisioterapeuta/diretor_clinico.
   - **Sem sobreposição** com outra ausência do mesmo utilizador (409 se houver).
 - **Resposta (201 Created):** `{ "ausencia": { ... } }` (com utilizador populado).
 - **Erros:** `400` campos em falta / datas inválidas / utilizador não encontrado; `409` sobreposição; `500` erro.
@@ -531,17 +839,19 @@ Elimina uma ausência.
 - **Resposta (200 OK):** `{ "mensagem": "Ausência eliminada com sucesso.", "ausencia_id": "..." }`.
 - **Erros:** `400` ID inválido; `404` não encontrada; `500` erro.
 
-> **Integração com o webhook:** as ausências registadas aqui são consultadas automaticamente pelo `webhookController` (passo 4 do fluxo de atribuição) para excluir staff indisponível da atribuição automática de tarefas.
+> **Integração com o motor de disponibilidade (F3):** as ausências registadas aqui são consultadas automaticamente por `utils/disponibilidade.js` (`verificarDisponibilidadeCompleta` — passo 1: ausência aprovada) para bloquear novas marcações de `Consulta` durante o período da ausência. **F8:** o load balancer legacy foi removido, pelo que a aprovação de uma ausência já não desencadeia redistribuição de tarefas.
 
 ---
 
 ### 6.4. Relatórios / Analytics (`/api/admin/relatorios`)
 
-*Protegido por JWT (middleware `auth`).*
+*Protegido por JWT (middleware `auth`).* 
+
+> **F8 — Reescrito sobre `Consulta`:** o `relatorioController.getRelatorioProdutividade` deixou de consultar `Tarefa` e passou a usar `Consulta`. Os campos da resposta foram renomeados: `totalTarefas` → `totalConsultas`, `porStaff` → `porFisio`, `porPropriedade` → `porSala`. O `construirContexto` aceita tanto os nomes novos como os antigos (retrocompatibilidade com payloads do frontend legacy durante a migração).
 
 #### `GET /api/admin/relatorios/produtividade`
 
-Métricas de produtividade da empresa num intervalo de datas.
+Métricas de produtividade da empresa num intervalo de datas (sobre `Consulta`).
 
 **Query params (opcionais):**
 - `inicio` (`yyyy-mm-dd` | ISO) — início do período. Default: há 30 dias.
@@ -552,180 +862,34 @@ Métricas de produtividade da empresa num intervalo de datas.
 {
   "periodo": { "inicio": "...", "fim": "..." },
   "resumo": {
-    "totalTarefas": 100,
+    "totalConsultas": 100,
     "concluidas": 80,
     "taxaConclusao": 0.8,
     "emAtraso": 5,
     "taxaAtraso": 0.05,
     "cargaTotalMinutos": 6000,
-    "tempoMedioMinutos": 75
+    "tempoMedioMinutos": 45
   },
-  "porStaff": [{ "utilizador_id", "nome", "total", "concluidas", "carga_minutos", "taxaConclusao" }],
+  "porFisio": [{ "utilizador_id", "nome", "total", "concluidas", "carga_minutos", "taxaConclusao" }],
   "porDia": [{ "data": "yyyy-mm-dd", "total", "concluidas", "carga_minutos" }],
   "porEstado": [{ "estado", "total" }],
-  "porPropriedade": [{ "propriedade_id", "nome", "total", "carga_minutos" }]
+  "porSala": [{ "propriedade_id", "nome", "total", "carga_minutos" }]
 }
 ```
 
-> **"emAtraso"** = tarefas não concluídas nem canceladas cuja `data` já passou (proxy operacional de atraso — não há campo dedicado no modelo). **"tempoMedioMinutos"** = média de `tempo_limpeza_minutos` das concluídas.
+> **"emAtraso"** = consultas não concluídas nem canceladas cuja `data_hora_inicio` já passou (proxy operacional de atraso — não há campo dedicado no modelo). **"tempoMedioMinutos"** = média de `duracao_minutos` das concluídas. **Mapeamento de campos (F8):** `data` → `data_hora_inicio`, `utilizador_id` → `fisioterapeuta_id`, `propriedade_id` → `sala_id`, `tempo_limpeza_minutos` → `duracao_minutos`, `hora_conclusao` → `concluida_em`.
 
 ---
 
-### 6.5. Webhooks — Logs do Smoobu (`/api/admin/webhooks`)
+### 6.5–6.9. ⚠️ F0 — Removidos
 
-*Protegido por JWT (middleware `auth`).*
-
-#### `GET /api/admin/webhooks`
-
-Lista os `WebhookLog` recebidos do Smoobu (ordenados por data desc). Útil para o Admin confirmar que os webhooks estão a chegar e ver o estado de processamento.
-
-**Query params (opcionais):**
-- `status` — filtra por estado: `recebido` | `processado` | `erro`
-- `limit` — máximo de resultados (default 50, máx 200)
-
-**Resposta 200:** `{ webhooks: [...], total }`
-
-> NOTA: o `WebhookLog` é global (não tem `empresa_id`) porque o webhook é um endpoint público do Smoobu. A auth continua exigida para que só admins vejam os logs.
-
-#### `POST /api/admin/webhooks/:id/reprocessar`
-
-Reprocessa um `WebhookLog` (útil quando falhou por motivo transitório e o Admin já corrigiu a causa — ex: criou a propriedade em falta). Reutiliza a função interna `processarReservaSmoobu` com o payload original guardado no log. A idempotência (verificação de `smoobu_reserva_id`) garante que reproccessar um webhook já processado não cria tarefa duplicada.
-
-**Resposta 200:** `{ status: 'processado' | 'erro', erro_msg: string | null }`
+> As secções 6.5–6.9 documentavam os endpoints de webhooks e sincronização Smoobu (`POST /webhooks/smoobu`, `GET/POST /api/admin/webhooks`, `POST /api/admin/smoobu/sincronizar`, `GET /api/admin/smoobu/propriedades`, `POST /api/admin/smoobu/sincronizar-propriedades`). Foram **removidos em F0** juntamente com `controllers/smoobuController.js`, `controllers/webhookController.js` e `routes/webhookRoutes.js`. A variável de ambiente `SMOOBU_API_KEY` deixou de ser necessária.
 
 ---
 
-### 6.6. Webhook Smoobu — robustez de produção (v1.18.0 + v1.19.0)
+### 6.10. Calendário Visual Avançado — ❌ Removido em F8
 
-O endpoint `POST /webhooks/smoobu` reage a 3 tipos de ação do Smoobu:
-
-| Action do Smoobu | Comportamento do Autocell |
-|------------------|---------------------------|
-| `newReservation` (nova reserva) | **Cria** a tarefa (com load balancing). Idempotente: se já existir, não duplica. Se existir mas estiver cancelada, **re-activa**. |
-| `updateReservation` (reserva editada) | **Atualiza** a tarefa existente: `data`, `propriedade_id`, `tempo_limpeza_minutos`. Se a data mudou, **reavalia a atribuição** (mantém o funcionário se ainda for disponível no novo dia; caso contrário passa a `por_atribuir`). Se a tarefa estava cancelada, **re-activa**. Se não existir tarefa, cai para o fluxo de criação (fallback). |
-| `cancellation` (reserva cancelada) | **Cancela** a tarefa existente (`estado = 'cancelada'`). Respeita tarefas já **concluídas** (o trabalho já foi feito). Idempotente. |
-| outras (ex: `pingTest`) | **Ignora** graciosamente (log + 200, sem erro). |
-
-Melhorias de robustez:
-
-1. **Idempotência** (v1.18.0): o Smoobu faz retries — sem isto, teríamos tarefas duplicadas. Verifica `smoobu_reserva_id` antes de criar.
-2. **Reação a cancelamentos e edições** (v1.19.0): o sistema já não ignora `cancellation` e `updateReservation` — reage conforme a tabela acima. Uma reserva cancelada no Smoobu cancela a tarefa; uma reserva editada atualiza a data/propriedade da tarefa.
-3. **Visibilidade** (v1.18.0): todos os webhooks ficam em `WebhookLog` (`status` + `erro_msg` + `payload`). O Admin consulta em `GET /api/admin/webhooks` e pode reprocessar os que falharam (`POST /:id/reprocessar`).
-
----
-
-### 6.7. Sincronização em massa do Smoobu (REST API pull) — v1.20.0
-
-*Protegido por JWT (middleware `auth`).*
-
-#### `POST /api/admin/smoobu/sincronizar`
-
-Vai buscar todas as reservas **futuras** (a partir de hoje) ao Smoobu via REST API e cria as tarefas correspondentes usando a mesma lógica do webhook. Casos de uso: configuração inicial (importar reservas antes do webhook), recuperação (webhook esteve em baixo), auditoria (confirmar que não há reservas sem tarefa).
-
-**Requer:** variável de ambiente `SMOOBU_API_KEY` (obtém-na no painel do Smoobu: Settings > API > API Key). Sem ela → `400`.
-
-**Fluxo:**
-1. Calcula a data de hoje (YYYY-MM-DD, UTC) — não importa o passado.
-2. `fetch('https://login.smoobu.com/api/reservations?from=YYYY-MM-DD')` com header `Api-Key`. Timeout de 30s.
-3. Itera sobre o array `reservations` do JSON de resposta.
-4. Para cada reserva, mapeia para o formato do webhook (`{ action: 'newReservation', data: { id, arrival, apartment: { id, name } } }`) e chama `_processarReservaSmoobu`.
-5. **Idempotência**: a função `processarReservaSmoobu` já verifica `smoobu_reserva_id` antes de criar — correr várias vezes não cria duplicados.
-6. Cada reserva é envolvida num try/catch — se uma falhar (ex: propriedade não existe na BD), as outras continuam.
-7. Devolve contadores.
-
-**Resposta 200:**
-```json
-{
-  "totalRecebidas": 50,
-  "importadas": 48,
-  "criadas": 30,
-  "existentes": 18,
-  "erros": 2,
-  "detalheErros": [{ "reservaId": "12345", "erro": "Propriedade Smoobu 999 não encontrada na BD." }]
-}
-```
-
-**Erros:** `400` (API key em falta), `502` (erro no fetch ao Smoobu — timeout, 4xx/5xx, JSON inválido), `500` (erro interno).
-
----
-
-### 6.8. Listar propriedades do Smoobu — v1.21.0
-
-*Protegido por JWT (middleware `auth`).*
-
-#### `GET /api/admin/smoobu/propriedades`
-
-Vai buscar a lista de apartamentos ao Smoobu (endpoint oficial `/api/apartments`) e devolve-a de forma limpa (só `id` + `name` por apartamento). Isto facilita o mapeamento no fluxo de criação de propriedades: o frontend pode mostrar um dropdown com os apartamentos do Smoobu em vez de o Admin ter de digitar o `smoobu_id` manualmente.
-
-**Requer:** `SMOOBU_API_KEY`.
-
-**Resposta 200:** `{ propriedadesSmoobu: [{ id, name }, ...] }`
-
-**Erros:** `400` (API key em falta), `502` (erro no fetch ao Smoobu).
-
----
-
-### 6.9. Sincronizar propriedades do Smoobu (upsert em massa) — v1.22.0
-
-*Protegido por JWT (middleware `auth`).*
-
-#### `POST /api/admin/smoobu/sincronizar-propriedades`
-
-Importa em massa os apartamentos do Smoobu para a coleção `Propriedade`.
-
-**Comportamento (Prompt 92 / Fase 1.5):**
-- **Propriedades novas** → criadas com `nome`, `morada`, `coordenadas` (geocoding via Nominatim), `capacidade_hospedes` e `tempo_limpeza_minutos` (45 min por defeito).
-- **Propriedades já existentes** → atualiza **SEMPRE** a `morada` e a `capacidade_hospedes` quando o Smoobu as trouxer no payload (a fonte de verdade destes dois campos passa a ser o Smoobu). Refaz o geocoding sempre que a morada for atualizada. Os restantes campos (`nome`, `tempo_limpeza_minutos`, `ativo`, `checklist`, `funcionario_preferencial_id`) continuam a ser preservados, mantendo as edições manuais do gestor.
-
-Caso de uso: configuração inicial **e** manutenção contínua — mantém as moradas e capacidades sincronizadas com o Smoobu ao longo do tempo.
-
-**Requer:** `SMOOBU_API_KEY`. O `empresa_id` vem do JWT.
-
-**Resposta 200:**
-```json
-{
-  "totalRecebidas": 20,
-  "criadas": 15,
-  "atualizadas": 3,
-  "existentes": 2,
-  "erros": 0,
-  "detalheErros": []
-}
-```
-
-**Erros:** `400` (API key em falta), `502` (erro no fetch ao Smoobu).
-
-> **Nota sobre o `atualizarPropriedade`:** o endpoint `PUT /api/admin/propriedades/:id` já existe desde a v1.19.1 — permite editar `nome`, `smoobu_id`, `morada`, `tempo_limpeza_minutos` (com re-geocoding automático se a morada mudar). Não foi duplicado nesta versão.
-
-> **Diferença para o `importarPropriedades` (POST /api/gestor/smoobu/propriedades):** este é multi-tenant por `empresa_id` (só cria/atualiza propriedades da empresa do gestor) e mantém o comportamento conservador de **só preencher** a morada quando está `'A definir'` (não sobrescreve moradas reais). O `sincronizarPropriedades` (este endpoint) é mais agressivo: sobrescreve sempre morada + capacidade quando o Smoobu as traz.
-
----
-
-### 6.10. Calendário Visual Avançado — v1.23.0
-
-*Protegido por JWT (middleware `auth`).*
-
-#### `GET /api/admin/calendario/dados`
-
-Endpoint unificado para alimentar a página de Calendário Visual Avançado. Devolve as tarefas da empresa num intervalo de datas, com filtros opcionais e populate de propriedade (nome + morada + coordenadas) e utilizador (nome).
-
-**Query params:**
-| Parâmetro | Tipo | Descrição |
-|-----------|------|-----------|
-| `inicio` | yyyy-mm-dd \| ISO | Início do período |
-| `fim` | yyyy-mm-dd \| ISO | Fim do período (inclusive) |
-| `propriedadeId` | ObjectId | Filtra por propriedade (opcional) |
-| `utilizadorId` | ObjectId \| `null` | Filtra por funcionário; `null` = tarefas por atribuir (opcional) |
-| `estado` | string | `por_atribuir` \| `atribuida` \| `em_curso` \| `concluida` \| `cancelada` (opcional) |
-
-**Diferença para o `GET /api/admin/tarefas`:**
-- Não exclui canceladas por defeito (o calendário pode mostrá-las a tracejado). Use `?estado=atribuida` para excluir.
-- Aceita filtros opcionais por `propriedadeId`, `utilizadorId` e `estado`.
-- Populate inclui `morada` e `coordenadas` da propriedade (para tooltip e futuro mapa de rotas).
-
-**Resposta 200:** `{ tarefas: [...] }` (cada tarefa tem `propriedade_id: { nome, morada, coordenadas }` e `utilizador_id: { nome } | null`)
-
-**Erros:** `401` (sem token), `500` (erro interno).
+> **F8 — Limpeza:** o endpoint `GET /api/admin/calendario/dados` (que devolvia `Tarefa` para alimentar a página de Calendário Visual Avançado em `/admin/calendario` e `/admin/calendario-operacional`) foi **removido** juntamente com o `gestorController.getDadosCalendario`. O calendário operacional passou a ser servido pela rota `/gestor/calendario-consultas` (F6 — FullCalendar com Consultas, cores por fisioterapeuta). A página antiga `/gestor/calendario` foi descontinuada.
 
 ---
 
@@ -759,26 +923,640 @@ O staff **não pode aprovar** os próprios pedidos — só o admin.
 
 **Body:** `{ estado: 'aprovada' | 'rejeitada' }`
 
-**Lógica crítica:**
-- **Aprovar** → redistribui automaticamente as tarefas futuras do utilizador no período `[data_inicio, data_fim]` usando o load balancer (`determinarUtilizadorAtribuido`). Tarefas com staff disponível são reatribuídas; as sem staff disponível ficam `por_atribuir`.
-- **Rejeitar** → apenas atualiza o estado (não mexe nas tarefas).
+**Lógica:**
+- **Aprovar** → apenas atualiza o estado (`ausenciaController.aprovarRejeitarAusencia`). **F8:** a redistribuição automática de Tarefas foi **removida** (o load balancer foi extinto e não há `Tarefa` para redistribuir); o fisioterapeuta fica simplesmente indisponível para novas marcações durante o período da ausência (o motor de disponibilidade F3 consulta `Ausencia` no passo 1 de `verificarDisponibilidadeCompleta`).
+- **Rejeitar** → apenas atualiza o estado.
 
 **Resposta 200:**
 ```json
 {
-  "mensagem": "Ausência aprovada. 2 tarefa(s) reatribuída(s), 0 órfã(s).",
-  "ausencia": { ... },
-  "redistribuicao": { "total": 2, "reatribuidas": 2, "orfas": 0, "detalhes": [...] }
+  "mensagem": "Ausência aprovada.",
+  "ausencia": { ... }
 }
 ```
 
-#### Impacto no webhook (load balancer)
-
-O webhook do Smoobu (e o `atualizarTarefaPorReserva`) agora só consideram ausências com `estado: 'aprovada'` para excluir staff da atribuição. Pedidos pendentes ou rejeitados **não bloqueiam** a atribuição (o staff pode ainda trabalhar).
+> **F8 — Removido o campo `redistribuicao`:** a resposta deixou de incluir `redistribuicao: { total, reatribuidas, orfas, detalhes }` (era dependente do load balancer). A aprovação ficou numa operação simples de estado.
 
 #### Ações do admin que criam ausências
 
 As ações diretas do admin (falta súbita, baixa prolongada, registo manual) criam ausências com `estado: 'aprovada'` (não precisam de aprovação — o admin já decidiu).
+
+---
+
+### 6.12. Pacientes (`/api/gestor/pacientes`) — F2
+
+> **Auth:** JWT (strito, sem fallback legacy). Todas as rotas protegidas por `auth` (em `pacienteRoutes.js`).
+>
+> **Permissões (F2):**
+> - `podeVer` (middleware custom) — todos os 4 roles (`admin`, `diretor_clinico`, `fisioterapeuta`, `rececionista`) podem aceder a GET (listar/obter), POST (criar) e PUT (atualizar). Como o Express não tem middleware "OR" nativo entre `isClinico` e `isRececionista`, define-se um `podeVer` inline que valida `req.user.role` contra o conjunto dos 4 roles.
+> - `isRececionista` (admin + diretor_clinico + rececionista) — `PATCH /:id/estado` (alternar ativo). O fisioterapeuta **não** pode alterar o estado do paciente.
+> - `isDiretorClinico` (admin + diretor_clinico) — `DELETE /:id` (soft delete). Só o diretor clínico/admin podem eliminar pacientes (RGPD).
+>
+> **Sanitização de dados clínicos:** o controller `pacienteController` decide consoante a role quais os campos a devolver:
+> - `temAcessoClinico(req)` → `true` para admin/diretor_clinico/fisioterapeuta → devolve `historico_medico`, `alergias` e `contacto_emergencia`.
+> - Rececionista → `sanitizarParaNaoClinico(p)` remove esses 3 campos da resposta.
+> - Todas as respostas incluem a flag `dados_clinicos: boolean` para o frontend saber se pode mostrar os campos clínicos.
+>
+> **Nota F2:** o filtro "fisioterapeuta vê só os seus pacientes" será implementado em F4 (Consulta com `paciente_id` + `fisioterapeuta_id`). Por agora, todos os clínicos vêem todos os pacientes ativos da empresa.
+
+#### `GET /api/gestor/pacientes`
+Lista pacientes da empresa do utilizador autenticado (exclui soft-deleted).
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Query params (opcionais):**
+  - `busca` — filtra por `nome`, `num_utente`, `telefone` ou `email` (regex case-insensitive, com escape de caracteres especiais para evitar injeção).
+  - `ativo` — `'true'`/`'false'` filtra por `ativo`.
+  - `limit` — default `200`, máx `500`.
+- **Resposta (200 OK):**
+```json
+{
+  "pacientes": [ { "_id": "...", "nome": "...", "telefone": "...", "ativo": true, ... } ],
+  "total": 42,
+  "dados_clinicos": true
+}
+```
+  - `dados_clinicos: true` para isClinico (resposta com `historico_medico`/`alergias`/`contacto_emergencia`); `false` para rececionista (versão sanitizada).
+- **Erros:** `401` não autenticado; `403` role sem permissão; `500` erro interno.
+
+#### `GET /api/gestor/pacientes/:id`
+Devolve o detalhe de um paciente.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Resposta (200 OK):** `{ "paciente": { ... }, "dados_clinicos": boolean }`.
+- **Erros:** `400` ID inválido; `401` não autenticado; `404` não encontrado / não pertence à empresa / eliminado; `500` erro.
+
+#### `POST /api/gestor/pacientes`
+Cria um novo paciente na empresa do utilizador autenticado.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Body:**
+```json
+{
+  "nome": "Ana Silva",
+  "telefone": "912345678",
+  "data_nascimento": "1990-05-12",
+  "genero": "F",
+  "num_utente": "123456789",
+  "nif": "123456789",
+  "email": "ana.silva@email.pt",
+  "morada": "Rua das Flores, 12, Lisboa",
+  "contacto_emergencia": { "nome": "Rui Silva", "telefone": "913000000", "relacao": "Cônjuge" },
+  "historico_medico": "Lombalgia crónica (2022).",
+  "alergias": ["Penicilina", "Látex"],
+  "consentimento_dados": { "concedido": true, "versao_termos": "1.0" },
+  "observacoes": "Prefere consultas matinais.",
+  "origem": "walk_in"
+}
+```
+  - `nome` (obrigatório), `telefone` (obrigatório).
+  - `genero` — `enum: ['M','F','Outro','NA']`.
+  - `origem` — `enum: ['walk_in','referenciacao','online','outro']`.
+  - `data_nascimento` — não pode ser futura.
+  - **Campos clínicos** (`contacto_emergencia`, `historico_medico`, `alergias`) — só `isClinico` os pode definir; se a rececionista os enviar, são **ignorados**.
+- **Resposta (201 Created):** `{ "paciente": { ... }, "dados_clinicos": boolean }` (sanitizada para rececionista).
+- **Auditoria:** registada via `utils/auditoria.js` (`acao: 'criar'`, `recurso: 'paciente'`).
+- **Erros:** `400` campos em falta / enums inválidos / `data_nascimento` futura; `401` não autenticado; `500` erro.
+
+#### `PUT /api/gestor/pacientes/:id`
+Atualiza um paciente existente.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Body (todos opcionais, mas pelo menos um):** qualquer campo do modelo exceto `empresa_id`. `ativo` também pode ser alternado aqui (além do `PATCH /:id/estado`).
+  - **Regras:** `nome` e `telefone` não podem ficar vazios. `data_nascimento` não pode ser futura. `genero` e `origem` validados contra os enums.
+  - **Campos clínicos** — só `isClinico` os pode editar; se a rececionista os enviar, são **ignorados**.
+- **Resposta (200 OK):** `{ "paciente": { ... }, "dados_clinicos": boolean }` (sanitizada para rececionista).
+- **Auditoria:** registada (`acao: 'atualizar'`).
+- **Erros:** `400` ID inválido / campos vazios / enums inválidos; `401` não autenticado; `404` não encontrado; `500` erro.
+
+#### `PATCH /api/gestor/pacientes/:id/estado`
+Alterna o estado `ativo` do paciente (ativa ↔ desativa). Útil para pacientes que receberam alta mas podem voltar.
+
+- **Auth:** JWT + `isRececionista` (admin + diretor_clinico + rececionista). O fisioterapeuta **não** tem acesso.
+- **Body (opcional):** `{ "ativo": true }` — se não vier, alterna o estado atual.
+- **Resposta (200 OK):** `{ "message": "Paciente ativado." | "Paciente desativado.", "paciente": { "_id", "nome", "ativo" } }`.
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` role sem permissão; `404` não encontrado; `500` erro.
+
+#### `DELETE /api/gestor/pacientes/:id` (soft delete)
+**Soft delete** do paciente — marca `eliminado_em = now()` e `ativo = false` (RGPD: preserva histórico).
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico). Só o diretor clínico/admin podem eliminar pacientes.
+- **Resposta (200 OK):** `{ "message": "Paciente \"X\" eliminado.", "paciente": { "_id", "eliminado_em" } }`.
+- **Auditoria:** registada (`acao: 'soft-delete'`).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` role sem permissão; `404` não encontrado; `500` erro.
+
+---
+
+### 6.13. Horários de Fisioterapeuta (`/api/gestor/horarios`) — F3
+
+> **Auth:** JWT (strito, sem fallback legacy). Todas as rotas protegidas por `auth` (em `horarioRoutes.js`).
+>
+> **Permissões (F3):**
+> - `podeVer` (middleware custom) — todos os 4 roles (`admin`, `diretor_clinico`, `fisioterapeuta`, `rececionista`) podem aceder a `GET /` (listar), `GET /:id` (detalhe) e `GET /disponibilidade` (verificador). Como o Express não tem middleware "OR" nativo entre `isClinico` e `isRececionista`, define-se um `podeVer` inline que valida `req.user.role` contra o conjunto dos 4 roles. O fisioterapeuta vê apenas os seus próprios horários (filtro `fisioterapeuta_id = req.user.id` aplicado no controller); os restantes roles vêem todos os horários da empresa.
+> - `isDiretorClinico` (admin + diretor_clinico) — `POST`, `PUT`, `DELETE` (mutações). Só o diretor clínico/admin gerem horários; o fisioterapeuta não pode criar/editar/eliminar horários (nem os seus).
+>
+> **Validação do fisioterapeuta:** em `POST` e no verificador de disponibilidade, o controller valida que `fisioterapeuta_id` corresponde a um utilizador com role `fisioterapeuta` ou `diretor_clinico`, `ativo: true`, `eliminado_em: null` e pertencente à mesma empresa. Isto permite definir horários tanto para fisioterapeutas como para diretores clínicos que também atendem pacientes.
+>
+> **Auditoria:** todas as mutações (`POST`/`PUT`/`DELETE`) registam em `utils/auditoria.js` (`recurso: 'horario_fisioterapeuta'`, `acao: 'criar' | 'atualizar' | 'eliminar'`).
+
+#### `GET /api/gestor/horarios`
+Lista horários de fisioterapeutas da empresa.
+
+- **Auth:** JWT + `podeVer` (4 roles). Fisioterapeuta vê só os seus.
+- **Query params (opcionais):**
+  - `fisioterapeuta_id` — filtra por fisioterapeuta (ignorado se o `req.user.role === 'fisioterapeuta'`, que vê só os seus).
+  - `tipo` — `'recorrente'` ou `'excecao'`.
+  - `ativo` — `'true'`/`'false'` filtra por `ativo`.
+- **Ordenação:** `fisioterapeuta_id`, `tipo`, `dia_semana`, `data` (asc).
+- **Populate:** `fisioterapeuta_id` → `{ nome, email, role }`.
+- **Resposta (200 OK):**
+```json
+{
+  "horarios": [
+    {
+      "_id": "...",
+      "empresa_id": "...",
+      "fisioterapeuta_id": { "_id": "...", "nome": "João Fisioterapeuta", "email": "joao.fisio@fisiocell.pt", "role": "fisioterapeuta" },
+      "tipo": "recorrente",
+      "dia_semana": 1,
+      "hora_inicio": "09:00",
+      "hora_fim": "13:00",
+      "data": null,
+      "disponivel": true,
+      "ativo": true,
+      "nota": "",
+      "createdAt": "...",
+      "updatedAt": "..."
+    }
+  ],
+  "total": 7
+}
+```
+- **Erros:** `401` não autenticado; `403` role sem permissão; `500` erro interno.
+
+#### `GET /api/gestor/horarios/disponibilidade`
+Verifica se um fisioterapeuta está disponível para uma consulta numa dada data/hora. Não invoca `verificarDisponibilidadeCompleta` (que exige o documento `Utilizador` completo) — usa diretamente `obterHorarioDia` + `verificarConflitoHorario`. **Nota:** esta rota está registada **antes** de `GET /:id` para não ser apanhada como path param.
+
+- **Auth:** JWT + `podeVer` (4 roles). Útil sobretudo para rececionista marcar consultas.
+- **Query params (obrigatórios):**
+  - `fisioterapeuta_id` — ObjectId do fisioterapeuta.
+  - `data` — ISO string (instante de início da consulta).
+- **Query params (opcionais):**
+  - `duracao_minutos` — default `45`. Duração prevista da consulta.
+- **Resposta (200 OK):**
+```json
+{
+  "disponivel": true,
+  "horario": { "hora_inicio": "09:00", "hora_fim": "13:00" },
+  "motivo": null,
+  "origem": "recorrente"
+}
+```
+  - `disponivel: false` com `motivo` explicativo quando o fisioterapeuta não trabalha nesse dia (sem regra), está bloqueado por exceção (`disponivel: false`), ou a consulta não cabe dentro do bloco de trabalho (começa antes de `hora_inicio` ou acaba depois de `hora_fim`).
+  - `origem` — `'excecao'` (janela extra do dia), `'recorrente'` (regra semanal) ou `null` (sem horário definido).
+- **Erros:** `400` `fisioterapeuta_id`/`data` em falta ou `data` inválida; `401` não autenticado; `404` fisioterapeuta não encontrado; `500` erro.
+
+#### `GET /api/gestor/horarios/:id`
+Devolve o detalhe de um horário.
+
+- **Auth:** JWT + `podeVer` (4 roles). Fisioterapeuta só vê os seus (403 caso contrário).
+- **Resposta (200 OK):** `{ "horario": { ... } }` (com `fisioterapeuta_id` populado).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` fisioterapeuta a tentar ver horário de outro; `404` não encontrado / não pertence à empresa; `500` erro.
+
+#### `POST /api/gestor/horarios`
+Cria um novo horário (recorrente ou exceção).
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Body:**
+```json
+{
+  "fisioterapeuta_id": "65f...",
+  "tipo": "recorrente",
+  "dia_semana": 1,
+  "hora_inicio": "09:00",
+  "hora_fim": "13:00",
+  "nota": "Manhãs de segunda"
+}
+```
+  - `fisioterapeuta_id` (obrigatório).
+  - `tipo` — `'recorrente'` (default) ou `'excecao'`.
+  - `dia_semana` — 0–6, **obrigatório se `tipo='recorrente'`**.
+  - `hora_inicio` / `hora_fim` — default `'09:00'`/`'19:00'`, formato `HH:mm`.
+  - `data` — **obrigatória se `tipo='excecao'`** (ISO string).
+  - `disponivel` — boolean, default `true` (só relevante para `excecao`).
+  - `nota` — string, default `''`.
+  - `ativo` — boolean, default `true`.
+- **Validações:**
+  - `fisioterapeuta_id` tem de ser fisioterapeuta/diretor_clinico ativo (não eliminado) da mesma empresa.
+  - `hora_inicio`/`hora_fim` validados por regex `/^([01]\d|2[0-3]):([0-5]\d)$/`.
+  - `tipo='recorrente'` exige `dia_semana` inteiro 0–6; `data` é rejeitada (forçada a `null` pelo `pre('validate')`).
+  - `tipo='excecao'` exige `data` válida; `dia_semana` é rejeitado (forçado a `null`).
+- **Resposta (201 Created):** `{ "horario": { ... } }`.
+- **Auditoria:** registada (`acao: 'criar'`).
+- **Erros:** `400` campos em falta / `tipo` inválido / `dia_semana` fora de 0–6 / `data` inválida / `hora_inicio`/`hora_fim` mal formatados / fisioterapeuta não encontrado / `ValidationError` do `pre('validate')`; `401` não autenticado; `403` role sem permissão; `500` erro.
+
+#### `PUT /api/gestor/horarios/:id`
+Atualiza um horário existente.
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Body (todos opcionais, mas pelo menos um):** `dia_semana`, `hora_inicio`, `hora_fim`, `data`, `disponivel`, `nota`, `ativo`. Pode enviar `null` para limpar `dia_semana`/`data`.
+- **Regras:** `hora_inicio`/`hora_fim` validadas por regex; `dia_semana` inteiro 0–6 (ou `null`); `data` válida (ou `null`).
+- **Resposta (200 OK):** `{ "horario": { ... } }`.
+- **Auditoria:** registada (`acao: 'atualizar'`).
+- **Erros:** `400` ID inválido / `hora_inicio`/`hora_fim` inválidas / `dia_semana`/`data` inválidas; `401` não autenticado; `403` role sem permissão; `404` não encontrado; `500` erro.
+
+#### `DELETE /api/gestor/horarios/:id`
+**Hard delete** do horário (ao contrário do `Paciente`, os horários não usam soft delete — não há necessidade de preservar histórico de regras de agenda).
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Resposta (200 OK):** `{ "message": "Horário eliminado." }`.
+- **Auditoria:** registada (`acao: 'eliminar'`).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` role sem permissão; `404` não encontrado; `500` erro.
+
+---
+
+### 6.14. Consultas (`/api/gestor/consultas`) — F4
+
+> **Auth:** JWT (strito, sem fallback legacy). Todas as rotas protegidas por `auth` (em `consultaRoutes.js`).
+>
+> **Permissões (F4):**
+> - `podeVer` (middleware custom) — todos os 4 roles (`admin`, `diretor_clinico`, `fisioterapeuta`, `rececionista`) podem aceder a `GET /` (listar), `GET /:id` (detalhe) e `GET /validar` (verificador de conflitos em tempo real). Como o Express não tem middleware "OR" nativo entre `isClinico` e `isRececionista`, define-se um `podeVer` inline que valida `req.user.role` contra o conjunto dos 4 roles. O fisioterapeuta vê apenas as suas próprias consultas (filtro `fisioterapeuta_id = req.user.id` aplicado no controller); os restantes roles vêem todas as consultas da empresa.
+> - `isRececionista` (admin + diretor_clinico + rececionista) — `POST` e `PUT` (marcações: data/duração/tipo/estado/presenca/observacoes). Todos podem marcar; o fisioterapeuta **não** pode criar/editar marcações.
+> - `isClinico` (admin + diretor_clinico + fisioterapeuta) — `PATCH /:id/nota-clinica` (SOAP). Endpoint **separado** do `PUT` geral precisamente porque tem permissões diferentes (o PUT é da rececionista; o PATCH da SOAP é do clínico). O fisioterapeuta só pode editar notas das suas próprias consultas.
+> - `isDiretorClinico` (admin + diretor_clinico) — `DELETE /:id` (eliminação). Só diretor/admin podem eliminar marcações erradas.
+>
+> **Imutabilidade de concluídas (RGPD):** consultas com `estado: 'concluida'` **não podem ser eliminadas** (403 — preservar nota clínica SOAP) e a sua `nota_clinica` **não pode ser editada** via PUT (403) nem via PATCH `/nota-clinica` (403). Para "anular" uma consulta concluída deve usar-se o cancelamento. O `DELETE` só serve para eliminar marcações erradas (`marcada`/`cancelada`/`faltou`/`nao_compareceu`) — hard delete, sem soft delete (a `Consulta` não tem `eliminado_em`).
+>
+> **Cédula obrigatória:** o `PATCH /:id/nota-clinica` valida que o assinante tem cédula profissional válida (`Utilizador.temCedulaValida()`) — caso contrário, 403. O nº de cédula é guardado como snapshot em `nota_clinica.cedula_assinante` (auditoria legal).
+>
+> **Validação de conflitos (soft block):** `POST` e `PUT` invocam a função interna `validarConflitos` (ver secção 3.5). Sem `forcar: true` e com conflitos → 409. Com `forcar: true` → 200 com `warning` + `conflitos`. O `PUT` re-valida apenas se algum campo temporal mudar (`data_hora_inicio`, `duracao_minutos`, `fisioterapeuta_id`, `sala_id`, `paciente_id`), excluindo a própria consulta.
+>
+> **Auditoria:** todas as mutações registam em `utils/auditoria.js` (`recurso: 'consulta'`, `acao: 'criar' | 'atualizar' | 'atualizar_nota_clinica' | 'eliminar'`). As marcações forçadas (`forcar: true` com conflitos) ficam sinalizadas em `detalhes.conflitos_forcados: true`.
+
+#### `GET /api/gestor/consultas`
+Lista consultas da empresa do utilizador autenticado.
+
+- **Auth:** JWT + `podeVer` (4 roles). Fisioterapeuta vê só as suas (filtro `fisioterapeuta_id = req.user.id`).
+- **Query params (opcionais):**
+  - `fisioterapeuta_id` — filtra por fisioterapeuta (ignorado se o `req.user.role === 'fisioterapeuta'`, que vê só as suas).
+  - `sala_id` — filtra por sala (Propriedade alias Sala).
+  - `paciente_id` — filtra por paciente.
+  - `estado` — filtra por estado (`marcada`/`confirmada`/`em_curso`/`concluida`/`cancelada`/`faltou`/`nao_compareceu`).
+  - `inicio` (`yyyy-mm-dd` | ISO) — `data_hora_inicio >= inicio`.
+  - `fim` (`yyyy-mm-dd` | ISO) — `data_hora_inicio <= fim`.
+  - `limit` — default `200`, máx `500`.
+- **Ordenação:** `data_hora_inicio` (asc).
+- **Populate:** `fisioterapeuta_id` → `{ nome, email, perfil_profissional.cor_calendario }`; `sala_id` → `{ nome }`; `paciente_id` → `{ nome, telefone }`; `criada_por` → `{ nome }`.
+- **Resposta (200 OK):**
+```json
+{
+  "consultas": [
+    {
+      "_id": "...",
+      "empresa_id": "...",
+      "sala_id": { "_id": "...", "nome": "Sala 1" },
+      "fisioterapeuta_id": { "_id": "...", "nome": "João Fisioterapeuta", "email": "...", "perfil_profissional": { "cor_calendario": "#3b82f6" } },
+      "paciente_id": { "_id": "...", "nome": "Ana Silva", "telefone": "912345678" },
+      "data_hora_inicio": "2025-01-15T10:00:00.000Z",
+      "data_hora_fim": "2025-01-15T10:45:00.000Z",
+      "duracao_minutos": 45,
+      "tipo": "sessao",
+      "estado": "marcada",
+      "presenca": "pendente",
+      "nota_clinica": { "subjetivo": "", "objetivo": "", "avaliacao": "", "plano": "", "tratamento_efetuado": "", "cedula_assinante": "" },
+      "criada_por": { "_id": "...", "nome": "Maria Rececionista" },
+      "observacoes": "",
+      "concluida_em": null,
+      "cancelada_em": null,
+      "lembrete_24h_enviado": false,
+      "lembrete_2h_enviado": false,
+      "createdAt": "...",
+      "updatedAt": "..."
+    }
+  ],
+  "total": 12
+}
+```
+- **Erros:** `401` não autenticado; `403` role sem permissão; `500` erro interno.
+
+#### `GET /api/gestor/consultas/validar`
+Valida conflitos para uma consulta proposta **sem a criar** — usado pelo frontend para mostrar warnings em tempo real no modal de criar/editar (debounce antes de submeter). **Nota:** esta rota está registada **antes** de `GET /:id` para não ser apanhada como path param.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Query params (obrigatórios):**
+  - `fisioterapeuta_id`, `sala_id`, `paciente_id`, `data_hora_inicio` (ISO string).
+- **Query params (opcionais):**
+  - `duracao_minutos` — default `45`.
+  - `excluir_id` — ObjectId da consulta sendo editada (modo edição, para excluir a própria consulta da verificação).
+- **Resposta (200 OK):**
+```json
+{
+  "ok": false,
+  "conflitos": [
+    "Fisioterapeuta: Folga fixa semanal (Terça).",
+    "Sala ocupada: sobreposição com consulta de \"Ana Silva\" (fisio: João Fisioterapeuta) das 15/1/2025 10:00 às 10:45."
+  ],
+  "horario": { "hora_inicio": "09:00", "hora_fim": "13:00" }
+}
+```
+  - `ok: true` quando não há warnings. `conflitos` é `[]` nesse caso. `horario` é a janela de trabalho do fisio no dia (ou `null` se indisponível).
+- **Erros:** `400` `fisioterapeuta_id`/`sala_id`/`paciente_id`/`data_hora_inicio` em falta; `401` não autenticado; `500` erro.
+
+#### `GET /api/gestor/consultas/:id`
+Devolve o detalhe de uma consulta.
+
+- **Auth:** JWT + `podeVer` (4 roles). Fisioterapeuta só vê as suas (403 caso contrário).
+- **Populate:** `fisioterapeuta_id` → `{ nome, email, perfil_profissional }`; `sala_id` → `{ nome }`; `paciente_id` → `{ nome, telefone, email, data_nascimento }`; `criada_por` → `{ nome }`; `cancelada_por` → `{ nome }`.
+- **Resposta (200 OK):** `{ "consulta": { ... } }` (com todos os populados).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` fisioterapeuta a tentar ver consulta de outro; `404` não encontrada / não pertence à empresa; `500` erro.
+
+#### `POST /api/gestor/consultas`
+Cria uma nova consulta.
+
+- **Auth:** JWT + `isRececionista` (admin + diretor_clinico + rececionista).
+- **Body:**
+```json
+{
+  "fisioterapeuta_id": "65f...",
+  "sala_id": "65f...",
+  "paciente_id": "65f...",
+  "data_hora_inicio": "2025-01-15T10:00:00.000Z",
+  "duracao_minutos": 45,
+  "tipo": "sessao",
+  "observacoes": "Primeira sessão pós-avaliação.",
+  "forcar": false,
+  "protocolo_id": "65f..."
+}
+```
+  - `fisioterapeuta_id`, `sala_id`, `paciente_id`, `data_hora_inicio` — **obrigatórios**.
+  - `duracao_minutos` — default `45`, `min: 15`.
+  - `tipo` — default `'sessao'` (`enum: ['primeira_consulta','sessao','reavaliacao','alta','grupo']`).
+  - `observacoes` — default `''` (string, trimmed).
+  - `forcar` — default `false`. Se `true`, ignora warnings de conflito (soft block — ver secção 3.5).
+  - `protocolo_id` — default `null` (F5). Opcional. Se fornecido, o controller invoca `gerarSnapshotProtocolo(protocolo_id, empresaId)` e guarda o snapshot em `nota_clinica.protocolo_aplicado` (cópia imutável do template no momento da marcação). Se o protocolo não existir ou não pertencer à empresa → `400`.
+- **Validações:**
+  - `data_hora_inicio` não pode ser no passado.
+  - `fisioterapeuta_id` tem de ser fisioterapeuta/diretor_clinico ativo (não eliminado) da mesma empresa.
+  - `sala_id` tem de ser uma `Propriedade` ativa da empresa.
+  - `paciente_id` tem de ser um `Paciente` não eliminado da empresa.
+  - `validarConflitos` (fisio + sala + paciente em simultâneo — ver secção 3.5).
+- **Resposta:**
+  - **`201 Created`** — `{ "consulta": { ... } }` (criada sem conflitos).
+  - **`200 OK`** — `{ "consulta": { ... }, "warning": "Consulta criada com conflitos (forçado).", "conflitos": string[] }` (criada com `forcar: true` e conflitos).
+- **Auditoria:** registada (`acao: 'criar'`, `recurso: 'consulta'`, `detalhes.conflitos_forcados: true` se aplicável).
+- **Erros:** `400` campos em falta / `data_hora_inicio` no passado / `duracao_minutos < 15` / fisio/sala/paciente não encontrados / `protocolo_id` não encontrado ou não pertence à empresa (F5) / `ValidationError`; `401` não autenticado; `403` role sem permissão; `409` conflitos e `forcar: false` (`{ "erro": "Conflitos detetados. Confirma com forcar=true para ignorar.", "conflitos": string[] }`); `500` erro.
+
+#### `PUT /api/gestor/consultas/:id`
+Atualiza uma consulta (marcações: data, duração, tipo, estado, presenca, observacoes). Re-valida conflitos se algum campo temporal mudar.
+
+- **Auth:** JWT + `isRececionista` (admin + diretor_clinico + rececionista).
+- **Body (todos opcionais, mas pelo menos um):** `fisioterapeuta_id`, `sala_id`, `paciente_id`, `data_hora_inicio`, `duracao_minutos`, `tipo`, `estado`, `presenca`, `motivo_cancelamento`, `observacoes`, `forcar`.
+  - Se `estado='concluida'` → `concluida_em` é preenchida com `now()` (se ainda não estava).
+  - Se `estado='cancelada'` → `cancelada_em` é preenchida com `now()` e `cancelada_por` com `req.user.id` (se `motivo_cancelamento` vier, é guardado).
+  - **`nota_clinica` é rejeitada neste endpoint** (400) — deve ser atualizada via `PATCH /:id/nota-clinica` (porque tem permissões diferentes).
+- **Re-validação de conflitos:** se algum campo temporal mudar (`data_hora_inicio`, `duracao_minutos`, `fisioterapeuta_id`, `sala_id`, `paciente_id`), invoca `validarConflitos` com `excluirConsultaId = consulta._id` (excluir a própria consulta).
+- **Resposta:**
+  - **`200 OK`** — `{ "consulta": { ... } }` (atualizada sem conflitos novos).
+  - **`200 OK`** — `{ "consulta": { ... }, "warning": "Consulta atualizada com conflitos (forçado).", "conflitos": string[] }` (atualizada com `forcar: true` e novos conflitos).
+- **Auditoria:** registada (`acao: 'atualizar'`, `recurso: 'consulta'`).
+- **Erros:** `400` ID inválido / `nota_clinica` no body (deve ir para o PATCH) / `ValidationError`; `401` não autenticado; `403` role sem permissão / consulta concluída a tentar editar nota clínica (imutável); `404` não encontrada; `409` novos conflitos e `forcar: false`; `500` erro.
+
+#### `PATCH /api/gestor/consultas/:id/nota-clinica`
+Atualiza a nota clínica SOAP de uma consulta. **Endpoint separado** do `PUT` geral (porque tem permissões diferentes — `isClinico` em vez de `isRececionista`).
+
+- **Auth:** JWT + `isClinico` (admin + diretor_clinico + fisioterapeuta).
+- **Regras:**
+  - Consulta concluída → **403** (nota imutável — RGPD/legal).
+  - Fisioterapeuta só pode editar notas das suas próprias consultas (`consulta.fisioterapeuta_id === req.user.id`) → 403 caso contrário.
+  - O assinante tem de ter cédula profissional válida (`Utilizador.temCedulaValida()`) — 403 caso contrário. Para `admin`/`rececionista` o método devolve sempre `true` (mas o endpoint exige `isClinico`, pelo que `rececionista` não chega aqui). Para `fisioterapeuta`/`diretor_clinico` exige `perfil_profissional.cedula` preenchido.
+- **Body (todos opcionais, mas pelo menos um):**
+```json
+{
+  "subjetivo": "Dor lombar ao levantar.",
+  "objetivo": "ROM reduzida em flexão.",
+  "avaliacao": "Lombalgia mecânica.",
+  "plano": "Exercícios de Mobility + sessões 2x/sem.",
+  "tratamento_efetuado": "Mobilização lombar + stretching.",
+  "protocolo_aplicado": [
+    {
+      "nome": "Avaliação Inicial",
+      "items": [
+        { "texto": "Inspeção", "concluido": true },
+        { "texto": "Palpação", "concluido": true },
+        { "texto": "Testes ortopédicos", "concluido": false }
+      ]
+    }
+  ]
+}
+```
+  - `subjetivo`, `objetivo`, `avaliacao`, `plano`, `tratamento_efetuado` — campos SOAP (string).
+  - `protocolo_aplicado` (F5) — array de `{ nome, items: [{ texto, concluido }] }`. **Substitui** o snapshot guardado no `criarConsulta` — usado pelo fisioterapeuta durante a sessão para marcar items do protocolo como `concluido: true` à medida que os vai executando. O controller normaliza cada item (`texto` → String, `concluido` → Boolean). Não é possível adicionar/remover secções via este endpoint — apenas marcar items existentes (a estrutura do snapshot é preservada).
+- **Snapshot da cédula:** ao guardar, `nota_clinica.cedula_assinante` é preenchida com `perfil_profissional.cedula` do assinante (auditoria legal — garante rastreabilidade de quem assinou).
+- **Resposta (200 OK):** `{ "consulta": { ... } }` (com `nota_clinica` atualizada e `cedula_assinante` preenchida).
+- **Auditoria:** registada (`acao: 'atualizar_nota_clinica'`, `recurso: 'consulta'`).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` consulta concluída / fisioterapeuta a editar nota de outro / sem cédula válida; `404` não encontrada; `500` erro.
+
+#### `DELETE /api/gestor/consultas/:id`
+**Hard delete** da consulta (a `Consulta` não tem soft delete — para "anular" uma consulta concluída usa-se o cancelamento). Apenas para eliminar marcações erradas (`marcada`/`cancelada`/`faltou`/`nao_compareceu`).
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Bloqueio RGPD:** consultas com `estado='concluida'` são **bloqueadas** (403 — "Não é possível eliminar uma consulta concluída (RGPD — nota clínica é imutável). Cancela em vez de eliminar."). A nota clínica SOAP de uma consulta concluída é um documento legal que tem de ser preservado.
+- **Resposta (200 OK):** `{ "message": "Consulta eliminada." }`.
+- **Auditoria:** registada (`acao: 'eliminar'`, `recurso: 'consulta'`, `descricao: "Consulta eliminada (estado anterior: X)"`).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` role sem permissão / consulta concluída (RGPD); `404` não encontrada; `500` erro.
+
+### 6.15. Protocolos Clínicos (`/api/gestor/protocolos`) — F5
+
+> **Auth:** JWT (strito, sem fallback legacy). Todas as rotas protegidas por `auth` (em `protocoloRoutes.js`).
+>
+> **Permissões (F5):**
+> - `podeVer` (middleware custom) — todos os 4 roles (`admin`, `diretor_clinico`, `fisioterapeuta`, `rececionista`) podem aceder a `GET /` (listar) e `GET /:id` (detalhe). O fisioterapeuta precisa de ver os protocolos para os aplicar na consulta; a rececionista precisa de os listar para os selecionar no formulário de marcação (com `protocolo_id`). Não há filtro por fisioterapeuta (os protocolos são partilhados por toda a clínica).
+> - `isDiretorClinico` (admin + diretor_clinico) — `POST`, `PUT`, `DELETE`. Só a direção clínica gere protocolos clínicos (templates que afetam todas as notas SOAP da clínica).
+>
+> **Snapshot imutável (RGPD):** quando uma `Consulta` é criada com `protocolo_id`, o `criarConsulta` (em `consultaController.js`) invoca o helper `gerarSnapshotProtocolo(protocolo_id, empresaId)` (exportado por `protocoloController.js`) e guarda a cópia em `nota_clinica.protocolo_aplicado`. Alterações futuras no template (via `PUT /:id`) **não** afetam consultas antigas — o protocolo aplicado numa sessão tem de refletir o template no momento da marcação. O campo `ativo: false` permite retirar um protocolo da seleção sem apagar (preserva snapshots).
+>
+> **Auditoria:** todas as mutações registam em `utils/auditoria.js` (`recurso: 'modelo_protocolo'`, `acao: 'criar' | 'atualizar' | 'eliminar'`).
+
+#### `GET /api/gestor/protocolos`
+Lista os protocolos da empresa do utilizador autenticado.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Query params (opcionais):**
+  - `area` — filtra por área clínica (`musculoesqueletica`/`neurologica`/`cardioresp`/`desporto`/`pediatria`/`outro`). Ignorado se não pertencer ao enum.
+  - `ativo` — `true` filtra só ativos; `false` filtra só inativos; sem o param devolve ambos.
+- **Ordenação:** `area` (asc) + `nome` (asc).
+- **Populate:** nenhum (o protocolo só tem `empresa_id`, sem referências a outras coleções).
+- **Resposta (200 OK):**
+```json
+{
+  "protocolos": [
+    {
+      "_id": "...",
+      "empresa_id": "...",
+      "nome": "Avaliação Ombro",
+      "descricao": "Protocolo de avaliação inicial do ombro",
+      "area": "musculoesqueletica",
+      "seccoes": [
+        { "nome": "Avaliação Inicial", "items": ["Inspeção", "Palpação", "Testes ortopédicos"] }
+      ],
+      "ativo": true,
+      "createdAt": "...",
+      "updatedAt": "..."
+    }
+  ],
+  "total": 3
+}
+```
+- **Erros:** `401` não autenticado; `403` role sem permissão; `500` erro interno.
+
+#### `GET /api/gestor/protocolos/:id`
+Devolve o detalhe de um protocolo.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Resposta (200 OK):** `{ "protocolo": { ... } }`.
+- **Erros:** `400` ID inválido; `401` não autenticado; `404` não encontrado / não pertence à empresa; `500` erro.
+
+#### `POST /api/gestor/protocolos`
+Cria um novo protocolo clínico.
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Body:**
+```json
+{
+  "nome": "Avaliação Ombro",
+  "descricao": "Protocolo de avaliação inicial do ombro",
+  "area": "musculoesqueletica",
+  "seccoes": [
+    { "nome": "Avaliação Inicial", "items": ["Inspeção", "Palpação", "Testes ortopédicos"] },
+    { "nome": "Tratamento", "items": ["Mobilização", "Fortalecimento"] }
+  ],
+  "ativo": true
+}
+```
+  - `nome` — **obrigatório** (string, trimmed).
+  - `descricao` — default `''` (string, trimmed).
+  - `area` — default `'musculoesqueletica'` (`enum: ['musculoesqueletica','neurologica','cardioresp','desporto','pediatria','outro']`).
+  - `seccoes` — **obrigatório** (array, ≥1 secção). Cada secção tem de ter `nome` (string não vazia) e `items` (array de strings, ≥1 item). Items vazios são filtrados.
+  - `ativo` — default `true` (boolean).
+- **Validações:** `400` se `nome` em falta; `400` se `area` inválida; `400` se `seccoes` não for array ou estiver vazio; `400` se alguma secção não tiver `nome` ou tiver `items` vazio.
+- **Resposta (201 Created):** `{ "protocolo": { ... } }`.
+- **Auditoria:** registada (`acao: 'criar'`, `recurso: 'modelo_protocolo'`, `descricao: "Protocolo \"<nome>\" criado (<area>)"`).
+- **Erros:** `400` validações acima; `401` não autenticado; `403` role sem permissão; `500` erro.
+
+#### `PUT /api/gestor/protocolos/:id`
+Atualiza um protocolo (todos os campos opcionais, mas pelo menos um). Permite desativar (`ativo: false`) sem apagar — preserva snapshots já guardados em consultas antigas.
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Body (todos opcionais, mas pelo menos um):** `nome`, `descricao`, `area`, `seccoes`, `ativo`.
+  - Se `seccoes` vier, é revalidada (cada secção tem de ter `nome` não vazio; items vazios são filtrados).
+  - `ativo` é normalizado para boolean (`!!ativo`).
+- **Resposta (200 OK):** `{ "protocolo": { ... } }` (documento atualizado, `new: true`).
+- **Auditoria:** registada (`acao: 'atualizar'`, `recurso: 'modelo_protocolo'`, `descricao: "Protocolo \"<nome>\" atualizado"`).
+- **Erros:** `400` ID inválido / `area` inválida / `seccoes` não for array / secção sem `nome`; `401` não autenticado; `403` role sem permissão; `404` não encontrado; `500` erro.
+
+#### `DELETE /api/gestor/protocolos/:id`
+**Hard delete** do protocolo (o `ModeloProtocolo` não tem soft delete — para "desativar" sem perder histórico usa-se `PUT /:id` com `ativo: false`).
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Resposta (200 OK):** `{ "message": "Protocolo apagado com sucesso." }`.
+- **Auditoria:** registada (`acao: 'eliminar'`, `recurso: 'modelo_protocolo'`, `descricao: "Protocolo eliminado"`).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` role sem permissão; `404` não encontrado (ou `deletedCount === 0`); `500` erro.
+
+### 6.16. Documentos (`/api/gestor/documentos`) — F9
+
+> **Auth:** JWT (strito, sem fallback legacy). Todas as rotas protegidas por `auth` (em `documentoRoutes.js`).
+>
+> **Permissões (F9):**
+> - `podeVer` (middleware custom) — todos os 4 roles (`admin`, `diretor_clinico`, `fisioterapeuta`, `rececionista`) podem aceder a `GET /` (listar), `GET /:id` (detalhe), `GET /:id/download` (download do ficheiro) e `POST /upload` (carregar ficheiro). Todos os roles da clínica conseguem ver e anexar documentos (a rececionista carrega receitas enviadas pelo email, o fisio anexa fotografias clínicas, etc.).
+> - `isDiretorClinico` (admin + diretor_clinico) — `DELETE /:id`. Só a direção clínica elimina documentos (soft delete — RGPD).
+>
+> **Storage local via multer:** o `routes/documentoRoutes.js` configura o `multer` com `diskStorage` em `uploads/` (criada automaticamente se não existir); o nome do ficheiro no disco é `<timestamp>-<random>.<ext>` (não usa o `originalname` para evitar colisões/caracteres especiais). O `fileFilter` aceita apenas `application/pdf`, `image/jpeg`, `image/png`, `image/gif`, `image/webp`, `application/msword`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document` e `text/plain`. O `limits.fileSize` é 20MB. O `server.js` serve a pasta `uploads/` em estático (`app.use('/uploads', express.static(...))`).
+>
+> **Auditoria:** `POST /upload` e `DELETE /:id` registam em `utils/auditoria.js` (`recurso: 'documento'`, `acao: 'upload_documento' | 'eliminar_documento'`).
+
+#### `GET /api/gestor/documentos`
+Lista os documentos ativos da empresa do utilizador autenticado (não eliminados).
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Query params (opcionais):**
+  - `paciente_id` — filtra por paciente.
+  - `consulta_id` — filtra por consulta.
+  - `tipo` — filtra por tipo (`receita`/`relatorio`/`termo_consentimento`/`foto`/`exame`/`outro`). Ignorado se não pertencer ao enum.
+- **Ordenação:** `createdAt` (desc) — documentos mais recentes primeiro.
+- **Populate:** `uploaded_by` (só `nome`) + `paciente_id` (só `nome`).
+- **Resposta (200 OK):**
+```json
+{
+  "documentos": [
+    {
+      "_id": "...",
+      "empresa_id": "...",
+      "paciente_id": { "_id": "...", "nome": "João Silva" },
+      "consulta_id": null,
+      "uploaded_by": { "_id": "...", "nome": "Dra. Maria" },
+      "tipo": "receita",
+      "nome_original": "receita-anti-inflamatorio.pdf",
+      "url_storage": "/uploads/1700000000000-123456789.pdf",
+      "content_type": "application/pdf",
+      "tamanho_bytes": 102400,
+      "descricao": "Receita de ibuprofeno 600mg",
+      "consentimento_obtido": true,
+      "data_consentimento": "2024-01-15T10:30:00.000Z",
+      "eliminado_em": null,
+      "createdAt": "...",
+      "updatedAt": "..."
+    }
+  ],
+  "total": 1
+}
+```
+- **Erros:** `401` não autenticado; `403` role sem permissão; `500` erro interno.
+
+#### `GET /api/gestor/documentos/:id`
+Devolve o detalhe de um documento ativo.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Resposta (200 OK):** `{ "documento": { ... } }` (mesma estrutura do item acima, com `uploaded_by` e `paciente_id` populated).
+- **Erros:** `400` ID inválido; `401` não autenticado; `404` não encontrado (ou eliminado); `500` erro.
+
+#### `GET /api/gestor/documentos/:id/download`
+Faz o download do ficheiro associado ao documento (envia o binário com o nome original).
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Resposta (200 OK):** `res.download(filePath, doc.nome_original)` — o browser recebe o ficheiro com o `Content-Disposition: attachment; filename="<nome_original>"` e o `Content-Type` adequado.
+- **Erros:** `400` ID inválido; `401` não autenticado; `404` documento não encontrado **ou** ficheiro não existe no storage (mensagem "Ficheiro não encontrado no storage."); `500` erro.
+
+#### `POST /api/gestor/documentos/upload`
+Carrega um ficheiro (multipart/form-data) e cria o registo do documento.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Content-Type:** `multipart/form-data`.
+- **Body:**
+  - `file` — ficheiro binário (campo do multipart; MIME type tem de estar na lista aceite; máx. 20MB).
+  - `paciente_id` — **obrigatório** (string, ObjectId válido).
+  - `consulta_id` — opcional (string, ObjectId válido; se fornecido, tem de existir na empresa).
+  - `tipo` — opcional, default `'outro'` (`enum: ['receita','relatorio','termo_consentimento','foto','exame','outro']`).
+  - `descricao` — opcional, default `''` (string, trimmed).
+  - `consentimento_obtido` — opcional, default `false` (boolean — o frontend envia `"true"`/`"false"` como string; o controller normaliza com `!!`).
+- **Validações:**
+  - `400` se `file` em falta ("Nenhum ficheiro enviado.").
+  - `400` se `paciente_id` em falta ("paciente_id é obrigatório.").
+  - `400` se `tipo` não pertencer ao enum ("Tipo inválido.").
+  - `400` se o `paciente_id` não existir ou estiver eliminado ("Paciente não encontrado.").
+  - `400` se `consulta_id` for fornecido e não existir ("Consulta não encontrada.").
+  - O `multer` rejeita (`400` implícito via middleware) MIME types não aceites e ficheiros >20MB.
+- **Lógica de RGPD:** se `consentimento_obtido === true`, o controller carimba `data_consentimento = new Date()`. Caso contrário, fica `null`.
+- **Robustez:** se o controller falhar após o ficheiro ter sido gravado no disco (ex.: `paciente_id` inválido), o ficheiro é apagado do disco (`fs.unlinkSync(req.file.path)`) para evitar órfãos no storage.
+- **Resposta (201 Created):** `{ "documento": { ... } }` (documento criado, sem populate).
+- **Auditoria:** registada (`acao: 'upload_documento'`, `recurso: 'documento'`, `descricao: "Documento \"<nome_original>\" carregado para paciente \"<nome_paciente>\""`).
+- **Erros:** `400` validações acima; `401` não autenticado; `403` role sem permissão; `500` erro.
+
+#### `DELETE /api/gestor/documentos/:id`
+**Soft delete** do documento (não apaga o ficheiro do disco nem o documento da coleção — apenas marca `eliminado_em`).
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Resposta (200 OK):** `{ "message": "Documento eliminado.", "documento": { "_id": "..." } }`.
+- **Auditoria:** registada (`acao: 'eliminar_documento'`, `recurso: 'documento'`, `descricao: "Documento \"<nome_original>\" eliminado (soft delete)"`).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` role sem permissão; `404` não encontrado (ou já eliminado); `500` erro.
 
 ---
 
@@ -806,14 +1584,27 @@ As ações diretas do admin (falta súbita, baixa prolongada, registo manual) cr
 
 ## 9. Histórico de alterações (backend)
 
+> ⚠️ **F0 + F1 — Notas históricas:**
+> - **F0:** As entradas abaixo anteriores a F0 descrevem a era Alojamento Local. Referências a Smoobu/webhooks/sincronização correspondem a funcionalidade **removida em F0**.
+> - **F1:** As entradas entre F0 e F1 referem-se aos roles antigos `admin`/`manager`/`staff`/`gestor` e ao middleware legacy `isGestor`/`requireStaff`/`requireManager`/`requireAdmin` — todos **substituídos em F1** pelos roles `admin`/`diretor_clinico`/`fisioterapeuta`/`rececionista` e pelos middlewares `isAdmin`/`isDiretorClinico`/`isClinico`/`isRececionista` (ver `middleware/requireRole.js`).
+> - O histórico completo (incluindo commits Smoobu) está preservado no `git log`.
+
 | Data       | Versão | Alteração                                                            |
-|------------|--------|---------------------------------------------------------------------|
+|------------|--------|----------------------------------------------------------------------|
+| **F9**     | —      | **Documentos (anexos clínicos) + storage local + RGPD:** (1) Novo modelo `models/Documento.js` — `empresa_id`, `paciente_id` (obrigatório, `ref: 'Paciente'`), `consulta_id` (opcional, `ref: 'Consulta'`, default `null`), `uploaded_by` (`ref: 'Utilizador'`), `tipo` (`enum ['receita','relatorio','termo_consentimento','foto','exame','outro']` default `'outro'`), `nome_original` (string), `url_storage` (string — caminho relativo em `uploads/`, preparado para futuro S3/Cloudinary), `content_type` (MIME type, default `'application/octet-stream'`), `tamanho_bytes` (Number, default `0`), `descricao` (string), `consentimento_obtido` (Boolean default `false` — RGPD), `data_consentimento` (Date default `null` — carimbada no upload quando `consentimento_obtido === true`), `eliminado_em` (Date default `null` — soft delete). Índices compostos `{empresa_id, paciente_id, eliminado_em}` e `{empresa_id, consulta_id, eliminado_em}`. (2) Novo `controllers/documentoController.js` — 5 funções (`listarDocumentos` com filtros `paciente_id`/`consulta_id`/`tipo` + populate `uploaded_by`/`paciente_id` ordenado por `createdAt` desc, `obterDocumento` detalhe, `downloadDocumento` via `res.download(filePath, nome_original)`, `uploadDocumento` com validação de `paciente_id`/`consulta_id`/`tipo` + carimbo de `data_consentimento` + apagar ficheiro em caso de falha pós-gravação, `eliminarDocumento` soft delete via `findOneAndUpdate` com `$set eliminado_em`); auditoria registada (`recurso: 'documento'`, `acao: 'upload_documento' | 'eliminar_documento'`). (3) Novas `routes/documentoRoutes.js` montadas em `/api/gestor/documentos` — middleware custom `podeVer` (4 roles: admin/diretor_clinico/fisioterapeuta/rececionista) para `GET /`, `GET /:id`, `GET /:id/download`, `POST /upload`; `isDiretorClinico` (admin + diretor_clinico) para `DELETE /:id`. Configuração `multer`: `diskStorage` em `uploads/` (criada automaticamente), nome de ficheiro `<timestamp>-<random>.<ext>`, `fileFilter` com `application/pdf`/`image/jpeg`/`image/png`/`image/gif`/`image/webp`/`application/msword`/`application/vnd.openxmlformats-officedocument.wordprocessingml.document`/`text/plain`, `limits.fileSize` 20MB. (4) `server.js` — mount `app.use('/api/gestor/documentos', documentoRoutes)` + serve estático `app.use('/uploads', express.static(...))`. (5) Storage local em `uploads/` (com `.gitignore`) — o campo `url_storage` guarda um caminho relativo que poderá ser trocado por uma URL S3/Cloudinary sem alterar a API. 130/130 testes ✓ (+14 testes cobrindo upload de PDF e JPEG, listagem com filtros, download, soft delete, permissões). |
+| **F8**     | —      | **Limpeza de modelos legacy (Tarefa → Consulta, ModeloChecklist extinto):** (1) **Modelos removidos** — `models/Tarefa.js`, `models/TarefaArquivo.js`, `models/ModeloChecklist.js` (e respetivas coleções) eliminados do código-base. (2) **Controllers removidos** — `controllers/tarefaController.js` e `controllers/checklistController.js`. (3) **Utils removidos** — `utils/loadBalancer.js` (motor de atribuição legacy) e `utils/scheduler.js` (scheduler sequencial). (4) **Jobs legacy removidos** — `jobs/dailyBriefing.js`, `jobs/agendaAmanha.js`, `jobs/caoGuarda.js`, `jobs/arquivista.js` (sobre `Tarefa`) — substituídos pelos 5 cron jobs F7 sobre `Consulta` (mantêm-se `briefingDiarioFisio`, `lembreteConsultasAmanha`, `lembrete2hConsulta`, `caoGuardaConsultas`, `arquivistaConsultas`). (5) **Script removido** — `scripts/seedChecklists.js` + entry `seed:checklists` do `package.json`. (6) **Modelo `Propriedade`** — removido o campo `modelo_checklist_id` (referenciava `ModeloChecklist` extinto); o modelo é mantido como **alias de Sala** (ainda referenciado por `Consulta.sala_id`). (7) **Controllers limpos** — `gestorController` (~950 linhas removidas de funções Tarefa-dependentes; `getDashboard` reescrito com `Consulta`; `alternarEstadoPropriedade` simplificado); `ausenciaController` (removida redistribuição via load balancer — `aprovarRejeitarAusencia` agora só atualiza estado); `authController` (stubs para `minhasTarefas`/`meuCalendario` — arrays vazios ou 410 Gone); `staffController` (removidas `concluirTarefa`/`reportarAvaria`/`reportarAtraso`/`toggleChecklistItem`); `relatorioController` (rewrite com `Consulta` — `totalTarefas`→`totalConsultas`, `porStaff`→`porFisio`, `porPropriedade`→`porSala`, retrocompatível no `construirContexto`); `superAdminController` (`Tarefa.deleteMany`→`Consulta.deleteMany` no hard-reset; `num_tarefas`→`num_consultas` no `listarEmpresas`). (8) **Routes limpas** — `gestorRoutes` (removidas ~15 routes Tarefa/Checklist/Webhooks + forçar cron legacy; mantido `POST /propriedades/default-checklist` que usa `checklist` array de strings); `adminRoutes` (hard-reset usa `Consulta`; removido `POST /seed-checklists` + forçar cron legacy); `staffRoutes` (removidas routes Tarefa). (9) **Frontend** — páginas removidas: `/gestor/calendario` (antigo de Tarefas), `/gestor/tarefas`, `/gestor/configuracoes/checklists`, `/gestor/webhooks`, `/admin/webhooks`, `/admin/sistema`; sidebar do gestor atualizado: removidos "Calendário" (antigo)/"Tarefas"/"Checklists", renomeado "Propriedades"→"Salas", adicionado "Configurações". (10) **Testes** — 116/116 ✓ (removidos ~84 testes Tarefa-dependentes; mantidos F2–F7 + health/auth/propriedades). (11) **Modelos finais do projeto:** `Empresa`, `Utilizador`, `Propriedade` (Sala), `Paciente`, `Consulta`, `ConsultaArquivo`, `HorarioFisioterapeuta`, `ModeloProtocolo`, `Ausencia`, `Notificacao`, `Auditoria`, `WebhookLog`. |
+| **F7**     | —      | **Cron Jobs de Consultas + `ConsultaArquivo`:** (1) Novo modelo `models/ConsultaArquivo.js` — clone exato do schema `Consulta` com campo extra `arquivado_em` (Date, default `Date.now`); coleção dedicada `consultas_arquivo` (via `mongoose.model('ConsultaArquivo', consultaArquivoSchema, 'consultas_arquivo')`). Preserva todos os campos da `Consulta` (incluindo `nota_clinica` SOAP com `protocolo_aplicado[]` + `cedula_assinante`) para auditoria legal/RGPD (retenção 10–20 anos). Índices compostos `{empresa_id, fisioterapeuta_id, data_hora_inicio: -1}`, `{empresa_id, paciente_id, data_hora_inicio: -1}`, `{arquivado_em: 1}`. Sem endpoints REST dedicados — o movimento é feito exclusivamente pelo cron job `arquivistaConsultas`. (2) 5 novos cron jobs em `jobs/` (todos com `timezone: 'Europe/Lisbon'` e `require('../utils/notificar')` lazy para `jest.spyOn`): (2a) `briefingDiarioFisio.js` — `0 8 * * *` 08:00, push a cada fisio (`fisioterapeuta`/`diretor_clinico` ativo não eliminado) com consultas **hoje** (`estado` ∈ `{marcada, confirmada, em_curso}`), mensagem `📋 Tens X consulta(s) hoje. Entra na app para ver a agenda.`, agrupado por fisio, devolve `{processados, notificados, consultas}`; (2b) `lembreteConsultasAmanha.js` — `0 19 * * *` 19:00, push a cada fisio com consultas **amanhã** (`estado` ∈ `{marcada, confirmada}` e `lembrete_24h_enviado: {$ne: true}`), mensagem `📅 Lembrete: tens X consulta(s) amanhã.`, marca `lembrete_24h_enviado=true` em lote via `Consulta.updateMany` (idempotência); (2c) `lembrete2hConsulta.js` — `*/15 * * * *` a cada 15 min, procura consultas que começam na janela +1h45 a +2h15 (105–135 min, sobreposição garante nenhuma escapar), `estado` ∈ `{marcada, confirmada}` e `lembrete_2h_enviado: {$ne: true}`, push ao fisio com mensagem `Consulta com [paciente] às [HH:mm] — faltam ~2 horas.`, marca `lembrete_2h_enviado=true`; (2d) `caoGuardaConsultas.js` — `0 2 * * *` 02:00, verifica (1) consultas de **hoje** sem fisio ativo (órfãs) e (2) consultas de datas **passadas** não concluídas (esquecidas), agrupa alertas por `empresa_id`, notifica apenas `diretor_clinico`/`admin` ativos (rota `/gestor/consultas`, `tipo: 'aviso'`) com mensagem `🐕 Alerta: X consulta(s) órfã(s), Y consulta(s) esquecida(s). Verifica o painel.`; (2e) `arquivistaConsultas.js` — `0 3 * * 0` domingo 03:00, move `Consulta` com `estado` ∈ `{concluida, cancelada, faltou, nao_compareceu}` e `data_hora_inicio` anterior a 6 meses para `consultas_arquivo` (preserva todos os campos + `arquivado_em`), apaga originais só depois de copiados com sucesso (robustez — reprocessa falhadas no domingo seguinte), devolve `{arquivadas, erros}`. (3) `server.js` — os 5 jobs montados no arranque dentro de `if (require.main === module)` (após `mongoose.connect` com sucesso, depois dos 4 jobs legacy `dailyBriefing`/`agendaAmanha`/`caoGuarda`/`arquivista` que se mantêm até F8). Jobs legacy (Tarefa) não removidos — coexistem até F8 (limpeza). 200/200 testes ✓ (+8 testes: briefing fisio com consultas hoje, lembrete 24h marca `lembrete_24h_enviado=true`, lembrete 2h filtra janela e marca `lembrete_2h_enviado=true`, cão de guarda deteta órfãs + esquecidas e notifica diretores, arquivista move consultas >6 meses para `consultas_arquivo` preservando SOAP). |
+| **F5**     | —      | **Protocolos Clínicos + snapshot na Consulta:** (1) Novo modelo `models/ModeloProtocolo.js` (evolução do `ModeloChecklist`) — `empresa_id`, `nome`, `descricao`, `area` (`enum ['musculoesqueletica','neurologica','cardioresp','desporto','pediatria','outro']` default `'musculoesqueletica'`), `seccoes[{nome, items[]}]`, `ativo` (boolean default `true`). Índice composto `{empresa_id, ativo, area}` + índices individuais em `empresa_id`/`nome`/`area`/`ativo`. (2) Novo `controllers/protocoloController.js` — 5 funções CRUD (`listarProtocolos` com filtros `area`/`ativo` ordenado por `area`+`nome`, `obterProtocolo`, `criarProtocolo` com validação de `nome` obrigatório + `area` válida + `seccoes` array não vazio + cada secção com `nome` e `items` não vazios, `atualizarProtocolo` com normalização de `ativo`/`seccoes`, `apagarProtocolo` hard delete) + helper exportado `gerarSnapshotProtocolo(protocoloId, empresaId)` (devolve array de `{nome, items:[{texto, concluido:false}]}` ou `null` se não existir/não pertencer à empresa); auditoria registada (`recurso: 'modelo_protocolo'`). (3) Novas `routes/protocoloRoutes.js` montadas em `/api/gestor/protocolos` — middleware custom `podeVer` (4 roles: admin/diretor_clinico/fisioterapeuta/rececionista) para `GET /` e `GET /:id` (fisio precisa de ver para aplicar; rececionista para selecionar ao marcar); `isDiretorClinico` para POST/PUT/DELETE (só direção clínica gere protocolos). (4) `server.js` — mount `app.use('/api/gestor/protocolos', protocoloRoutes)`. (5) Integração na Consulta — `consultaController.criarConsulta` aceita `protocolo_id` opcional no body → invoca `gerarSnapshotProtocolo` e guarda em `nota_clinica.protocolo_aplicado` (400 se protocolo não encontrado/não pertence à empresa); `consultaController.atualizarNotaClinica` (`PATCH /:id/nota-clinica`) aceita `protocolo_aplicado` para marcar items como `concluido` durante a sessão (substitui o snapshot, normaliza `texto`/`concluido`). Snapshot imutável por edições futuras no template (RGPD/legal). 192/192 testes ✓ (+16 testes: CRUD de protocolos, validações de `nome`/`area`/`seccoes`, permissões `podeVer`/`isDiretorClinico`, snapshot na criação de consulta com `protocolo_id`, marcação de items concluídos via PATCH, protocolo inexistente → 400). |
+| **F4**     | —      | **Consultas + validação de conflitos + cédula profissional:** (1) Novo modelo `models/Consulta.js` — `empresa_id`, `sala_id` (`ref: 'Propriedade'` alias Sala até F8), `fisioterapeuta_id` (`ref: 'Utilizador'`), `paciente_id` (`ref: 'Paciente'`), `data_hora_inicio`/`data_hora_fim` (Date), `duracao_minutos` (default `45`, `min: 15`), `tipo` (`enum ['primeira_consulta','sessao','reavaliacao','alta','grupo']` default `'sessao'`), `estado` (`enum ['marcada','confirmada','em_curso','concluida','cancelada','faltou','nao_compareceu']` default `'marcada'`), `motivo_cancelamento` (`enum ['paciente','clinica','fisio','outro']`), `presenca` (`enum ['pendente','presente','ausente','atrasado']`), `nota_clinica` (`{subjetivo, objetivo, avaliacao, plano, tratamento_efetuado, protocolo_aplicado[], cedula_assinante}` — imutável após `estado='concluida'`), `criada_por`, `concluida_em`, `cancelada_em`, `cancelada_por`, `lembrete_24h_enviado`, `lembrete_2h_enviado`, `observacoes`. Índices compostos `{empresa_id, fisioterapeuta_id, data_hora_inicio}`, `{empresa_id, sala_id, data_hora_inicio}`, `{empresa_id, paciente_id, data_hora_inicio (-1)}`, `{estado, data_hora_inicio}`. (2) `models/Utilizador.js` — adicionado método de instância `temCedulaValida()` (devolve `true` para admin/rececionista; para fisio/diretor_clinico exige `perfil_profissional.cedula` preenchido). (3) Novo `controllers/consultaController.js` — função interna `validarConflitos` (4 verificações em simultâneo: fisio disponível via motor F3 + sala sem sobreposição + fisio sem sobreposição + paciente sem sobreposição, devolve `{ok, warnings, horario}`); 7 funções exportadas (`listarConsultas` com filtros fisioterapeuta_id/sala_id/paciente_id/estado/inicio/fim + fisio vê só as suas, `obterConsulta`, `criarConsulta` com `forcar` para soft block 409/200, `atualizarConsulta` com re-validação temporal + `excluirConsultaId`, `atualizarNotaClinica` endpoint separado com `isClinico` + validação de cédula + snapshot de `cedula_assinante`, `eliminarConsulta` bloqueia concluídas RGPD, `validarConflitosEndpoint` GET para o frontend validar em tempo real); auditoria registada (`recurso: 'consulta'`). (4) Novas `routes/consultaRoutes.js` montadas em `/api/gestor/consultas` — middleware custom `podeVer` (4 roles) para GET/listar/validar/detalhe, `isRececionista` para POST/PUT, `isClinico` para `PATCH /:id/nota-clinica`, `isDiretorClinico` para DELETE. (5) `server.js` — mount `app.use('/api/gestor/consultas', consultaRoutes)`. 176/176 testes ✓ (+25 testes de Consulta: CRUD, validação de conflitos fisio/sala/paciente, soft block com `forcar`, nota clínica SOAP com cédula, imutabilidade de concluídas, RGPD no delete). |
+| **F3**     | —      | **Horários de Fisioterapeuta + motor de disponibilidade:** (1) Novo modelo `models/HorarioFisioterapeuta.js` — `empresa_id`, `fisioterapeuta_id`, `tipo` (`enum ['recorrente','excecao']` default `'recorrente'`), `dia_semana` (0-6, `null` se `excecao`), `hora_inicio`/`hora_fim` (formato `HH:mm` validado por regex), `data` (Date, `null` se `recorrente`), `disponivel` (boolean default `true` — para `excecao`), `ativo` (boolean default `true` indexado — soft toggle), `nota` (string). Validação `pre('validate')`: `recorrente` exige `dia_semana` e força `data=null`; `excecao` exige `data` e força `dia_semana=null`. Índices compostos `{fisioterapeuta_id, dia_semana, ativo}`, `{empresa_id, fisioterapeuta_id, tipo}`, `{fisioterapeuta_id, data}`. (2) `utils/disponibilidade.js` expandido — adicionadas `horaLisboa(instante)` (devolve `HH:mm` no fuso de Lisboa via `Intl.DateTimeFormat`), `compararHoras(a, b)` (compara `HH:mm` em minutos), `obterHorarioDia(fisioId, data)` (3 sub-camadas: exceção do dia → regra recorrente → sem horário), `verificarConflitoHorario(fisioId, dataHoraInicio, duracaoMin)` (valida se a consulta cabe no bloco de trabalho), `verificarDisponibilidadeCompleta(utilizador, dataHoraInicio, duracaoMin)` (ausência aprovada → folga fixa semanal → horário de trabalho, com falha cedo). (3) Novo `controllers/horarioController.js` — CRUD completo (`listarHorarios`, `obterHorario`, `criarHorario`, `atualizarHorario`, `eliminarHorario` hard delete, `verificarDisponibilidade`); valida `fisioterapeuta_id` como fisio/diretor_clinico ativo da empresa; fisioterapeuta vê só os seus; auditoria registada. (4) Novas `routes/horarioRoutes.js` montadas em `/api/gestor/horarios` — middleware custom `podeVer` (4 roles) para GET/listar/disponibilidade, `isDiretorClinico` para POST/PUT/DELETE. (5) `server.js` — mount `app.use('/api/gestor/horarios', horarioRoutes)`. 151/151 testes ✓ (+21 testes de Horário: CRUD, permissões, motor de disponibilidade com exceções, conflitos de horário, dia sem regra). |
+| **F2**     | —      | **Pacientes (Fisioterapia):** (1) Novo modelo `models/Paciente.js` — `empresa_id`, `nome`, `data_nascimento`, `genero` (`enum ['M','F','Outro','NA']` default `'NA'`), `num_utente` (SNS), `nif`, `telefone` (obrigatório), `email`, `morada`, `contacto_emergencia` (`{nome, telefone, relacao}`), `historico_medico`, `alergias` (`[String]`), `consentimento_dados` (`{concedido, data, versao_termos}`), `ativo`, `eliminado_em` (soft delete), `observacoes`, `origem` (`enum ['walk_in','referenciacao','online','outro']` default `'walk_in'`). Índices compostos `{empresa_id, nome}`, `{empresa_id, num_utente}`, `{empresa_id, ativo, eliminado_em}`. (2) Novo `controllers/pacienteController.js` — CRUD completo (`listarPacientes`, `obterPaciente`, `criarPaciente`, `atualizarPaciente`, `eliminarPaciente` soft delete, `alternarEstadoPaciente`) + helpers `temAcessoClinico` e `sanitizarParaNaoClinico` (remove `historico_medico`/`alergias`/`contacto_emergencia` para rececionistas) + auditoria via `utils/auditoria.js`. (3) Novas `routes/pacienteRoutes.js` montadas em `/api/gestor/pacientes` — middleware custom `podeVer` (4 roles) para GET/POST/PUT, `isRececionista` para `PATCH /:id/estado`, `isDiretorClinico` para `DELETE /:id` (soft delete). (4) `server.js` — mount `app.use('/api/gestor/pacientes', pacienteRoutes)`. Respostas incluem flag `dados_clinicos: boolean`. 130/130 testes ✓ (+19 testes de Paciente). |
+| **F1**     | —      | **Migração de roles (Fisioterapia):** (1) Modelo `Utilizador` — enum migrado de `['admin','manager','staff']` para `['admin','diretor_clinico','fisioterapeuta','rececionista']` (default `'rececionista'`); adicionado bloco `perfil_profissional` (`cedula`, `especialidades`, `biografia`, `cor_calendario` default `'#3b82f6'`, `ativo_clinico` default `true`). (2) Modelo `Empresa` — adicionado `logo_url` e bloco `config` (`horario_padrao`, `duracao_consulta_padrao` default `45`/min `15`, `tolerancia_atraso_min` default `10`, `fuso_horario` default `'Europe/Lisbon'`). (3) `middleware/requireRole.js` — removidos `isGestor`/`requireStaff`/`requireManager`/`requireAdmin` (legacy); adicionados `isAdmin` (só admin), `isDiretorClinico` (admin+diretor_clinico), `isClinico` (admin+diretor_clinico+fisioterapeuta), `isRececionista` (admin+diretor_clinico+rececionista). (4) `utils/loadBalancer.js` + controllers — queries de role: `'staff'` → `'fisioterapeuta'`; `'gestor'` → `'diretor_clinico'`; `['staff','gestor']` → `['fisioterapeuta','diretor_clinico']`; `isGestor` → `isDiretorClinico` em todas as routes (`gestorRoutes.js`, `ausenciaRoutes.js`). (5) `setupClienteZero` atualizado: 3 utilizadores (`admin@fisiocell.pt` admin, `gestor@fisiocell.pt` diretor_clinico, `joao.fisio@fisiocell.pt` fisioterapeuta). 111/111 testes ✓. |
 | Inicial    | 1.0.0  | Criação da estrutura base: `package.json`, `server.js`, `.env.example`, `.gitignore`. Ligação ao MongoDB e rota de teste `GET /`. |
 | v1.1.0     | 1.1.0  | Lógica central: modelos `Propriedade`, `Utilizador`, `Ausencia`, `Tarefa`; `controllers/webhookController.js` (fluxo estrito de atribuição com filtro de ausências + load balancing); `routes/webhookRoutes.js` (`POST /webhooks/smoobu`); resposta 200 imediata + processamento assíncrono; tratamento de erros robusto. |
 | v1.2.0     | 1.2.0  | Painel de Administração: modelo `Empresa` (nome, nif, plano_ativo); `controllers/adminController.js` (`getPropriedades`, `criarPropriedade`, `setupClienteZero`); `routes/adminRoutes.js` (`GET/POST /api/admin/propriedades`, `GET /api/admin/setup`); montagem em `server.js`. `empresa_id` via header `x-empresa-id` (sem JWT ainda). |
-| v1.3.0     | 1.3.0  | **Autenticação JWT:** dependências `jsonwebtoken` + `bcryptjs`; modelo `Utilizador` com `email` único + `password_hash`; `middleware/auth.js` (verifica JWT, injeta `req.user`, fallback legacy `x-empresa-id`); `controllers/authController.js` (`login` com bcrypt + JWT, `/me`); `routes/authRoutes.js` (`POST /api/auth/login`, `GET /api/auth/me`); `/api/admin` protegido por `auth` com `empresa_id` do token; `setupClienteZero` cria Staff com `password_hash` (`joao.limpezas@autocell.pt` / `autocell123`); `.env.example` com `JWT_SECRET` + `JWT_EXPIRACAO`. |
+| v1.3.0     | 1.3.0  | **Autenticação JWT:** dependências `jsonwebtoken` + `bcryptjs`; modelo `Utilizador` com `email` único + `password_hash`; `middleware/auth.js` (verifica JWT, injeta `req.user`, fallback legacy `x-empresa-id`); `controllers/authController.js` (`login` com bcrypt + JWT, `/me`); `routes/authRoutes.js` (`POST /api/auth/login`, `GET /api/auth/me`); `/api/admin` protegido por `auth` com `empresa_id` do token; `setupClienteZero` cria Staff com `password_hash` (`joao.limpezas@fisiocell.pt` / `fisiocell123`); `.env.example` com `JWT_SECRET` + `JWT_EXPIRACAO`. |
 | v1.3.1     | 1.3.1  | **Fix bootstrap:** o `auth` deixou de ser aplicado a todo `/api/admin` e passou a ser aplicado apenas às rotas `/propriedades` (dentro de `adminRoutes.js`). A rota `/api/admin/setup` voltou a ser **PÚBLICA** (era o endpoint de bootstrap que criava o primeiro utilizador — não podia exigir token). Corrige o erro `401 Autenticação obrigatória` ao chamar `/setup`. |
-| v1.4.0     | 1.4.0  | **Novo role `manager`:** modelo `Utilizador` enum `['admin','manager','staff']`; `webhookController` inclui managers na atribuição de tarefas (load balancing); `setupClienteZero` cria 3 utilizadores (admin `admin@autocell.pt` + manager `manager@autocell.pt` + staff `joao.limpezas@autocell.pt`, todos com password `autocell123`). |
+| v1.4.0     | 1.4.0  | **Novo role `manager`:** modelo `Utilizador` enum `['admin','manager','staff']`; `webhookController` inclui managers na atribuição de tarefas (load balancing); `setupClienteZero` cria 3 utilizadores (admin `admin@fisiocell.pt` + manager `manager@fisiocell.pt` + staff `joao.limpezas@fisiocell.pt`, todos com password `fisiocell123`). |
 | v1.4.1     | 1.4.1  | **Payload Smoobu oficial:** `extrairDadosReserva` atualizada para a estrutura documentada (`{ action, data: { id, arrival, apartment: { id, name } } }`). Mapeamento primário: `payload.data.apartment.id`, `payload.data.arrival`, `payload.data.id`. Fallbacks `??` mantidos para variantes (`content.*`, campos achatados). |
 | v1.5.0     | 1.5.0  | **Gestão de Equipa:** `adminController` com `getEquipa` (lista utilizadores, `.select('-password_hash')`) e `criarMembroEquipa` (valida nome/email/password/role, hash bcrypt, email único); `adminRoutes` com `GET/POST /api/admin/equipa` (protegidos por `auth`). |
 | v1.6.0     | 1.6.0  | **CRUD completo de Utilizadores:** `adminController` com `atualizarMembroEquipa` (PUT — nome/email/role/password opcional com nova hash bcrypt), `alternarEstadoMembro` (PATCH — ativa/desativa, inativos não fazem login), `eliminarMembroEquipa` (DELETE — não permite auto-eliminação); `adminRoutes` com `PUT/PATCH/DELETE /api/admin/equipa/:id` (protegidos por `auth`). Validação de pertença à empresa em todas as operações. |

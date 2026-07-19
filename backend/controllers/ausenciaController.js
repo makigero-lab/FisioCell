@@ -1,9 +1,9 @@
 /**
- * Ausência Controller — Autocell
+ * Ausência Controller — FisioCell
  *
  * Gestão de Folgas e Férias da equipa.
  *
- * Endpoints (montados em /api/admin/ausencias):
+ * Endpoints (montados em /api/gestor/ausencias):
  *   GET    /            — lista ausências da empresa (populate utilizador)
  *   POST   /            — regista nova ausência (valida intervalo + pertença)
  *   DELETE /:id         — elimina ausência
@@ -11,12 +11,15 @@
  * O `empresa_id` vem do JWT (via `req.user.empresa_id`, injetado pelo
  * middleware `auth`). v1.10.0: fallback legacy `x-empresa-id` REMOVIDO.
  * Todas as operações validam que a ausência / utilizador pertence à mesma empresa.
+ *
+ * F8 — Limpeza: removida a lógica de redistribuição/desatribuição de Tarefas
+ * (Tarefa eliminado em F8, load balancer extinto). As ausências são apenas
+ * registadas/aprovadas — o gestor gere manualmente as Consultas afetadas.
  */
 
 const mongoose = require('mongoose');
 const Ausencia = require('../models/Ausencia');
 const Utilizador = require('../models/Utilizador');
-const Tarefa = require('../models/Tarefa');
 const { registarAuditoria } = require('../utils/auditoria');
 
 /**
@@ -140,7 +143,7 @@ exports.registarAusencia = async (req, res) => {
     const utilizador = await Utilizador.findOne({
       _id: utilizador_id,
       empresa_id: empresaId,
-      role: { $in: ['staff', 'gestor'] },
+      role: { $in: ['fisioterapeuta', 'diretor_clinico'] },
     });
     if (!utilizador) {
       return res.status(400).json({
@@ -211,17 +214,8 @@ exports.registarAusencia = async (req, res) => {
       notas: notas ? String(notas).trim() : '',
     });
 
-    // Prompt 97 — Desatribui as tarefas do utilizador no período (SEM load
-    // balancer): passam a utilizador_id = null + estado = 'por_atribuir'.
-    // O recálculo fica a cargo do Gestor (manual) ou do Fail-Safe noturno.
-    const desatribuicao = await desatribuirTarefasPeriodo(utilizador_id, inicio, fim);
-    if (desatribuicao.desatribuidas > 0) {
-      console.log(
-        `📤 [registarAusencia] ${desatribuicao.desatribuidas} tarefa(s) desatribuída(s) ` +
-          `(utilizador ${utilizador_id}, período ${inicio.toISOString().slice(0, 10)} ` +
-          `a ${fim.toISOString().slice(0, 10)}).`
-      );
-    }
+    // F8 — Sem redistribuição de Tarefas (Tarefa eliminado). O gestor gere
+    // manualmente as Consultas afetadas pelo período de ausência.
 
     // Resposta com utilizador populado (para o frontend não precisar de refetch).
     const resp = await Ausencia.findById(nova._id)
@@ -236,7 +230,6 @@ exports.registarAusencia = async (req, res) => {
           ? { _id: String(u._id), nome: u.nome, email: u.email, role: u.role }
           : null,
       },
-      desatribuicao,
     });
   } catch (err) {
     console.error('❌ registarAusencia:', err.message);
@@ -300,24 +293,19 @@ exports.eliminarAusencia = async (req, res) => {
 /* ------------------------------------------------------------------ */
 
 /**
- * PATCH /api/admin/ausencias/:id/estado
+ * PATCH /api/gestor/ausencias/:id/estado
  *
  * Aprova ou rejeita um pedido de ausência (criado pelo staff como 'pendente').
  *
  * Body: { estado: 'aprovada' | 'rejeitada' }
  *
- * Lógica (Prompt 97 — "Desligar a Histeria Automática"):
- *   - Se 'aprovada': NÃO chama o load balancer. Apenas desatribui as tarefas
- *     futuras do utilizador no período [data_inicio, data_fim]: passam a
- *     utilizador_id = null + estado = 'por_atribuir'. O recálculo/atribuição
- *     fica a cargo do Gestor (manual) ou do Fail-Safe noturno. Isto evita
- *     disparos automáticos e spam de notificações.
- *   - Se 'rejeitada': apenas atualiza o estado (não mexe nas tarefas).
+ * F8 — Limpeza: removida a lógica de desatribuição de Tarefas (Tarefa
+ * eliminado em F8, load balancer extinto). Apenas atualiza o estado da
+ * ausência. O gestor gere manualmente as Consultas afetadas.
  *
  * Resposta 200:
  *   {
- *     mensagem, ausencia,
- *     redistribuicao: { total, desatribuidas } | null
+ *     mensagem, ausencia
  *   }
  */
 exports.aprovarRejeitarAusencia = async (req, res) => {
@@ -349,7 +337,6 @@ exports.aprovarRejeitarAusencia = async (req, res) => {
       return res.status(200).json({
         mensagem: `Ausência já estava ${novoEstado}.`,
         ausencia,
-        redistribuicao: null,
       });
     }
 
@@ -357,16 +344,7 @@ exports.aprovarRejeitarAusencia = async (req, res) => {
     ausencia.estado = novoEstado;
     await ausencia.save();
 
-    let redistribuicao = null;
-
-    // Se aprovada → desatribui tarefas do período (SEM load balancer).
-    if (novoEstado === 'aprovada') {
-      redistribuicao = await desatribuirTarefasPeriodo(
-        ausencia.utilizador_id,
-        ausencia.data_inicio,
-        ausencia.data_fim
-      );
-    }
+    // F8 — Sem desatribuição de Tarefas (Tarefa eliminado em F8).
 
     // Auditoria.
     const utilizador = await Utilizador.findById(ausencia.utilizador_id).select('nome').lean();
@@ -377,15 +355,12 @@ exports.aprovarRejeitarAusencia = async (req, res) => {
       acao: novoEstado === 'aprovada' ? 'aprovar_ausencia' : 'rejeitar_ausencia',
       recurso: 'ausencia',
       recurso_id: ausencia._id,
-      descricao: `Ausência de "${utilizador?.nome ?? '?'}" ${novoEstado}${
-        redistribuicao ? `: ${redistribuicao.desatribuidas} tarefa(s) desatribuída(s)` : ''
-      }`,
+      descricao: `Ausência de "${utilizador?.nome ?? '?'}" ${novoEstado}`,
       detalhes: {
         utilizador_id: String(ausencia.utilizador_id),
         data_inicio: ausencia.data_inicio,
         data_fim: ausencia.data_fim,
         tipo: ausencia.tipo,
-        redistribuicao,
       },
     });
 
@@ -399,7 +374,6 @@ exports.aprovarRejeitarAusencia = async (req, res) => {
         '✅ Ausência aprovada',
         `O teu pedido de ${ausencia.tipo} (${dataInicioFmt} a ${dataFimFmt}) foi aprovado.`,
         '/staff/ausencias',
-        // Prompt 115 — Decisão de ausência é "principal" → cria in-app.
         { criarInApp: true, tipo: 'sistema' }
       );
     } else {
@@ -415,10 +389,9 @@ exports.aprovarRejeitarAusencia = async (req, res) => {
     return res.status(200).json({
       mensagem:
         novoEstado === 'aprovada'
-          ? `Ausência aprovada. ${redistribuicao.desatribuidas} tarefa(s) desatribuída(s) (por atribuir).`
+          ? 'Ausência aprovada.'
           : 'Ausência rejeitada.',
       ausencia,
-      redistribuicao,
     });
   } catch (err) {
     console.error('❌ aprovarRejeitarAusencia:', err.message);
@@ -439,7 +412,7 @@ exports.aprovarRejeitarAusencia = async (req, res) => {
  * Regras:
  *   - Só pode cancelar ausências com estado 'pendente', 'pendente_emergencia'
  *     ou 'aprovada' (NÃO pode cancelar 'rejeitada' nem 'cancelada').
- *   - Staff (role 'staff') só pode cancelar as SUAS ausências
+ *   - Staff (role 'fisioterapeuta') só pode cancelar as SUAS ausências
  *     (valida utilizador_id === req.user.id).
  *   - Gestor/admin pode cancelar qualquer ausência da sua empresa
  *     (valida empresa_id).
@@ -467,7 +440,7 @@ exports.cancelarAusencia = async (req, res) => {
     const empresaId = req.user && req.user.empresa_id;
 
     const filtro = { _id: id };
-    if (role === 'staff') {
+    if (role === 'fisioterapeuta') {
       if (!userId) {
         return res.status(401).json({ erro: 'Não autenticado.' });
       }
@@ -498,18 +471,9 @@ exports.cancelarAusencia = async (req, res) => {
     ausencia.estado = 'cancelada';
     await ausencia.save();
 
-    // Se estava aprovada, avisa que as tarefas desatribuídas não são
-    // automaticamente reatribuídas — o gestor tem de o fazer manualmente.
-    let reatribuicaoAviso = null;
-    if (estadoAnterior === 'aprovada') {
-      reatribuicaoAviso =
-        'A ausência estava aprovada e as tarefas do período foram desatribuídas. ' +
-        'Reatribui manualmente ou usa "Auto-Atribuir Pendentes".';
-      console.log(
-        `⚠️  [cancelarAusencia] Ausência ${ausencia._id} estava aprovada — ` +
-          `tarefas desatribuídas NÃO foram reatribuídas automaticamente.`
-      );
-    }
+    // F8 — Sem reatribuição automática de Tarefas (Tarefa eliminado em F8).
+    // Se a ausência estava aprovada, o gestor pode rever as Consultas
+    // afetadas manualmente no painel de Consultas.
 
     // Auditoria.
     const utilizador = await Utilizador.findById(ausencia.utilizador_id)
@@ -517,7 +481,7 @@ exports.cancelarAusencia = async (req, res) => {
       .lean();
     registarAuditoria({
       utilizador_id: userId,
-      utilizador_nome: req.user.nome || (role === 'staff' ? 'Staff' : 'Admin'),
+      utilizador_nome: req.user.nome || (role === 'fisioterapeuta' ? 'Staff' : 'Admin'),
       empresa_id: ausencia.empresa_id,
       acao: 'cancelar_ausencia',
       recurso: 'ausencia',
@@ -534,8 +498,8 @@ exports.cancelarAusencia = async (req, res) => {
       },
     });
 
-    // Notificação push ao staff dono da ausência (se não for ele a cancelar).
-    if (role !== 'staff' && String(ausencia.utilizador_id) !== String(userId)) {
+    // Notificação push ao fisioterapeuta dono da ausência (se não for ele a cancelar).
+    if (role !== 'fisioterapeuta' && String(ausencia.utilizador_id) !== String(userId)) {
       const { notificarUtilizador } = require('../utils/notificar');
       const dataInicioFmt = new Date(ausencia.data_inicio).toLocaleDateString('pt-PT');
       const dataFimFmt = new Date(ausencia.data_fim).toLocaleDateString('pt-PT');
@@ -562,7 +526,6 @@ exports.cancelarAusencia = async (req, res) => {
           ? { _id: String(u._id), nome: u.nome, email: u.email, role: u.role }
           : null,
       },
-      reatribuicaoAviso,
     });
   } catch (err) {
     console.error('❌ cancelarAusencia:', err.message);
@@ -570,49 +533,6 @@ exports.cancelarAusencia = async (req, res) => {
   }
 };
 
-/* ------------------------------------------------------------------ */
-/* Helper: desatribuir tarefas de um utilizador num período           */
-/* (Prompt 97 — substitui o antigo redistribuirTarefasPeriodo)        */
-/* ------------------------------------------------------------------ */
-
-/**
- * Desatribui as tarefas atribuídas de um utilizador num período
- * [inicio, fim]: passa utilizador_id = null + estado = 'por_atribuir'.
- *
- * Prompt 97 — NÃO chama o load balancer (evita disparos automáticos e spam
- * de notificações). O recálculo/atribuição fica a cargo do Gestor (manual,
- * via "Auto-Atribuir Pendentes") ou do Fail-Safe noturno.
- *
- * @param {ObjectId} utilizadorId
- * @param {Date} inicio
- * @param {Date} fim
- * @returns {Promise<{ total, desatribuidas }>}
- */
-async function desatribuirTarefasPeriodo(utilizadorId, inicio, fim) {
-  // fim do dia = meia-noite do dia seguinte (para query <).
-  const fimDia = new Date(fim.getTime() + 24 * 60 * 60 * 1000);
-
-  // Procura tarefas atribuídas no período (não concluídas nem canceladas).
-  const tarefas = await Tarefa.find({
-    utilizador_id: utilizadorId,
-    data: { $gte: inicio, $lt: fimDia },
-    estado: 'atribuida',
-  });
-
-  if (tarefas.length === 0) {
-    return { total: 0, desatribuidas: 0 };
-  }
-
-  let desatribuidas = 0;
-  for (const tarefa of tarefas) {
-    tarefa.utilizador_id = null;
-    tarefa.estado = 'por_atribuir';
-    await tarefa.save();
-    desatribuidas++;
-  }
-
-  return { total: tarefas.length, desatribuidas };
-}
-
-// Exporta o helper para reutilização (registarBaixaProlongada, falta súbita).
-exports.desatribuirTarefasPeriodo = desatribuirTarefasPeriodo;
+// F8 — Helper desatribuirTarefasPeriodo REMOVIDO (Tarefa eliminado em F8,
+// load balancer extinto). As ausências são apenas registadas/aprovadas;
+// o gestor gere manualmente as Consultas afetadas pelo período.

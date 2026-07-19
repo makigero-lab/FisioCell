@@ -1,5 +1,5 @@
 /**
- * Autocell - API de gestão para Alojamento Local
+ * FisioCell - API de gestão para Clínicas de Fisioterapia
  * Ponto de entrada da aplicação backend (Express + MongoDB).
  *
  * Variáveis de ambiente (ver .env.example):
@@ -8,13 +8,17 @@
  *   - JWT_SECRET         — segredo de assinatura dos JWT (obrigatória)
  *   - JWT_EXPIRACAO      — expiração do JWT (default "7d")
  *   - FRONTEND_URL       — origem permitida para CORS (default localhost:3000)
- *   - SMOOBU_API_KEY     — API Key do Smoobu para sincronização em massa
- *                          (POST /api/admin/smoobu/sincronizar). Opcional:
- *                          sem ela, a sincronização devolve 400.
  *   - VAPID_PUBLIC_KEY   — Chave pública VAPID para Web Push (notificações push)
  *   - VAPID_PRIVATE_KEY  — Chave privada VAPID (assina as notificações)
- *   - VAPID_SUBJECT      — Identificador do emissor (mailto:admin@autocell.com)
+ *   - VAPID_SUBJECT      — Identificador do emissor (mailto:admin@fisiocell.com)
  *                          Gerar com: npx web-push generate-vapid-keys
+ *
+ * F0 — A integração Smoobu foi removida. O motor de atribuição (load
+ * balancer) foi extraído para utils/loadBalancer.js.
+ * F8 — Limpeza: removidos os ficheiros legacy (Tarefa, TarefaArquivo,
+ * ModeloChecklist, tarefaController, checklistController, loadBalancer,
+ * scheduler, jobs dailyBriefing/agendaAmanha/caoGuarda/arquivista e
+ * scripts/seedChecklists). O domínio passou a usar Consulta (F4-F7).
  *
  * NOTA: a instância `app` é exportada (module.exports) para poder ser
  * usada nos testes com supertest SEM iniciar o servidor HTTP nem ligar
@@ -29,17 +33,24 @@ const mongoose = require('mongoose');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
 
-const webhookRoutes = require('./routes/webhookRoutes');
 const gestorRoutes = require('./routes/gestorRoutes');
 const adminRoutes = require('./routes/adminRoutes');
 const authRoutes = require('./routes/authRoutes');
 const ausenciaRoutes = require('./routes/ausenciaRoutes');
 const relatorioRoutes = require('./routes/relatorioRoutes');
 const staffRoutes = require('./routes/staffRoutes');
-const { iniciarDailyBriefing } = require('./jobs/dailyBriefing');
-const { iniciarAgendaAmanha } = require('./jobs/agendaAmanha');
-const { iniciarCaoGuarda } = require('./jobs/caoGuarda');
-const { iniciarArquivista } = require('./jobs/arquivista');
+const pacienteRoutes = require('./routes/pacienteRoutes'); // F2 — Pacientes
+const horarioRoutes = require('./routes/horarioRoutes'); // F3 — Horários
+const consultaRoutes = require('./routes/consultaRoutes'); // F4 — Consultas
+const protocoloRoutes = require('./routes/protocoloRoutes'); // F5 — Protocolos
+const documentoRoutes = require('./routes/documentoRoutes'); // F9 — Documentos
+// F8 — Cron jobs legacy removidos (dailyBriefing, agendaAmanha, caoGuarda, arquivista).
+// F7 — Cron jobs para Consultas (domínio Fisioterapia).
+const { iniciarBriefingFisio } = require('./jobs/briefingDiarioFisio');
+const { iniciarLembreteAmanha } = require('./jobs/lembreteConsultasAmanha');
+const { iniciarLembrete2h } = require('./jobs/lembrete2hConsulta');
+const { iniciarCaoGuardaConsultas } = require('./jobs/caoGuardaConsultas');
+const { iniciarArquivistaConsultas } = require('./jobs/arquivistaConsultas');
 const { configurarWebPush } = require('./utils/push');
 
 const app = express();
@@ -70,7 +81,6 @@ app.use(
 app.use(express.json());
 
 // Rate limiting global: 100 pedidos por IP a cada 15 minutos.
-// Não se aplica ao webhook do Smoobu (que tem o seu próprio padrão).
 // Em ambiente de teste (Jest) o limite é desativado para não bloquear
 // os testes de integração que fazem centenas de pedidos seguidos.
 const globalLimiter = rateLimit({
@@ -98,11 +108,8 @@ app.get('/api/health', async (req, res) => {
 
 // Rota de teste para confirmar que a API está online.
 app.get('/', (req, res) => {
-  res.json({ status: 'API do Alojamento Local online e ligada à BD!' });
+  res.json({ status: 'API do FisioCell online e ligada à BD!' });
 });
-
-// Webhooks de integrações externas (Smoobu, etc.).
-app.use('/webhooks', webhookRoutes);
 
 // Autenticação (login público + /me protegido).
 app.use('/api/auth', authRoutes);
@@ -124,6 +131,23 @@ app.use('/api/admin', adminRoutes);
 
 // Staff — gestão das próprias ausências (pedidos de férias/doença).
 app.use('/api/staff', staffRoutes);
+
+// F2 — Pacientes (CRUD com permissões por role).
+app.use('/api/gestor/pacientes', pacienteRoutes);
+
+// F3 — Horários de Fisioterapeutas (limites de agenda).
+app.use('/api/gestor/horarios', horarioRoutes);
+
+// F4 — Consultas (marcações com validação de conflitos fisio+sala+paciente).
+app.use('/api/gestor/consultas', consultaRoutes);
+
+// F5 — Protocolos Clínicos (templates reutilizáveis com snapshot na Consulta).
+app.use('/api/gestor/protocolos', protocoloRoutes);
+
+// F9 — Documentos (anexos clínicos: receitas, relatórios, fotografias).
+app.use('/api/gestor/documentos', documentoRoutes);
+// Serve ficheiros estáticos da pasta uploads (para downloads).
+app.use('/uploads', express.static(require('path').join(__dirname, '..', 'uploads')));
 
 /* ------------------------------------------------------------------ */
 /* Middleware global de tratamento de erros                            */
@@ -183,22 +207,17 @@ if (require.main === module) {
         console.log(`🚀 Servidor a correr na porta ${PORT}.`);
       });
 
-      // Inicia o cron job do Daily Briefing (WhatsApp) — só em execução
-      // direta, não nos testes. Corre todos os dias às 08:00.
-      iniciarDailyBriefing();
-
-      // Prompt 94 — Cron job "Agenda de Amanhã": todos os dias às 19:00
-      // (Europe/Lisbon), envia push a cada staff com trabalho amanhã.
-      iniciarAgendaAmanha();
-
-      // Prompt 96 — Cron job "Cão de Guarda": todos os dias às 18:00
-      // (Europe/Lisbon), envia push por cada tarefa de limpeza de hoje
-      // ainda não concluída (lembra o staff de fechar o dia).
-      iniciarCaoGuarda();
-
-      // Prompt 109 — Cron job "Arquivista": dia 1 de cada trimestre,
-      // move tarefas concluídas/canceladas com mais de 3 meses para o arquivo.
-      iniciarArquivista();
+      // F7 — Cron jobs para Consultas (domínio Fisioterapia).
+      // Briefing diário fisio: 08:00 — push a cada fisio com consultas hoje.
+      iniciarBriefingFisio();
+      // Lembrete consultas amanhã: 19:00 — push ao fisio sobre consultas de amanhã.
+      iniciarLembreteAmanha();
+      // Lembrete 2h: a cada 15min — lembrete 2h antes da consulta.
+      iniciarLembrete2h();
+      // Cão de guarda consultas: 02:00 — verifica consultas órfãs/esquecidas.
+      iniciarCaoGuardaConsultas();
+      // Arquivista consultas: domingo 03:00 — move >6 meses para consultas_arquivo.
+      iniciarArquivistaConsultas();
     })
     .catch((err) => {
       console.error('❌ Erro ao ligar ao MongoDB:', err.message);

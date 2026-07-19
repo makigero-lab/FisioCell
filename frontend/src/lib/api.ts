@@ -1,5 +1,5 @@
 /**
- * Configuração e helpers para chamadas à API backend (Autocell).
+ * Configuração e helpers para chamadas à API backend (FisioCell).
  *
  * v1.14.0 — Arquitetura com cookie httpOnly + proxy:
  *   As chamadas à API admin vão para SAME-ORIGIN (/api/gestor/...), não
@@ -103,7 +103,7 @@ async function handleResponse<T>(res: Response): Promise<T> {
 /* Tipos que espelham os modelos do backend                            */
 /* ------------------------------------------------------------------ */
 
-export type Role = "admin" | "gestor" | "staff";
+export type Role = "admin" | "diretor_clinico" | "fisioterapeuta" | "rececionista";
 
 export type EstadoTarefa =
   | "por_atribuir"
@@ -210,11 +210,210 @@ export interface UtilizadorDTO {
   ativo: boolean;
   dias_folga?: number[];
   telefone?: string;
+  // F1 — Perfil profissional (fisioterapeuta/diretor_clinico).
+  perfil_profissional?: {
+    cedula?: string;
+    especialidades?: string[];
+    biografia?: string;
+    cor_calendario?: string;
+    ativo_clinico?: boolean;
+  };
   createdAt?: string;
   updatedAt?: string;
 }
 
 export type TipoAusencia = "ferias" | "folga";
+
+// F2 — Paciente
+export interface PacienteDTO {
+  _id: string;
+  empresa_id: string;
+  nome: string;
+  data_nascimento: string | null;
+  genero: "M" | "F" | "Outro" | "NA";
+  num_utente: string;
+  nif?: string;
+  telefone: string;
+  email: string;
+  morada?: string;
+  // Campos clínicos — só presentes se dados_clinicos=true (isClinico)
+  contacto_emergencia?: {
+    nome: string;
+    telefone: string;
+    relacao: string;
+  };
+  historico_medico?: string;
+  alergias?: string[];
+  consentimento_dados: {
+    concedido: boolean;
+    data: string | null;
+    versao_termos: string;
+  };
+  ativo: boolean;
+  eliminado_em?: string | null;
+  observacoes?: string;
+  origem: "walk_in" | "referenciacao" | "online" | "outro";
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface PacienteListResponse {
+  pacientes: PacienteDTO[];
+  total: number;
+  dados_clinicos: boolean;
+}
+
+// F3 — Horário de Fisioterapeuta
+export interface HorarioFisioterapeutaDTO {
+  _id: string;
+  empresa_id: string;
+  fisioterapeuta_id: string | { _id: string; nome: string; email: string; role: Role };
+  tipo: "recorrente" | "excecao";
+  dia_semana: number | null; // 0-6 (null se excecao)
+  hora_inicio: string; // HH:mm
+  hora_fim: string; // HH:mm
+  data: string | null; // ISO (null se recorrente)
+  disponivel: boolean;
+  ativo: boolean;
+  nota: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface HorarioListResponse {
+  horarios: HorarioFisioterapeutaDTO[];
+  total: number;
+}
+
+export interface DisponibilidadeResponse {
+  disponivel: boolean;
+  horario: { hora_inicio: string; hora_fim: string } | null;
+  motivo: string | null;
+  origem: "excecao" | "recorrente" | null;
+}
+
+// F4 — Consulta
+export type EstadoConsulta =
+  | "marcada"
+  | "confirmada"
+  | "em_curso"
+  | "concluida"
+  | "cancelada"
+  | "faltou"
+  | "nao_compareceu";
+
+export type TipoConsulta =
+  | "primeira_consulta"
+  | "sessao"
+  | "reavaliacao"
+  | "alta"
+  | "grupo";
+
+export interface ConsultaDTO {
+  _id: string;
+  empresa_id: string;
+  sala_id: string | { _id: string; nome: string };
+  fisioterapeuta_id: string | {
+    _id: string;
+    nome: string;
+    email: string;
+    perfil_profissional?: { cor_calendario?: string; cedula?: string };
+  };
+  paciente_id: string | { _id: string; nome: string; telefone: string };
+  data_hora_inicio: string;
+  data_hora_fim: string;
+  duracao_minutos: number;
+  tipo: TipoConsulta;
+  estado: EstadoConsulta;
+  presenca: "pendente" | "presente" | "ausente" | "atrasado";
+  motivo_cancelamento?: string | null;
+  nota_clinica?: {
+    subjetivo: string;
+    objetivo: string;
+    avaliacao: string;
+    plano: string;
+    tratamento_efetuado: string;
+    cedula_assinante: string;
+  };
+  criada_por: string | { _id: string; nome: string };
+  concluida_em?: string | null;
+  cancelada_em?: string | null;
+  observacoes?: string;
+  lembrete_24h_enviado?: boolean;
+  lembrete_2h_enviado?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ConsultaListResponse {
+  consultas: ConsultaDTO[];
+  total: number;
+}
+
+export interface ValidarConflitosResponse {
+  ok: boolean;
+  conflitos: string[];
+  horario?: { hora_inicio: string; hora_fim: string } | null;
+}
+
+// F5 — Modelo de Protocolo Clínico
+export type AreaProtocolo =
+  | "musculoesqueletica"
+  | "neurologica"
+  | "cardioresp"
+  | "desporto"
+  | "pediatria"
+  | "outro";
+
+export interface ModeloProtocoloDTO {
+  _id: string;
+  empresa_id: string;
+  nome: string;
+  descricao: string;
+  area: AreaProtocolo;
+  seccoes: { nome: string; items: string[] }[];
+  ativo: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ProtocoloListResponse {
+  protocolos: ModeloProtocoloDTO[];
+  total: number;
+}
+
+// F9 — Documento
+export type TipoDocumento =
+  | "receita"
+  | "relatorio"
+  | "termo_consentimento"
+  | "foto"
+  | "exame"
+  | "outro";
+
+export interface DocumentoDTO {
+  _id: string;
+  empresa_id: string;
+  paciente_id: string | { _id: string; nome: string };
+  consulta_id: string | null;
+  uploaded_by: string | { _id: string; nome: string };
+  tipo: TipoDocumento;
+  nome_original: string;
+  url_storage: string;
+  content_type: string;
+  tamanho_bytes: number;
+  descricao: string;
+  consentimento_obtido: boolean;
+  data_consentimento: string | null;
+  eliminado_em?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface DocumentoListResponse {
+  documentos: DocumentoDTO[];
+  total: number;
+}
 
 export interface AusenciaDTO {
   _id: string;

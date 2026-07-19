@@ -1,18 +1,25 @@
 /**
- * Middleware de Controlo de Acesso por Role (RBAC) — Autocell
+ * Middleware de Controlo de Acesso por Role (RBAC) — FisioCell
  *
- * Hierarquia (v1.29.0):
- *   admin  → Super Admin (dono da conta, gestão total)
- *   gestor → Gestor de Operações (gere equipa, aprova faltas, vê dashboard)
- *   staff  → Executante de limpezas (vê só as suas tarefas)
+ * F1 — Hierarquia migrada para o domínio Fisioterapia:
+ *   admin             → Super Admin da plataforma (cross-tenant, NÃO vê
+ *                       dados clínicos por RGPD).
+ *   diretor_clinico   → Diretor Clínico (acesso TOTAL à clínica).
+ *   fisioterapeuta    → Fisioterapeuta (vê só os seus pacientes/consultas).
+ *   rececionista      → Rececionista (gere marcações, NÃO vê notas clínicas).
  *
  * Middlewares:
- *   isGestor — admin OU gestor (gestão operacional: propriedades, equipa, ausências)
- *   isAdmin  — só admin (ações sensíveis: criar admins, setup, etc.)
+ *   isAdmin          — só admin (ações sensíveis: criar admins, setup, etc.)
+ *   isDiretorClinico — admin OU diretor_clinico (gestão operacional da clínica:
+ *                      propriedades/salas, equipa, ausências, consultas, etc.)
+ *   isClinico        — admin OU diretor_clinico OU fisioterapeuta (ações
+ *                      clínicas: ver ficha de paciente, registar SOAP, etc.)
+ *   isRececionista   — admin OU diretor_clinico OU rececionista (marcações,
+ *                      gestão admin de pacientes)
  *
  * Uso:
- *   const { isGestor, isAdmin } = require('../middleware/requireRole');
- *   router.patch('/ausencias/:id/estado', auth, isGestor, aprovar);
+ *   const { isDiretorClinico, isClinico, isAdmin } = require('../middleware/requireRole');
+ *   router.patch('/ausencias/:id/estado', auth, isDiretorClinico, aprovar);
  *
  * Nota: o `auth` deve ser sempre chamado antes (injeta req.user com o role).
  */
@@ -21,7 +28,7 @@
  * Cria um middleware que só deixa passar se o role do utilizador (req.user.role)
  * estiver na lista de roles permitidas.
  *
- * @param  {...string} rolesPermitidas — ex: 'admin', 'gestor'
+ * @param  {...string} rolesPermitidas — ex: 'admin', 'diretor_clinico'
  * @returns {Function} middleware Express
  */
 function requireRole(...rolesPermitidas) {
@@ -43,29 +50,38 @@ function requireRole(...rolesPermitidas) {
 }
 
 /**
- * isGestor — permite admin e gestor.
- * O admin tem todas as permissões do gestor (para testes e supervisão).
- * Usado para: dashboard, propriedades, equipa, ausências, tarefas, webhooks, etc.
- */
-const isGestor = requireRole('admin', 'gestor');
-
-/**
- * isAdmin — ESTRITO. Só admin.
- * Usado para: criar outros admins, setup, configurações sensíveis.
+ * isAdmin — ESTRITO. Só admin (Super Admin da plataforma).
+ * Usado para: criar outros admins, setup, configurações sensíveis, gestão
+ * cross-tenant de empresas.
  */
 const isAdmin = requireRole('admin');
 
-// Atalhos legacy (compatibilidade — requireManager = isGestor).
-const requireManager = isGestor;
-const requireAdmin = isAdmin;
-const requireStaff = requireRole('staff', 'gestor');
+/**
+ * isDiretorClinico — permite admin e diretor_clinico.
+ * O admin tem todas as permissões do diretor_clinico (para testes/supervisão).
+ * Usado para: dashboard, propriedades/salas, equipa, ausências, consultas,
+ * webhooks, auditoria, etc. (gestão operacional da clínica).
+ */
+const isDiretorClinico = requireRole('admin', 'diretor_clinico');
+
+/**
+ * isClinico — permite admin, diretor_clinico e fisioterapeuta.
+ * Usado para: ver ficha clínica de paciente, registar nota SOAP, concluir
+ * consulta, reportar avarias, etc. (ações que exigem formação clínica).
+ */
+const isClinico = requireRole('admin', 'diretor_clinico', 'fisioterapeuta');
+
+/**
+ * isRececionista — permite admin, diretor_clinico e rececionista.
+ * Usado para: criar/editar marcações de TODOS os fisioterapeutas, ver dados
+ * administrativos de pacientes (contactos), registar presença/falta.
+ */
+const isRececionista = requireRole('admin', 'diretor_clinico', 'rececionista');
 
 module.exports = {
   requireRole,
-  isGestor,
   isAdmin,
-  // Legacy (não quebrar código existente)
-  requireManager,
-  requireAdmin,
-  requireStaff,
+  isDiretorClinico,
+  isClinico,
+  isRececionista,
 };

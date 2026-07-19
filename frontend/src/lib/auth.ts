@@ -1,5 +1,5 @@
 /**
- * Utilitários de Autenticação (frontend) — Autocell
+ * Utilitários de Autenticação (frontend) — FisioCell
  *
  * v1.14.0 — Cookie HttpOnly:
  *   O token JWT vive EXCLUSIVAMENTE num cookie httpOnly definido pelo
@@ -34,7 +34,7 @@
  *   login page (após cookie definido) e pelo logout (após cookie limpo).
  */
 
-export type Role = "admin" | "gestor" | "staff";
+export type Role = "admin" | "diretor_clinico" | "fisioterapeuta" | "rececionista";
 
 export interface UtilizadorAuth {
   id: string;
@@ -179,8 +179,9 @@ export async function fazerLogout(): Promise<void> {
  */
 export function rotaPorRole(role: Role): string {
   if (role === "admin") return "/admin";
-  if (role === "gestor") return "/gestor";
-  return "/staff";
+  if (role === "diretor_clinico") return "/gestor";
+  if (role === "rececionista") return "/gestor"; // F1 — partilha /gestor com permissões limitadas
+  return "/staff"; // fisioterapeuta
 }
 
 /* ------------------------------------------------------------------ */

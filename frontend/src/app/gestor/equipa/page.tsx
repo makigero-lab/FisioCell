@@ -84,14 +84,16 @@ import { formatarDataSegura, parsearDataSegura } from "@/lib/utils";
 
 const ROLE_LABEL: Record<Role, string> = {
   admin: "Admin",
-  gestor: "Gestor",
-  staff: "Staff",
+  diretor_clinico: "Diretor Clínico",
+  fisioterapeuta: "Fisioterapeuta",
+  rececionista: "Rececionista",
 };
 
 const ROLE_VARIANT: Record<Role, "default" | "secondary" | "outline"> = {
   admin: "default",
-  gestor: "secondary",
-  staff: "outline",
+  diretor_clinico: "secondary",
+  fisioterapeuta: "outline",
+  rececionista: "outline",
 };
 
 const DIAS_SEMANA = [
@@ -214,7 +216,7 @@ function EquipaPage() {
   // v1.68.0 (Prompt 91) — Permite abrir diretamente na tab de Aprovações
   // via ?tab=aprovacoes (usado pelo redirect /gestor/ausencias).
   const searchParams = useSearchParams();
-  const tabInicial = searchParams.get("tab") === "aprovacoes" ? "aprovacoes" : "staff";
+  const tabInicial = searchParams.get("tab") === "aprovacoes" ? "aprovacoes" : "fisioterapeuta";
 
   // ===== Estado — Equipa (Staff) =====
   const [utilizadores, setUtilizadores] = useState<UtilizadorDTO[]>([]);
@@ -241,7 +243,7 @@ function EquipaPage() {
     nome: "",
     email: "",
     password: "",
-    role: "staff" as Role,
+    role: "fisioterapeuta" as Role,
     responsavel_id: "" as string,
     dias_folga: [] as number[],
     telefone: "",
@@ -254,7 +256,7 @@ function EquipaPage() {
   const [editForm, setEditForm] = useState({
     nome: "",
     email: "",
-    role: "staff" as Role,
+    role: "fisioterapeuta" as Role,
     password: "", // vazia = não alterar
     responsavel_id: "" as string,
     dias_folga: [] as number[],
@@ -280,7 +282,7 @@ function EquipaPage() {
 
   // Utilizadores que podem ser responsáveis (só gestor — admin não aparece).
   const responsaveisPossiveis = utilizadores.filter(
-    (u) => u.role === "gestor"
+    (u) => u.role === "diretor_clinico"
   );
 
   // IDs dos utilizadores com ausência aprovada para hoje (para mostrar badge).
@@ -355,7 +357,7 @@ function EquipaPage() {
         dias_folga: form.dias_folga,
         telefone: form.telefone,
       });
-      setForm({ nome: "", email: "", password: "", role: "staff", responsavel_id: "", dias_folga: [], telefone: "" });
+      setForm({ nome: "", email: "", password: "", role: "fisioterapeuta", responsavel_id: "", dias_folga: [], telefone: "" });
       setMostrarForm(false);
       await carregar();
     } catch (e) {
@@ -654,7 +656,7 @@ function EquipaPage() {
                         onChange={(e) =>
                           setForm((f) => ({ ...f, email: e.target.value }))
                         }
-                        placeholder="exemplo@autocell.pt"
+                        placeholder="exemplo@fisiocell.pt"
                         required
                       />
                     </div>
@@ -699,8 +701,8 @@ function EquipaPage() {
                         }
                         className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                       >
-                        <option value="staff">Staff</option>
-                        <option value="gestor">Responsável</option>
+                        <option value="fisioterapeuta">Fisioterapeuta</option>
+                        <option value="diretor_clinico">Diretor Clínico</option>
                       </select>
                     </div>
                     <div className="space-y-1.5">
@@ -758,7 +760,7 @@ function EquipaPage() {
                       onClick={() => {
                         setMostrarForm(false);
                         setFormErro(null);
-                        setForm({ nome: "", email: "", password: "", role: "staff", responsavel_id: "", dias_folga: [], telefone: "" });
+                        setForm({ nome: "", email: "", password: "", role: "fisioterapeuta", responsavel_id: "", dias_folga: [], telefone: "" });
                       }}
                       disabled={submitting}
                     >
@@ -1025,8 +1027,8 @@ function EquipaPage() {
                     }
                     className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                   >
-                    <option value="staff">Staff</option>
-                    <option value="gestor">Responsável</option>
+                    <option value="fisioterapeuta">Fisioterapeuta</option>
+                    <option value="diretor_clinico">Diretor Clínico</option>
                   </select>
                 </div>
                 <div className="space-y-1.5">

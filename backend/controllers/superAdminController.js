@@ -1,5 +1,5 @@
 /**
- * Super Admin Controller — Autocell
+ * Super Admin Controller — FisioCell
  *
  * Endpoints exclusivos do Super Admin (role 'admin').
  *
@@ -24,8 +24,7 @@ const bcrypt = require('bcryptjs');
 const Empresa = require('../models/Empresa');
 const Utilizador = require('../models/Utilizador');
 const Propriedade = require('../models/Propriedade');
-const Tarefa = require('../models/Tarefa');
-const WebhookLog = require('../models/WebhookLog');
+const Consulta = require('../models/Consulta');
 const { JWT_SECRET } = require('../middleware/auth');
 const { registarAuditoria } = require('../utils/auditoria');
 
@@ -38,12 +37,13 @@ const TOKEN_EXPIRACAO = process.env.JWT_EXPIRACAO || '7d';
 /**
  * Lista todas as empresas (cross-tenant) com gestor principal + estatísticas.
  *
- * Prompt 112 — Adicionadas contagens de Propriedades e Tarefas.
+ * Prompt 112 — Adicionadas contagens de Propriedades e Consultas.
+ * F8 — Contagem de Tarefas substituída por Consultas (Tarefa eliminado).
  *
  * Resposta 200: { empresas: [{ _id, nome, nif, plano_ativo, createdAt,
  *   gestor: { id, nome, email } | null,
  *   num_propriedades: number,
- *   num_tarefas: number }] }
+ *   num_consultas: number }] }
  */
 exports.listarEmpresas = async (req, res) => {
   try {
@@ -52,16 +52,16 @@ exports.listarEmpresas = async (req, res) => {
     // Para cada empresa, procura o gestor + contagens em paralelo.
     const empresasComDados = await Promise.all(
       empresas.map(async (emp) => {
-        const [gestor, numPropriedades, numTarefas] = await Promise.all([
+        const [gestor, numPropriedades, numConsultas] = await Promise.all([
           Utilizador.findOne({
             empresa_id: emp._id,
-            role: 'gestor',
+            role: 'diretor_clinico',
             eliminado_em: null,
           })
             .select('nome email')
             .lean(),
           Propriedade.countDocuments({ empresa_id: emp._id }),
-          Tarefa.countDocuments({ empresa_id: emp._id }),
+          Consulta.countDocuments({ empresa_id: emp._id }),
         ]);
 
         return {
@@ -70,7 +70,7 @@ exports.listarEmpresas = async (req, res) => {
             ? { id: String(gestor._id), nome: gestor.nome, email: gestor.email }
             : null,
           num_propriedades: numPropriedades,
-          num_tarefas: numTarefas,
+          num_consultas: numConsultas,
         };
       })
     );
@@ -90,17 +90,17 @@ exports.listarEmpresas = async (req, res) => {
  * Permite ao Super Admin "fazer login como" o gestor de uma empresa.
  *
  * Recebe o ID da empresa nos parâmetros. Encontra o utilizador principal
- * dessa empresa (role 'gestor') e gera um NOVO token JWT com os dados
+ * dessa empresa (role 'diretor_clinico') e gera um NOVO token JWT com os dados
  * desse gestor — exatamente igual à função de Login normal.
  *
  * Prompt 100 (correção) — Override do admin quando não há gestor ativo:
- *   Se a empresa não tiver um gestor ativo (role 'gestor', ativo, não
+ *   Se a empresa não tiver um gestor ativo (role 'diretor_clinico', ativo, não
  *   eliminado), o Super Admin (role 'admin') que faz o pedido tem
  *   OVERRIDE TOTAL: o sistema NÃO bloqueia. Em vez disso, gera um token
  *   com o próprio admin (id/nome/email do req.user) mas com o empresa_id
  *   da empresa alvo e role 'admin'. Como o middleware isGestor permite
- *   'admin' e 'gestor', o admin consegue aceder a todos os endpoints do
- *   painel /gestor/* (dashboard, propriedades, tarefas, etc.) baseando-se
+ *   'admin' e 'diretor_clinico', o admin consegue aceder a todos os endpoints do
+ *   painel /gestor (a rota mantém-se por enquanto)/* (dashboard, propriedades, tarefas, etc.) baseando-se
  *   apenas no empresa_id, ignorando a necessidade de existir um gestor.
  *
  * O frontend pode usar este token para entrar no painel do gestor.
@@ -131,7 +131,7 @@ exports.impersonarGestor = async (req, res) => {
     // Encontra o gestor principal dessa empresa.
     const gestor = await Utilizador.findOne({
       empresa_id: id,
-      role: 'gestor',
+      role: 'diretor_clinico',
       eliminado_em: null,
       ativo: true,
     }).lean();
@@ -139,8 +139,8 @@ exports.impersonarGestor = async (req, res) => {
     // Prompt 100 — Override do admin: se não há gestor ativo, o Super Admin
     // que faz o pedido (req.user, role 'admin') gera um token com o seu
     // próprio id/nome/email mas com o empresa_id da empresa alvo e role
-    // 'gestor' (o admin está a IMPERSONAR um gestor dessa empresa). Como o
-    // middleware isGestor permite 'gestor', o token funciona no painel
+    // 'gestor' (o admin está a IMPERSONAR um diretor_clinico dessa empresa). Como o
+    // middleware isDiretorClinico permite 'diretor_clinico', o token funciona no painel
     // /gestor. O id real do admin fica no token para auditoria.
     let tokenUser;
     if (gestor) {
@@ -161,10 +161,10 @@ exports.impersonarGestor = async (req, res) => {
         id: String(admin._id),
         nome: admin.nome,
         email: admin.email,
-        // Role 'gestor' para o frontend middleware deixar entrar no /gestor
+        // Role 'diretor_clinico' para o frontend middleware deixar entrar no /gestor
         // e para o isGestor do backend autorizar. O id real do admin fica
         // no token para auditoria (registarAuditoria usa req.user.id).
-        role: 'gestor',
+        role: 'diretor_clinico',
         empresa_id: String(empresa._id),
       };
       console.log(
@@ -284,8 +284,9 @@ exports.criarUtilizadorEmpresa = async (req, res) => {
       });
     }
 
-    // Validação do role (default 'gestor' — caso de uso principal).
-    const roleFinal = role || 'gestor';
+    // Validação do role (default 'diretor_clinico' — caso de uso principal).
+    // F1 — roles migrados: diretor_clinico, fisioterapeuta, rececionista.
+    const roleFinal = role || 'diretor_clinico';
 
     // SEGURANÇA: Não é possível criar utilizadores com role 'admin'.
     // (Verificado antes da validação genérica de role para devolver 403
@@ -296,9 +297,9 @@ exports.criarUtilizadorEmpresa = async (req, res) => {
       });
     }
 
-    if (!['gestor', 'staff'].includes(roleFinal)) {
+    if (!['diretor_clinico', 'fisioterapeuta', 'rececionista'].includes(roleFinal)) {
       return res.status(400).json({
-        erro: 'Role inválido. Valores permitidos: gestor, staff.',
+        erro: 'Role inválido. Valores permitidos: diretor_clinico, fisioterapeuta, rececionista.',
       });
     }
 
