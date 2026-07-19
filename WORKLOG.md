@@ -1793,3 +1793,107 @@ Stage Summary:
 - **Sidebar limpo**: 12 items (era 14), sem referências a Tarefas/Calendário antigo/Checklists.
 - **116/116 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
 - **Migração completa** (F0-F8). Próxima fase: F9 (Documentos — anexos + fotografias clínicas).
+
+---
+Task ID: DOC-F9
+Agent: general-purpose
+Task: Atualização de documentação para F9 (Documentos — anexos clínicos: modelo Documento + storage local via multer + consentimento RGPD + 5 endpoints + página frontend /gestor/documentos)
+
+Work Log:
+- Lido `WORKLOG.md` (1795 linhas — herdado o formato das entradas DOC-F4/DOC-F5/DOC-F6/DOC-F7/DOC-F8 por subagent de documentação a seguir a cada fase de implementação; lida a entrada DOC-F8 que descreve a documentação F8 e a entrada F8 que descreve a implementação da limpeza).
+- Lidos os 3 ficheiros de documentação: `docs/BACKEND.md` (1534 linhas — secção 2 Estrutura, secção 3.1 Modelos, secção 6 Endpoints, secção 9 Histórico), `docs/FRONTEND.md` (567 linhas — secção 3 Rotas, secção 11 Páginas/lib/api.ts, secção 13 Histórico) e `docs/ARQUITETURA.md` (462 linhas — secção 4 Mapa de Migração, secção 5.8 Documento, secção 8 Roadmap).
+- Lidos os ficheiros de implementação F9: `backend/models/Documento.js` (105 linhas — 13 campos, 2 índices compostos), `backend/controllers/documentoController.js` (266 linhas — 5 funções exportadas: listarDocumentos, obterDocumento, downloadDocumento, uploadDocumento, eliminarDocumento), `backend/routes/documentoRoutes.js` (96 linhas — middleware podeVer + isDiretorClinico + multer diskStorage/fileFilter/limits 20MB), `backend/server.js` (mount `app.use('/api/gestor/documentos', documentoRoutes)` + serve estático `/uploads`), `frontend/src/lib/api.ts` (tipos `TipoDocumento`/`DocumentoDTO`/`DocumentoListResponse`), `frontend/src/components/gestor/gestor-sidebar.tsx` (item "Documentos" com ícone `FileText`, posicionado entre Protocolos e Ausências/Férias).
+
+- `docs/BACKEND.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Cabeçalho (nota F0): alargada para mencionar **F9 concluída** — novo modelo `Documento` + 5 endpoints em `/api/gestor/documentos` + storage local via multer (`uploads/`, filtro PDF/imagens/DOC/TXT, limite 20MB) + consentimento RGPD + soft delete.
+  - Secção 2 (Estrutura de ficheiros): adicionadas entradas para `controllers/documentoController.js`, `models/Documento.js`, `routes/documentoRoutes.js` na árvore; adicionada nota F9 explicando o storage local em `uploads/` (servido em estático pelo `server.js`, no `.gitignore`, `url_storage` preparado para futuro S3/Cloudinary).
+  - Secção 3.1 (Modelos): contador atualizado de 9 → 10 coleções; adicionada nota F9 listando o modelo `Documento` (anexos clínicos + storage local + consentimento RGPD + soft delete); adicionada subsecção `### Documento` com tabela de 13 campos (empresa_id, paciente_id obrigatório, consulta_id opcional, uploaded_by, tipo enum 6 valores, nome_original, url_storage, content_type, tamanho_bytes, descricao, consentimento_obtido, data_consentimento, eliminado_em) + 2 índices compostos (`{empresa_id, paciente_id, eliminado_em}` e `{empresa_id, consulta_id, eliminado_em}`) + notas F9 sobre consentimento RGPD, permissões (podeVer para GET/upload, isDiretorClinico para DELETE), validações no upload (paciente/consulta/tipo + multer fileFilter + 20MB + apagar ficheiro em falha pós-gravação), download (`res.download` com nome_original) e soft delete (`eliminado_em` preserva metadados para auditoria RGPD).
+  - Secção 6.16 (Nova — Documentos): adicionada secção completa com os 5 endpoints (`GET /api/gestor/documentos` com filtros `paciente_id`/`consulta_id`/`tipo`, `GET /:id` detalhe, `GET /:id/download` com `res.download`, `POST /upload` multipart/form-data com validações, `DELETE /:id` soft delete) + nota de auth/permissões (podeVer para 4 endpoints, isDiretorClinico para DELETE) + nota sobre storage local via multer (diskStorage, nome de ficheiro `<timestamp>-<random>.<ext>`, fileFilter 8 MIME types, limite 20MB) + nota de auditoria (`upload_documento`/`eliminar_documento`).
+  - Secção 9 (Histórico): adicionada entrada `**F9**` no topo da tabela (antes de `**F8**`) com 5 pontos cobrindo (1) novo modelo Documento com 13 campos + 2 índices compostos, (2) novo documentoController com 5 funções + auditoria, (3) novas documentoRoutes montadas em `/api/gestor/documentos` + middleware `podeVer`/`isDiretorClinico` + configuração multer (diskStorage em `uploads/`, fileFilter 8 MIME types, limite 20MB), (4) server.js mount + serve estático `/uploads`, (5) storage local em `uploads/` com `.gitignore` + `url_storage` preparado para S3/Cloudinary; 130/130 testes ✓ (+14 testes).
+
+- `docs/FRONTEND.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Cabeçalho (nota F0): alargada para mencionar **F9 concluída** — nova página `/gestor/documentos` + novo item **Documentos** (ícone `FileText`) no sidebar.
+  - Secção 3 (Sistema de rotas): adicionada a linha `/gestor/documentos` à tabela de rotas (Documentos — lista de cartões + filtros + modal upload multipart + download + soft delete).
+  - Secção 11 (Páginas): adicionada subsecção `### /gestor/documentos (Client Component) — F9` com nota do item de sidebar (Documentos, ícone FileText, entre Protocolos e Ausências/Férias) + descrição da lista de cartões (tipo/nome/paciente/tamanho/consentimento RGPD) + filtros (Paciente + Tipo, server-side) + modal upload (input file + select Paciente + select Tipo + textarea Descrição + checkbox Consentimento RGPD; submissão em `FormData` multipart) + download (link temporário) + eliminar (soft delete, só diretor_clinico/admin) + estados visuais (loading/erro/vazio) + tipos reutilizados.
+  - Secção 11 (`src/lib/api.ts` — Helpers de fetch): adicionada a descrição dos novos tipos `TipoDocumento` (6 valores do enum), `DocumentoDTO` (`paciente_id`/`uploaded_by` como `string | { _id, nome }` para suportar populate; `consulta_id` `string | null`; `consentimento_obtido` boolean + `data_consentimento` `string | null`; `eliminado_em` opcional) e `DocumentoListResponse` (`{ documentos, total }`) — resposta do `GET /api/gestor/documentos` com filtros.
+  - Secção 13 (Histórico): adicionada entrada `**F9**` no topo da tabela (antes de `**F8**`) com 3 pontos cobrindo (1) nova página `/gestor/documentos` com filtros + modal upload multipart (`FormData`) + download + eliminar (soft delete) + estados visuais, (2) novos tipos em `lib/api.ts` (`TipoDocumento`/`DocumentoDTO`/`DocumentoListResponse`), (3) novo item **Documentos** no sidebar (`FileText`) entre Protocolos e Ausências/Férias (items do sidebar do gestor passam a 13); lint + tsc + build ✓ (rota `/gestor/documentos` = 5.9 kB).
+
+- `docs/ARQUITETURA.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Cabeçalho: parágrafo de abertura alargado para mencionar **F9** (Documento — anexos clínicos com storage local via multer + consentimento RGPD + soft delete).
+  - Secção 4 (Mapa de Migração de Domínio): linha `Documento` atualizada de `F9` para `F9 ✅` (era pendente) com descrição "anexos clínicos + storage local + RGPD".
+  - Secção 5.8 (`Documento`): cabeçalho atualizado de "F9" para "✅ F9 concluído"; schema reescrito para refletir a implementação real (13 campos com defaults/notas em comentário; enum `tipo` ajustado para `['receita','relatorio','termo_consentimento','foto','exame','outro']`; `nome_ficheiro`→`nome_original`; `storage_url`+`storage_key` consolidados em `url_storage`; `consentimento_fotografias`→par `consentimento_obtido`+`data_consentimento`; índices compostos ajustados para incluir `eliminado_em` em vez de `tipo`); adicionada nota "F9 — Implementação real" detalhando as 5 divergências em relação à proposta v0.1; adicionada nota de permissões (podeVer para 4 endpoints + isDiretorClinico para DELETE + auditoria + 5 endpoints montados em `/api/gestor/documentos`).
+  - Secção 8 (Roadmap): linha **F9** marcada `✅ Concluído` (era "Pendente") com escopo reescrito para refletir a implementação real (storage local via multer em vez de S3/Cloudinary direto; 5 endpoints; permissões podeVer/isDiretorClinico; página `/gestor/documentos` + item sidebar Documentos; 130/130 testes ✓).
+
+Stage Summary:
+- **3 ficheiros de documentação atualizados** (`docs/BACKEND.md`, `docs/FRONTEND.md`, `docs/ARQUITETURA.md`) por via cirúrgica (Edit/MultiEdit — sem reescrita integral). Linguagem pt-pt preservada; formatação Markdown mantida; sem informação inventada (todos os detalhes foram extraídos dos ficheiros de implementação F9 + do contexto fornecido).
+- **BACKEND.md**: árvore de ficheiros atualizada (documentoController/Documento.js/documentoRoutes + nota storage local); contador 9 → 10 coleções + nota F9; nova subsecção `### Documento` (13 campos + 2 índices + notas RGPD/permissões/validações/download/soft delete); nova secção 6.16 com 5 endpoints completos; entrada F9 no histórico.
+- **FRONTEND.md**: nota F0 atualizada para F9 concluída; linha `/gestor/documentos` na tabela de rotas; nova subsecção da página `/gestor/documentos` (cartões + filtros + modal multipart + download + soft delete); novos tipos `TipoDocumento`/`DocumentoDTO`/`DocumentoListResponse` documentados; entrada F9 no histórico.
+- **ARQUITETURA.md**: cabeçalho atualizado para mencionar F9; secção 4 (mapa de migração) linha Documento marcada `F9 ✅`; secção 5.8 schema reescrito para refletir a implementação real + nota "F9 — Implementação real" + nota de permissões; secção 8 (roadmap) F9 marcado ✅ Concluído com escopo reescrito.
+- **Nota de escopo:** o storage local via multer (em vez de S3/Cloudinary direto) é uma decisão de implementação — o design do campo `url_storage` (string livre) permite a migração para S3/Cloudinary numa fase posterior sem alterar a API ou o modelo. Esta decisão está documentada em BACKEND.md (secção 2 nota F9 + secção 3.1 subsecção Documento) e em ARQUITETURA.md (secção 5.8 nota "F9 — Implementação real").
+- **Roadmap F0–F9 concluído.** Todas as 10 fases do roadmap de migração Autocell→FisioCell estão agora marcadas como ✅ Concluído no `docs/ARQUITETURA.md` secção 8.
+
+---
+Task ID: F9
+Agent: Z.ai Code
+Task: Criar modelo Documento (anexos clínicos: receitas, relatórios, fotografias) + storage local via multer + CRUD + consentimento RGPD. Última fase da migração F0-F9.
+
+Work Log:
+
+### F9-A — Modelo Documento
+- Criado `backend/models/Documento.js`: empresa_id, paciente_id (obrigatório), consulta_id (opcional), uploaded_by, tipo (6 valores), nome_original, url_storage, content_type, tamanho_bytes, descricao, consentimento_obtido (RGPD), data_consentimento, eliminado_em (soft delete).
+- Índices: {empresa_id, paciente_id, eliminado_em}, {empresa_id, consulta_id, eliminado_em}.
+
+### F9-B — Storage local (multer)
+- Instalado `multer` para upload de ficheiros.
+- Configuração em `documentoRoutes.js`: storage local em `uploads/`, fileFilter (PDF/JPEG/PNG/GIF/WEBP/DOC/DOCX/TXT), limite 20MB.
+- Nome de ficheiro único: timestamp + random + extensão original.
+- `uploads/` adicionado ao `.gitignore` (com .gitkeep).
+- Preparação para S3/Cloudinary: o campo `url_storage` é uma string livre que pode ser trocada por URL S3 sem alterar a API.
+
+### F9-C — Controller (documentoController.js)
+- 5 funções: listarDocumentos (com filtros paciente_id/consulta_id/tipo), obterDocumento, downloadDocumento (res.download), uploadDocumento (multipart), eliminarDocumento (soft delete).
+- Valida paciente/consulta existem antes de criar.
+- Auditoria registada em upload e delete.
+- Se o upload falha após o ficheiro ser gravado, apaga-o (cleanup).
+
+### F9-D — Routes + server.js
+- Criado `backend/routes/documentoRoutes.js` montado em `/api/gestor/documentos`.
+  - GET /, GET /:id, GET /:id/download → podeVer (4 roles).
+  - POST /upload → podeVer + multer.single('file').
+  - DELETE /:id → isDiretorClinico.
+- `server.js`: montado routes + serve estático `/uploads`.
+
+### F9-E — Testes (130/130 ✓)
+- Adicionados 14 testes no bloco "F9 — Documentos (CRUD)":
+  - Upload de PDF (receita) → 201 com consentimento.
+  - Upload de JPEG (foto) → 201.
+  - Validações (400): sem ficheiro, sem paciente_id, tipo inválido.
+  - Listagem com filtro tipo=foto.
+  - Detalhe, download (content-disposition com nome original).
+  - Soft delete: rececionista 403, diretor 200, após delete 404.
+  - 401 sem token.
+- **Resultado: 130/130 testes a passar ✓** (+14).
+
+### F9-F — Frontend (/gestor/documentos)
+- Criada página `frontend/src/app/gestor/documentos/page.tsx`:
+  - Lista de documentos (cartões com tipo, nome, paciente, tamanho, consentimento RGPD).
+  - Filtros por paciente e tipo.
+  - Modal upload (FormData multipart, seleção de ficheiro, tipo, descrição, consentimento).
+  - Download e eliminar (soft delete).
+- `DocumentoDTO`, `DocumentoListResponse`, `TipoDocumento` adicionados a `lib/api.ts`.
+- Item "Documentos" (ícone FileText) adicionado ao sidebar do gestor.
+- **Lint ✓, tsc ✓, build ✓** (rota /gestor/documentos = 5.9 kB).
+
+### F9-G — Documentação (Task DOC-F9 por subagent)
+- `docs/BACKEND.md`: modelo Documento documentado, 5 endpoints, storage multer, consentimento RGPD, entrada F9 no histórico.
+- `docs/FRONTEND.md`: rota /gestor/documentos, tipos DTO, página documentada, entrada F9 no histórico.
+- `docs/ARQUITETURA.md`: F9 marcado ✅ no roadmap, schema de Documento alinhado com implementação real.
+
+Stage Summary:
+- **Documento criado** com 6 tipos (receita, relatorio, termo_consentimento, foto, exame, outro) e consentimento RGPD.
+- **Storage local** via multer em `uploads/` (preparação para S3/Cloudinary — url_storage é string livre).
+- **Upload multipart** via FormData (PDF, imagens, docs) com limite 20MB.
+- **Download** com nome original via content-disposition.
+- **Soft delete** preserva metadados para auditoria.
+- **130/130 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
+- **MIGRAÇÃO F0-F9 COMPLETA** 🏁 — todas as 10 fases concluídas.

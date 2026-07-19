@@ -9,7 +9,7 @@
 > imutável), **F5** (`ModeloProtocolo` + snapshot imutável na Consulta),
 > **F6** (calendário FullCalendar com Consultas) e **F7** (cron jobs de Consultas
 > + `ConsultaArquivo`) e **F8** (limpeza de modelos legacy — `Tarefa`/`TarefaArquivo`/`ModeloChecklist` removidos;
-> `Propriedade` mantida como alias de Sala) e define o roadmap de migração F0–F9. Os esquemas Mongoose
+> `Propriedade` mantida como alias de Sala) e **F9** (`Documento` — anexos clínicos com storage local via multer + consentimento RGPD + soft delete) e define o roadmap de migração F0–F9. Os esquemas Mongoose
 > abaixo são **propostas** — a implementação decorre fase a fase.
 
 ---
@@ -119,7 +119,7 @@ const isRececionista   = requireRole('admin', 'diretor_clinico', 'rececionista')
 | — (novo)                              | → | `Consulta` (substitui `Tarefa`)  | F4 ✅ |
 | — (novo)                              | → | `ModeloProtocolo` (substitui `ModeloChecklist`) | F5 ✅ |
 | — (novo)                              | → | `ConsultaArquivo` (substitui `TarefaArquivo`) | F7 ✅ |
-| — (novo)                              | → | `Documento`                      | F9 |
+| — (novo)                              | → | `Documento` (anexos clínicos + storage local + RGPD) | F9 ✅ |
 
 ---
 
@@ -357,27 +357,35 @@ horarioFisioterapeutaSchema.index({ fisioterapeuta_id: 1, data: 1 });
 
 > **F3 — Implementação real:** em relação à proposta v0.1 inicial houve as seguintes alterações: o array `janelas: [{ inicio, fim }]` foi substituído por uma única janela por documento (`hora_inicio` + `hora_fim`) — para representar um dia com manhã+tarde criam-se dois documentos `recorrente` com o mesmo `dia_semana`; o campo `notas` (plural) passou a `nota` (singular); o default de `disponivel` (exceção) passou de `false` para `true` (na prática o controller valida o tipo e o frontend oferece o toggle); foi adicionado o campo `ativo` (soft toggle, indexado) para desativar uma regra sem a apagar. Os índices compostos também foram ajustados: `{ fisioterapeuta_id, dia_semana, ativo }` para queries de regra recorrente, `{ empresa_id, fisioterapeuta_id, tipo }` para listagens por fisioterapeuta, e `{ fisioterapeuta_id, data }` para procura de exceções por dia. A validação de coerência entre `tipo`/`dia_semana`/`data` é feita em `pre('validate')` (não em validadores de campo isolados). O motor de disponibilidade (`utils/disponibilidade.js`) consulta este modelo nas funções `obterHorarioDia`, `verificarConflitoHorario` e `verificarDisponibilidadeCompleta`.
 
-### 5.8 `Documento` — F9
+### 5.8 `Documento` — ✅ F9 concluído
 
 ```js
 const documentoSchema = new Schema({
-  empresa_id:    { type: ObjectId, ref: 'Empresa', required: true, index: true },
-  paciente_id:   { type: ObjectId, ref: 'Paciente', required: true, index: true },
-  consulta_id:   { type: ObjectId, ref: 'Consulta', default: null, index: true },  // se associado a uma consulta
-  tipo:          { type: String, enum: ['anexo', 'fotografia_clinica', 'receita', 'relatorio', 'outro'], required: true },
-  nome_ficheiro: { type: String, required: true },
-  storage_url:   { type: String, required: true },   // S3 / Cloudinary URL
-  storage_key:   { type: String, required: true },   // chave interna para delete
-  content_type:  { type: String },                    // ex.: 'application/pdf', 'image/jpeg'
-  tamanho_bytes: { type: Number },
+  empresa_id:              { type: ObjectId, ref: 'Empresa', required: true, index: true },
+  paciente_id:             { type: ObjectId, ref: 'Paciente', required: true, index: true },   // a quem pertence (obrigatório)
+  consulta_id:             { type: ObjectId, ref: 'Consulta', default: null, index: true },    // se anexado a uma sessão (opcional)
+  uploaded_by:             { type: ObjectId, ref: 'Utilizador', required: true },              // quem carregou (req.user.id)
+  tipo:                    { type: String, enum: ['receita','relatorio','termo_consentimento','foto','exame','outro'],
+                             default: 'outro', index: true },
+  nome_original:           { type: String, required: true, trim: true },                       // req.file.originalname
+  url_storage:             { type: String, required: true },                                   // caminho relativo em uploads/ (futuro S3: URL do bucket)
+  content_type:            { type: String, default: 'application/octet-stream' },              // MIME type (req.file.mimetype)
+  tamanho_bytes:           { type: Number, default: 0, min: 0 },                               // req.file.size
+  descricao:               { type: String, default: '', trim: true },                          // metadados clínicos opcionais
   // RGPD
-  consentimento_fotografias: { type: Boolean, default: false },  // confirma consentimento do paciente
-  uploaded_by:   { type: ObjectId, ref: 'Utilizador', required: true },
-  eliminado_em:  { type: Date, default: null },  // soft delete
+  consentimento_obtido:    { type: Boolean, default: false },                                  // confirma consentimento do paciente
+  data_consentimento:      { type: Date, default: null },                                      // carimbada no upload quando consentimento_obtido === true
+  // Soft delete
+  eliminado_em:            { type: Date, default: null, index: true },                         // preserva metadados para auditoria RGPD
 }, { timestamps: true });
 
-documentoSchema.index({ empresa_id: 1, paciente_id: 1, tipo: 1 });
+documentoSchema.index({ empresa_id: 1, paciente_id: 1, eliminado_em: 1 });
+documentoSchema.index({ empresa_id: 1, consulta_id: 1, eliminado_em: 1 });
 ```
+
+> **F9 — Implementação real:** em relação à proposta v0.1 inicial houve as seguintes alterações: o enum `tipo` passou de `['anexo','fotografia_clinica','receita','relatorio','outro']` para `['receita','relatorio','termo_consentimento','foto','exame','outro']` (mais granular — distingue termos de consentimento e exames); o campo `nome_ficheiro` foi substituído por `nome_original` (mais explícito sobre o que guarda — o nome original do ficheiro carregado, não o nome no storage); os campos `storage_url` + `storage_key` foram consolidados num único `url_storage` (caminho relativo em `uploads/` — numa futura migração S3 este campo passa a guardar a URL completa do bucket, sem necessidade de uma chave separada porque o nome no disco já é único e derivável da URL); o campo `consentimento_fotografias` foi substituído pelo par `consentimento_obtido` + `data_consentimento` (genérico — aplica-se a qualquer tipo de documento, não só fotografias; a data é carimbada automaticamente pelo controller quando o consentimento é concedido no upload); o índice composto deixou de incluir `tipo` e passou a incluir `eliminado_em` (as queries mais frequentes são "documentos ativos de um paciente" e "documentos ativos de uma consulta" — filtrar por `tipo` é feito na query simples, não justifica índice composto). A implementação usa **storage local via multer** (pasta `uploads/` servida em estático pelo `server.js`) com `fileFilter` para PDF/JPEG/PNG/GIF/WEBP/DOC/DOCX/TXT e limite de 20MB — a migração para S3/Cloudinary fica preparada pelo design do `url_storage` (string livre que pode ser um caminho relativo ou uma URL completa).
+>
+> **Permissões (F9):** as routes (`routes/documentoRoutes.js`) usam um middleware custom `podeVer` (todos os 4 roles: `admin`, `diretor_clinico`, `fisioterapeuta`, `rececionista`) para os 4 endpoints de leitura/upload (`GET /`, `GET /:id`, `GET /:id/download`, `POST /upload`). O `DELETE /:id` exige `isDiretorClinico` (admin + diretor_clinico — soft delete RGPD). Auditoria registada em upload/eliminar via `utils/auditoria.js` (`recurso: 'documento'`). 5 endpoints montados em `/api/gestor/documentos`.
 
 ---
 
@@ -439,7 +447,7 @@ permanecem ativos.
 | **F6** | Adaptar frontend: calendário FullCalendar mostra `Consultas` em vez de `Tarefas` (nova rota `/gestor/calendario-consultas` com cores por fisioterapeuta, filtros, legenda e modal de detalhe) | ✅ Concluído |
 | **F7** | Cron jobs novos (`briefingDiarioFisio`, `lembreteConsultasAmanha`, `lembrete2hConsulta`, `caoGuardaConsultas`, `arquivistaConsultas`) + modelo `ConsultaArquivo` (clone de `Consulta` + `arquivado_em`, coleção `consultas_arquivo`) | ✅ Concluído |
 | **F8** | Limpeza: remover `Tarefa`, `TarefaArquivo`, `ModeloChecklist` antigos + `tarefaController`/`checklistController` + `utils/loadBalancer`/`scheduler` + cron jobs legacy (`dailyBriefing`/`agendaAmanha`/`caoGuarda`/`arquivista`) + `scripts/seedChecklists` + páginas frontend legacy (`/gestor/calendario` antigo, `/gestor/tarefas`, `/gestor/configuracoes/checklists`, `/gestor/webhooks`, `/admin/webhooks`, `/admin/sistema`). `Propriedade` mantida como alias de Sala (referenciada por `Consulta.sala_id`). | ✅ Concluído |
-| **F9** | `Documento` (anexos + fotografias clínicas) com storage S3/Cloudinary + consentimento RGPD | Pendente |
+| **F9** | `Documento` (anexos + fotografias clínicas) com storage local via `multer` (pasta `uploads/`, `fileFilter` PDF/imagens/DOC/TXT, limite 20MB — preparado para S3/Cloudinary futuro via `url_storage`) + consentimento RGPD (`consentimento_obtido` + `data_consentimento`) + soft delete (`eliminado_em`). 5 endpoints em `/api/gestor/documentos` (`GET /`, `GET /:id`, `GET /:id/download`, `POST /upload`, `DELETE /:id`). Permissões: `podeVer` (4 roles) para leitura/upload; `isDiretorClinico` para eliminar. Página `/gestor/documentos` (cartões + filtros + modal multipart + download + soft delete) + item **Documentos** (`FileText`) no sidebar. 130/130 testes ✓. | ✅ Concluído |
 
 > *\*F3 — Implementação efetiva:* o modelo `HorarioFisioterapeuta` + motor de disponibilidade (3 camadas) + endpoints `/api/gestor/horarios` + página `/gestor/equipa/horarios` estão concluídos. A migração `Propriedade` → `Sala` foi adiada (continua em `Propriedade`) — **F8 confirmou** que o modelo `Propriedade` é mantido como alias de Sala (a `Consulta.sala_id` referencia `Propriedade` desde F4); a migração para um modelo `Sala` dedicado foi adiada para uma fase futura (não há pressão operacional — `Propriedade` já tem os campos necessários para salas de clínica: `nome`, `empresa_id`, `ativo`, `capacidade_hospedes`, `observacoes`).
 

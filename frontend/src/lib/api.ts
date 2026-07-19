@@ -382,6 +382,39 @@ export interface ProtocoloListResponse {
   total: number;
 }
 
+// F9 — Documento
+export type TipoDocumento =
+  | "receita"
+  | "relatorio"
+  | "termo_consentimento"
+  | "foto"
+  | "exame"
+  | "outro";
+
+export interface DocumentoDTO {
+  _id: string;
+  empresa_id: string;
+  paciente_id: string | { _id: string; nome: string };
+  consulta_id: string | null;
+  uploaded_by: string | { _id: string; nome: string };
+  tipo: TipoDocumento;
+  nome_original: string;
+  url_storage: string;
+  content_type: string;
+  tamanho_bytes: number;
+  descricao: string;
+  consentimento_obtido: boolean;
+  data_consentimento: string | null;
+  eliminado_em?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface DocumentoListResponse {
+  documentos: DocumentoDTO[];
+  total: number;
+}
+
 export interface AusenciaDTO {
   _id: string;
   utilizador_id: string;

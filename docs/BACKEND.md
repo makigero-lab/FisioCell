@@ -1,6 +1,6 @@
 # Documentação Técnica — Backend (FisioCell)
 
-> ⚠️ **F0 — Documentação em transição (F8 concluída).** O projeto migrou de Alojamento Local para Fisioterapia. A integração Smoobu foi removida. **F8 — Limpeza:** o modelo `Tarefa` foi **removido** (substituído por `Consulta` em F4); o `ModeloChecklist` foi extinto (substituído por `ModeloProtocolo` em F5); o modelo `Propriedade` foi **mantido como alias de Sala** (ainda referenciado por `Consulta.sala_id` — a migração para um modelo `Sala` dedicado foi adiada). Ver [`docs/ARQUITETURA.md`](ARQUITETURA.md) para o roadmap completo F0–F9.
+> ⚠️ **F0 — Documentação em transição (F9 concluída).** O projeto migrou de Alojamento Local para Fisioterapia. A integração Smoobu foi removida. **F8 — Limpeza:** o modelo `Tarefa` foi **removido** (substituído por `Consulta` em F4); o `ModeloChecklist` foi extinto (substituído por `ModeloProtocolo` em F5); o modelo `Propriedade` foi **mantido como alias de Sala** (ainda referenciado por `Consulta.sala_id` — a migração para um modelo `Sala` dedicado foi adiada). **F9 — Documentos:** novo modelo `Documento` (anexos clínicos) + 5 endpoints em `/api/gestor/documentos` + storage local via multer (pasta `uploads/`, filtro PDF/imagens/DOC/TXT, limite 20MB) + consentimento RGPD + soft delete. Ver [`docs/ARQUITETURA.md`](ARQUITETURA.md) para o roadmap completo F0–F9.
 
 API REST do SaaS de gestão para Fisioterapia, construída com **Node.js**, **Express** e **MongoDB** (via **Mongoose**).
 
@@ -35,6 +35,7 @@ backend/
 │   ├── protocoloController.js # CRUD de Modelos de Protocolo (F5) + helper gerarSnapshotProtocolo
 │   ├── horarioController.js # CRUD de HorarioFisioterapeuta (F3) + verificador de disponibilidade
 │   ├── pacienteController.js # CRUD de Pacientes (F2) — permissões por role + sanitização de dados clínicos
+│   ├── documentoController.js # CRUD de Documentos (F9) — upload/listar/detalhe/download + soft delete + RGPD
 │   ├── staffController.js    # Painel do Staff
 │   ├── ausenciaController.js # Ausências (folgas/férias) — sem redistribuição de Tarefas (F8)
 │   ├── superAdminController.js # Gestão cross-tenant de empresas — hard-reset usa Consulta (F8)
@@ -55,7 +56,8 @@ backend/
 │   ├── Notificacao.js        #   Notificações in-app + push (destinatário, tipo, lida)
 │   ├── Auditoria.js          #   Log de auditoria (empresa_id, utilizador_id, recurso, acao, detalhes)
 │   ├── WebhookLog.js         #   Log de webhooks (mantido para auditoria)
-│   └── ModeloProtocolo.js    #   Template de protocolo clínico (F5) — substitui ModeloChecklist; área + ativo + snapshot
+│   ├── ModeloProtocolo.js    #   Template de protocolo clínico (F5) — substitui ModeloChecklist; área + ativo + snapshot
+│   └── Documento.js          #   Anexo clínico (F9) — receita/relatório/termo/foto/exame/outro + storage local + RGPD
 ├── utils/
 │   ├── geocoding.js          # Geocoding de moradas (Nominatim)
 │   ├── disponibilidade.js    # Filtros de ausência/folga + motor de disponibilidade F3 (horários)
@@ -76,11 +78,14 @@ backend/
     ├── horarioRoutes.js      # Rotas /api/gestor/horarios/* (F3)
     ├── consultaRoutes.js     # Rotas /api/gestor/consultas/* (F4)
     ├── protocoloRoutes.js    # Rotas /api/gestor/protocolos/* (F5)
+    ├── documentoRoutes.js    # Rotas /api/gestor/documentos/* (F9) — multer storage local
     ├── staffRoutes.js        # Rotas /api/staff/*
     ├── authRoutes.js         # POST /api/auth/login, GET /api/auth/me
     ├── ausenciaRoutes.js     # Rotas de ausências
     └── relatorioRoutes.js    # Rotas de relatórios
 ```
+
+> **F9 — Storage local:** os ficheiros carregados via `POST /api/gestor/documentos/upload` são gravados na pasta `uploads/` (à raiz do backend) pelo `multer`. O `server.js` serve esta pasta em estático via `app.use('/uploads', express.static(...))`. A pasta `uploads/` está no `.gitignore` (não é commitada). O campo `url_storage` do modelo `Documento` guarda um caminho relativo que poderá ser trocado por uma URL S3/Cloudinary numa futura migração sem alterar a API.
 
 ---
 
@@ -105,9 +110,11 @@ O fluxo de arranque segue uma sequência segura:
 
 ## 3.1. Modelos de dados (Mongoose)
 
-O sistema gira em torno de 9 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
+O sistema gira em torno de 10 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
 
 > **F8 — Limpeza de modelos legacy:** os modelos `Tarefa`, `TarefaArquivo` e `ModeloChecklist` foram **removidos** (juntamente com `tarefaController.js`, `checklistController.js`, `utils/loadBalancer.js`, `utils/scheduler.js`, `scripts/seedChecklists.js` e os 4 cron jobs legacy `dailyBriefing`/`agendaAmanha`/`caoGuarda`/`arquivista`). O modelo `Propriedade` foi mantido como **alias de Sala** (continua referenciado por `Consulta.sala_id`). Modelo final: `Empresa`, `Utilizador`, `Propriedade` (Sala), `Paciente`, `Consulta`, `ConsultaArquivo`, `HorarioFisioterapeuta`, `ModeloProtocolo`, `Ausencia`, `Notificacao`, `Auditoria`, `WebhookLog` (alguns partilham coleção — ver detalhe em cada secção).
+>
+> **F9 — Documentos:** adicionado o modelo `Documento` (anexos clínicos — receitas, relatórios, termos de consentimento, fotografias, exames, outros) com storage local via `multer` em `uploads/`, consentimento RGPD obrigatório para dados clínicos e soft delete (`eliminado_em`) para preservar metadados de auditoria.
 
 ### `Empresa`
 Entidade principal do SaaS (multi-tenant). Cada empresa agrupa Propriedades e Utilizadores.
@@ -385,6 +392,39 @@ Cópia exata do schema `Consulta` usada para arquivar consultas concluídas/canc
 - `{ arquivado_em: 1 }` — lookup por data de arquivo (auditoria).
 
 > **Permissões (F7):** não há endpoints REST dedicados à leitura/escrita direta de `ConsultaArquivo` — o movimento é feito exclusivamente pelo cron job `arquivistaConsultas`. O acesso ao histórico arquivado para auditoria legal/RGPD será exposto numa futura fase (relatórios / portal de auditoria). A imutabilidade da `nota_clinica` herdada do schema `Consulta` é preservada (o documento em arquivo é apenas para leitura histórica).
+
+### `Documento`
+Anexo clínico de um `Paciente` (e opcionalmente de uma `Consulta`). **F9** — suporta receitas, relatórios, termos de consentimento, fotografias, exames e outros. O ficheiro é guardado em storage local (`uploads/`) via `multer` (configuração no `routes/documentoRoutes.js`); o campo `url_storage` guarda um caminho relativo que poderá ser trocado por uma URL S3/Cloudinary sem alterar a API. Soft delete (`eliminado_em`) preserva metadados para auditoria RGPD.
+
+> **F9 — Consentimento RGPD:** o campo `consentimento_obtido` (boolean) regista que o paciente autorizou o tratamento do documento; `data_consentimento` é carimbada automaticamente pelo controller no momento do upload quando `consentimento_obtido === true`. O frontend inclui uma checkbox obrigatória no modal de upload para garantir que o utilizador confirma o consentimento antes de carregar o ficheiro. Não há bloqueio server-side (a checkbox é do frontend), mas o metadado fica registado para auditoria.
+
+| Campo                    | Tipo     | Notas                                                              |
+|--------------------------|----------|--------------------------------------------------------------------|
+| `empresa_id`             | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
+| `paciente_id`            | ObjectId | `ref: 'Paciente'`. Obrigatório, indexado. A quem pertence o documento. Validado no controller como paciente não eliminado da empresa. |
+| `consulta_id`            | ObjectId | `ref: 'Consulta'`, default `null`, indexado. Se anexado a uma sessão específica. Validado no controller quando fornecido. |
+| `uploaded_by`            | ObjectId | `ref: 'Utilizador'`. Obrigatório. Quem carregou o ficheiro (lido de `req.user.id`). |
+| `tipo`                   | String   | `enum: ['receita','relatorio','termo_consentimento','foto','exame','outro']`, default `'outro'`, indexado. Categoria do documento. |
+| `nome_original`          | String   | Obrigatório, trim. Nome original do ficheiro carregado (`req.file.originalname`). |
+| `url_storage`            | String   | Obrigatório. Caminho relativo no storage (`uploads/<timestamp>-<rand>.<ext>`) — futuro S3: URL completa do bucket. |
+| `content_type`           | String   | Default `'application/octet-stream'`. MIME type do ficheiro (`req.file.mimetype`). |
+| `tamanho_bytes`          | Number   | Default `0`, `min: 0`. Tamanho do ficheiro em bytes (`req.file.size`). |
+| `descricao`              | String   | Default `''`, trim. Descrição opcional (metadados clínicos). |
+| `consentimento_obtido`   | Boolean  | Default `false`. RGPD — confirma que o paciente consentiu o tratamento do documento. |
+| `data_consentimento`     | Date     | Default `null`. Carimbada automaticamente pelo controller quando `consentimento_obtido === true` no upload. |
+| `eliminado_em`           | Date     | Default `null`, indexado. Soft delete — preserva metadados para auditoria RGPD. |
+
+**Índices compostos:**
+- `{ empresa_id: 1, paciente_id: 1, eliminado_em: 1 }` — listagem de documentos ativos de um paciente.
+- `{ empresa_id: 1, consulta_id: 1, eliminado_em: 1 }` — listagem de documentos ativos anexados a uma consulta.
+
+> **Permissões (F9):** as routes (`routes/documentoRoutes.js`) usam um middleware custom `podeVer` (todos os 4 roles: `admin`, `diretor_clinico`, `fisioterapeuta`, `rececionista`) para os 4 endpoints de leitura/upload (`GET /`, `GET /:id`, `GET /:id/download`, `POST /upload`) — todos os roles podem ver e carregar documentos. O `DELETE /:id` exige `isDiretorClinico` (admin + diretor_clinico) — só a direção clínica elimina documentos. Auditoria registada em upload/eliminar via `utils/auditoria.js` (`recurso: 'documento'`, `acao: 'upload_documento' | 'eliminar_documento'`).
+>
+> **Validações no upload (F9):** o controller valida `paciente_id` (obrigatório, tem de existir e não estar eliminado na empresa), `consulta_id` (se fornecido, tem de existir na empresa), `tipo` (tem de pertencer ao enum). O `multer` rejeita ficheiros com MIME type fora da lista aceite (`application/pdf`, `image/jpeg`, `image/png`, `image/gif`, `image/webp`, `application/msword`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document`, `text/plain`) e ficheiros maiores que 20MB. Em caso de falha do controller após o ficheiro já ter sido gravado, o ficheiro é apagado do disco (`fs.unlinkSync`) para evitar órfãos.
+>
+> **Download (F9):** o `GET /:id/download` envia o ficheiro com `res.download(filePath, doc.nome_original)` — o browser recebe o ficheiro com o nome original. Se o ficheiro não existir no storage (foi apagado manualmente do disco), devolve `404` "Ficheiro não encontrado no storage."
+>
+> **Soft delete (F9):** o `DELETE /:id` não apaga o ficheiro do disco nem o documento da coleção — apenas marca `eliminado_em = new Date()`. Os endpoints de leitura/listagem filtram `{ eliminado_em: null }` — o documento desaparece da UI mas os metadados ficam preservados para auditoria RGPD.
 
 ---
 
@@ -1421,6 +1461,103 @@ Atualiza um protocolo (todos os campos opcionais, mas pelo menos um). Permite de
 - **Auditoria:** registada (`acao: 'eliminar'`, `recurso: 'modelo_protocolo'`, `descricao: "Protocolo eliminado"`).
 - **Erros:** `400` ID inválido; `401` não autenticado; `403` role sem permissão; `404` não encontrado (ou `deletedCount === 0`); `500` erro.
 
+### 6.16. Documentos (`/api/gestor/documentos`) — F9
+
+> **Auth:** JWT (strito, sem fallback legacy). Todas as rotas protegidas por `auth` (em `documentoRoutes.js`).
+>
+> **Permissões (F9):**
+> - `podeVer` (middleware custom) — todos os 4 roles (`admin`, `diretor_clinico`, `fisioterapeuta`, `rececionista`) podem aceder a `GET /` (listar), `GET /:id` (detalhe), `GET /:id/download` (download do ficheiro) e `POST /upload` (carregar ficheiro). Todos os roles da clínica conseguem ver e anexar documentos (a rececionista carrega receitas enviadas pelo email, o fisio anexa fotografias clínicas, etc.).
+> - `isDiretorClinico` (admin + diretor_clinico) — `DELETE /:id`. Só a direção clínica elimina documentos (soft delete — RGPD).
+>
+> **Storage local via multer:** o `routes/documentoRoutes.js` configura o `multer` com `diskStorage` em `uploads/` (criada automaticamente se não existir); o nome do ficheiro no disco é `<timestamp>-<random>.<ext>` (não usa o `originalname` para evitar colisões/caracteres especiais). O `fileFilter` aceita apenas `application/pdf`, `image/jpeg`, `image/png`, `image/gif`, `image/webp`, `application/msword`, `application/vnd.openxmlformats-officedocument.wordprocessingml.document` e `text/plain`. O `limits.fileSize` é 20MB. O `server.js` serve a pasta `uploads/` em estático (`app.use('/uploads', express.static(...))`).
+>
+> **Auditoria:** `POST /upload` e `DELETE /:id` registam em `utils/auditoria.js` (`recurso: 'documento'`, `acao: 'upload_documento' | 'eliminar_documento'`).
+
+#### `GET /api/gestor/documentos`
+Lista os documentos ativos da empresa do utilizador autenticado (não eliminados).
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Query params (opcionais):**
+  - `paciente_id` — filtra por paciente.
+  - `consulta_id` — filtra por consulta.
+  - `tipo` — filtra por tipo (`receita`/`relatorio`/`termo_consentimento`/`foto`/`exame`/`outro`). Ignorado se não pertencer ao enum.
+- **Ordenação:** `createdAt` (desc) — documentos mais recentes primeiro.
+- **Populate:** `uploaded_by` (só `nome`) + `paciente_id` (só `nome`).
+- **Resposta (200 OK):**
+```json
+{
+  "documentos": [
+    {
+      "_id": "...",
+      "empresa_id": "...",
+      "paciente_id": { "_id": "...", "nome": "João Silva" },
+      "consulta_id": null,
+      "uploaded_by": { "_id": "...", "nome": "Dra. Maria" },
+      "tipo": "receita",
+      "nome_original": "receita-anti-inflamatorio.pdf",
+      "url_storage": "/uploads/1700000000000-123456789.pdf",
+      "content_type": "application/pdf",
+      "tamanho_bytes": 102400,
+      "descricao": "Receita de ibuprofeno 600mg",
+      "consentimento_obtido": true,
+      "data_consentimento": "2024-01-15T10:30:00.000Z",
+      "eliminado_em": null,
+      "createdAt": "...",
+      "updatedAt": "..."
+    }
+  ],
+  "total": 1
+}
+```
+- **Erros:** `401` não autenticado; `403` role sem permissão; `500` erro interno.
+
+#### `GET /api/gestor/documentos/:id`
+Devolve o detalhe de um documento ativo.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Resposta (200 OK):** `{ "documento": { ... } }` (mesma estrutura do item acima, com `uploaded_by` e `paciente_id` populated).
+- **Erros:** `400` ID inválido; `401` não autenticado; `404` não encontrado (ou eliminado); `500` erro.
+
+#### `GET /api/gestor/documentos/:id/download`
+Faz o download do ficheiro associado ao documento (envia o binário com o nome original).
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Resposta (200 OK):** `res.download(filePath, doc.nome_original)` — o browser recebe o ficheiro com o `Content-Disposition: attachment; filename="<nome_original>"` e o `Content-Type` adequado.
+- **Erros:** `400` ID inválido; `401` não autenticado; `404` documento não encontrado **ou** ficheiro não existe no storage (mensagem "Ficheiro não encontrado no storage."); `500` erro.
+
+#### `POST /api/gestor/documentos/upload`
+Carrega um ficheiro (multipart/form-data) e cria o registo do documento.
+
+- **Auth:** JWT + `podeVer` (4 roles).
+- **Content-Type:** `multipart/form-data`.
+- **Body:**
+  - `file` — ficheiro binário (campo do multipart; MIME type tem de estar na lista aceite; máx. 20MB).
+  - `paciente_id` — **obrigatório** (string, ObjectId válido).
+  - `consulta_id` — opcional (string, ObjectId válido; se fornecido, tem de existir na empresa).
+  - `tipo` — opcional, default `'outro'` (`enum: ['receita','relatorio','termo_consentimento','foto','exame','outro']`).
+  - `descricao` — opcional, default `''` (string, trimmed).
+  - `consentimento_obtido` — opcional, default `false` (boolean — o frontend envia `"true"`/`"false"` como string; o controller normaliza com `!!`).
+- **Validações:**
+  - `400` se `file` em falta ("Nenhum ficheiro enviado.").
+  - `400` se `paciente_id` em falta ("paciente_id é obrigatório.").
+  - `400` se `tipo` não pertencer ao enum ("Tipo inválido.").
+  - `400` se o `paciente_id` não existir ou estiver eliminado ("Paciente não encontrado.").
+  - `400` se `consulta_id` for fornecido e não existir ("Consulta não encontrada.").
+  - O `multer` rejeita (`400` implícito via middleware) MIME types não aceites e ficheiros >20MB.
+- **Lógica de RGPD:** se `consentimento_obtido === true`, o controller carimba `data_consentimento = new Date()`. Caso contrário, fica `null`.
+- **Robustez:** se o controller falhar após o ficheiro ter sido gravado no disco (ex.: `paciente_id` inválido), o ficheiro é apagado do disco (`fs.unlinkSync(req.file.path)`) para evitar órfãos no storage.
+- **Resposta (201 Created):** `{ "documento": { ... } }` (documento criado, sem populate).
+- **Auditoria:** registada (`acao: 'upload_documento'`, `recurso: 'documento'`, `descricao: "Documento \"<nome_original>\" carregado para paciente \"<nome_paciente>\""`).
+- **Erros:** `400` validações acima; `401` não autenticado; `403` role sem permissão; `500` erro.
+
+#### `DELETE /api/gestor/documentos/:id`
+**Soft delete** do documento (não apaga o ficheiro do disco nem o documento da coleção — apenas marca `eliminado_em`).
+
+- **Auth:** JWT + `isDiretorClinico` (admin + diretor_clinico).
+- **Resposta (200 OK):** `{ "message": "Documento eliminado.", "documento": { "_id": "..." } }`.
+- **Auditoria:** registada (`acao: 'eliminar_documento'`, `recurso: 'documento'`, `descricao: "Documento \"<nome_original>\" eliminado (soft delete)"`).
+- **Erros:** `400` ID inválido; `401` não autenticado; `403` role sem permissão; `404` não encontrado (ou já eliminado); `500` erro.
+
 ---
 
 ## 7. Deploy no Render
@@ -1454,6 +1591,7 @@ Atualiza um protocolo (todos os campos opcionais, mas pelo menos um). Permite de
 
 | Data       | Versão | Alteração                                                            |
 |------------|--------|----------------------------------------------------------------------|
+| **F9**     | —      | **Documentos (anexos clínicos) + storage local + RGPD:** (1) Novo modelo `models/Documento.js` — `empresa_id`, `paciente_id` (obrigatório, `ref: 'Paciente'`), `consulta_id` (opcional, `ref: 'Consulta'`, default `null`), `uploaded_by` (`ref: 'Utilizador'`), `tipo` (`enum ['receita','relatorio','termo_consentimento','foto','exame','outro']` default `'outro'`), `nome_original` (string), `url_storage` (string — caminho relativo em `uploads/`, preparado para futuro S3/Cloudinary), `content_type` (MIME type, default `'application/octet-stream'`), `tamanho_bytes` (Number, default `0`), `descricao` (string), `consentimento_obtido` (Boolean default `false` — RGPD), `data_consentimento` (Date default `null` — carimbada no upload quando `consentimento_obtido === true`), `eliminado_em` (Date default `null` — soft delete). Índices compostos `{empresa_id, paciente_id, eliminado_em}` e `{empresa_id, consulta_id, eliminado_em}`. (2) Novo `controllers/documentoController.js` — 5 funções (`listarDocumentos` com filtros `paciente_id`/`consulta_id`/`tipo` + populate `uploaded_by`/`paciente_id` ordenado por `createdAt` desc, `obterDocumento` detalhe, `downloadDocumento` via `res.download(filePath, nome_original)`, `uploadDocumento` com validação de `paciente_id`/`consulta_id`/`tipo` + carimbo de `data_consentimento` + apagar ficheiro em caso de falha pós-gravação, `eliminarDocumento` soft delete via `findOneAndUpdate` com `$set eliminado_em`); auditoria registada (`recurso: 'documento'`, `acao: 'upload_documento' | 'eliminar_documento'`). (3) Novas `routes/documentoRoutes.js` montadas em `/api/gestor/documentos` — middleware custom `podeVer` (4 roles: admin/diretor_clinico/fisioterapeuta/rececionista) para `GET /`, `GET /:id`, `GET /:id/download`, `POST /upload`; `isDiretorClinico` (admin + diretor_clinico) para `DELETE /:id`. Configuração `multer`: `diskStorage` em `uploads/` (criada automaticamente), nome de ficheiro `<timestamp>-<random>.<ext>`, `fileFilter` com `application/pdf`/`image/jpeg`/`image/png`/`image/gif`/`image/webp`/`application/msword`/`application/vnd.openxmlformats-officedocument.wordprocessingml.document`/`text/plain`, `limits.fileSize` 20MB. (4) `server.js` — mount `app.use('/api/gestor/documentos', documentoRoutes)` + serve estático `app.use('/uploads', express.static(...))`. (5) Storage local em `uploads/` (com `.gitignore`) — o campo `url_storage` guarda um caminho relativo que poderá ser trocado por uma URL S3/Cloudinary sem alterar a API. 130/130 testes ✓ (+14 testes cobrindo upload de PDF e JPEG, listagem com filtros, download, soft delete, permissões). |
 | **F8**     | —      | **Limpeza de modelos legacy (Tarefa → Consulta, ModeloChecklist extinto):** (1) **Modelos removidos** — `models/Tarefa.js`, `models/TarefaArquivo.js`, `models/ModeloChecklist.js` (e respetivas coleções) eliminados do código-base. (2) **Controllers removidos** — `controllers/tarefaController.js` e `controllers/checklistController.js`. (3) **Utils removidos** — `utils/loadBalancer.js` (motor de atribuição legacy) e `utils/scheduler.js` (scheduler sequencial). (4) **Jobs legacy removidos** — `jobs/dailyBriefing.js`, `jobs/agendaAmanha.js`, `jobs/caoGuarda.js`, `jobs/arquivista.js` (sobre `Tarefa`) — substituídos pelos 5 cron jobs F7 sobre `Consulta` (mantêm-se `briefingDiarioFisio`, `lembreteConsultasAmanha`, `lembrete2hConsulta`, `caoGuardaConsultas`, `arquivistaConsultas`). (5) **Script removido** — `scripts/seedChecklists.js` + entry `seed:checklists` do `package.json`. (6) **Modelo `Propriedade`** — removido o campo `modelo_checklist_id` (referenciava `ModeloChecklist` extinto); o modelo é mantido como **alias de Sala** (ainda referenciado por `Consulta.sala_id`). (7) **Controllers limpos** — `gestorController` (~950 linhas removidas de funções Tarefa-dependentes; `getDashboard` reescrito com `Consulta`; `alternarEstadoPropriedade` simplificado); `ausenciaController` (removida redistribuição via load balancer — `aprovarRejeitarAusencia` agora só atualiza estado); `authController` (stubs para `minhasTarefas`/`meuCalendario` — arrays vazios ou 410 Gone); `staffController` (removidas `concluirTarefa`/`reportarAvaria`/`reportarAtraso`/`toggleChecklistItem`); `relatorioController` (rewrite com `Consulta` — `totalTarefas`→`totalConsultas`, `porStaff`→`porFisio`, `porPropriedade`→`porSala`, retrocompatível no `construirContexto`); `superAdminController` (`Tarefa.deleteMany`→`Consulta.deleteMany` no hard-reset; `num_tarefas`→`num_consultas` no `listarEmpresas`). (8) **Routes limpas** — `gestorRoutes` (removidas ~15 routes Tarefa/Checklist/Webhooks + forçar cron legacy; mantido `POST /propriedades/default-checklist` que usa `checklist` array de strings); `adminRoutes` (hard-reset usa `Consulta`; removido `POST /seed-checklists` + forçar cron legacy); `staffRoutes` (removidas routes Tarefa). (9) **Frontend** — páginas removidas: `/gestor/calendario` (antigo de Tarefas), `/gestor/tarefas`, `/gestor/configuracoes/checklists`, `/gestor/webhooks`, `/admin/webhooks`, `/admin/sistema`; sidebar do gestor atualizado: removidos "Calendário" (antigo)/"Tarefas"/"Checklists", renomeado "Propriedades"→"Salas", adicionado "Configurações". (10) **Testes** — 116/116 ✓ (removidos ~84 testes Tarefa-dependentes; mantidos F2–F7 + health/auth/propriedades). (11) **Modelos finais do projeto:** `Empresa`, `Utilizador`, `Propriedade` (Sala), `Paciente`, `Consulta`, `ConsultaArquivo`, `HorarioFisioterapeuta`, `ModeloProtocolo`, `Ausencia`, `Notificacao`, `Auditoria`, `WebhookLog`. |
 | **F7**     | —      | **Cron Jobs de Consultas + `ConsultaArquivo`:** (1) Novo modelo `models/ConsultaArquivo.js` — clone exato do schema `Consulta` com campo extra `arquivado_em` (Date, default `Date.now`); coleção dedicada `consultas_arquivo` (via `mongoose.model('ConsultaArquivo', consultaArquivoSchema, 'consultas_arquivo')`). Preserva todos os campos da `Consulta` (incluindo `nota_clinica` SOAP com `protocolo_aplicado[]` + `cedula_assinante`) para auditoria legal/RGPD (retenção 10–20 anos). Índices compostos `{empresa_id, fisioterapeuta_id, data_hora_inicio: -1}`, `{empresa_id, paciente_id, data_hora_inicio: -1}`, `{arquivado_em: 1}`. Sem endpoints REST dedicados — o movimento é feito exclusivamente pelo cron job `arquivistaConsultas`. (2) 5 novos cron jobs em `jobs/` (todos com `timezone: 'Europe/Lisbon'` e `require('../utils/notificar')` lazy para `jest.spyOn`): (2a) `briefingDiarioFisio.js` — `0 8 * * *` 08:00, push a cada fisio (`fisioterapeuta`/`diretor_clinico` ativo não eliminado) com consultas **hoje** (`estado` ∈ `{marcada, confirmada, em_curso}`), mensagem `📋 Tens X consulta(s) hoje. Entra na app para ver a agenda.`, agrupado por fisio, devolve `{processados, notificados, consultas}`; (2b) `lembreteConsultasAmanha.js` — `0 19 * * *` 19:00, push a cada fisio com consultas **amanhã** (`estado` ∈ `{marcada, confirmada}` e `lembrete_24h_enviado: {$ne: true}`), mensagem `📅 Lembrete: tens X consulta(s) amanhã.`, marca `lembrete_24h_enviado=true` em lote via `Consulta.updateMany` (idempotência); (2c) `lembrete2hConsulta.js` — `*/15 * * * *` a cada 15 min, procura consultas que começam na janela +1h45 a +2h15 (105–135 min, sobreposição garante nenhuma escapar), `estado` ∈ `{marcada, confirmada}` e `lembrete_2h_enviado: {$ne: true}`, push ao fisio com mensagem `Consulta com [paciente] às [HH:mm] — faltam ~2 horas.`, marca `lembrete_2h_enviado=true`; (2d) `caoGuardaConsultas.js` — `0 2 * * *` 02:00, verifica (1) consultas de **hoje** sem fisio ativo (órfãs) e (2) consultas de datas **passadas** não concluídas (esquecidas), agrupa alertas por `empresa_id`, notifica apenas `diretor_clinico`/`admin` ativos (rota `/gestor/consultas`, `tipo: 'aviso'`) com mensagem `🐕 Alerta: X consulta(s) órfã(s), Y consulta(s) esquecida(s). Verifica o painel.`; (2e) `arquivistaConsultas.js` — `0 3 * * 0` domingo 03:00, move `Consulta` com `estado` ∈ `{concluida, cancelada, faltou, nao_compareceu}` e `data_hora_inicio` anterior a 6 meses para `consultas_arquivo` (preserva todos os campos + `arquivado_em`), apaga originais só depois de copiados com sucesso (robustez — reprocessa falhadas no domingo seguinte), devolve `{arquivadas, erros}`. (3) `server.js` — os 5 jobs montados no arranque dentro de `if (require.main === module)` (após `mongoose.connect` com sucesso, depois dos 4 jobs legacy `dailyBriefing`/`agendaAmanha`/`caoGuarda`/`arquivista` que se mantêm até F8). Jobs legacy (Tarefa) não removidos — coexistem até F8 (limpeza). 200/200 testes ✓ (+8 testes: briefing fisio com consultas hoje, lembrete 24h marca `lembrete_24h_enviado=true`, lembrete 2h filtra janela e marca `lembrete_2h_enviado=true`, cão de guarda deteta órfãs + esquecidas e notifica diretores, arquivista move consultas >6 meses para `consultas_arquivo` preservando SOAP). |
 | **F5**     | —      | **Protocolos Clínicos + snapshot na Consulta:** (1) Novo modelo `models/ModeloProtocolo.js` (evolução do `ModeloChecklist`) — `empresa_id`, `nome`, `descricao`, `area` (`enum ['musculoesqueletica','neurologica','cardioresp','desporto','pediatria','outro']` default `'musculoesqueletica'`), `seccoes[{nome, items[]}]`, `ativo` (boolean default `true`). Índice composto `{empresa_id, ativo, area}` + índices individuais em `empresa_id`/`nome`/`area`/`ativo`. (2) Novo `controllers/protocoloController.js` — 5 funções CRUD (`listarProtocolos` com filtros `area`/`ativo` ordenado por `area`+`nome`, `obterProtocolo`, `criarProtocolo` com validação de `nome` obrigatório + `area` válida + `seccoes` array não vazio + cada secção com `nome` e `items` não vazios, `atualizarProtocolo` com normalização de `ativo`/`seccoes`, `apagarProtocolo` hard delete) + helper exportado `gerarSnapshotProtocolo(protocoloId, empresaId)` (devolve array de `{nome, items:[{texto, concluido:false}]}` ou `null` se não existir/não pertencer à empresa); auditoria registada (`recurso: 'modelo_protocolo'`). (3) Novas `routes/protocoloRoutes.js` montadas em `/api/gestor/protocolos` — middleware custom `podeVer` (4 roles: admin/diretor_clinico/fisioterapeuta/rececionista) para `GET /` e `GET /:id` (fisio precisa de ver para aplicar; rececionista para selecionar ao marcar); `isDiretorClinico` para POST/PUT/DELETE (só direção clínica gere protocolos). (4) `server.js` — mount `app.use('/api/gestor/protocolos', protocoloRoutes)`. (5) Integração na Consulta — `consultaController.criarConsulta` aceita `protocolo_id` opcional no body → invoca `gerarSnapshotProtocolo` e guarda em `nota_clinica.protocolo_aplicado` (400 se protocolo não encontrado/não pertence à empresa); `consultaController.atualizarNotaClinica` (`PATCH /:id/nota-clinica`) aceita `protocolo_aplicado` para marcar items como `concluido` durante a sessão (substitui o snapshot, normaliza `texto`/`concluido`). Snapshot imutável por edições futuras no template (RGPD/legal). 192/192 testes ✓ (+16 testes: CRUD de protocolos, validações de `nome`/`area`/`seccoes`, permissões `podeVer`/`isDiretorClinico`, snapshot na criação de consulta com `protocolo_id`, marcação de items concluídos via PATCH, protocolo inexistente → 400). |

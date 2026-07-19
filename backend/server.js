@@ -43,6 +43,7 @@ const pacienteRoutes = require('./routes/pacienteRoutes'); // F2 — Pacientes
 const horarioRoutes = require('./routes/horarioRoutes'); // F3 — Horários
 const consultaRoutes = require('./routes/consultaRoutes'); // F4 — Consultas
 const protocoloRoutes = require('./routes/protocoloRoutes'); // F5 — Protocolos
+const documentoRoutes = require('./routes/documentoRoutes'); // F9 — Documentos
 // F8 — Cron jobs legacy removidos (dailyBriefing, agendaAmanha, caoGuarda, arquivista).
 // F7 — Cron jobs para Consultas (domínio Fisioterapia).
 const { iniciarBriefingFisio } = require('./jobs/briefingDiarioFisio');
@@ -142,6 +143,11 @@ app.use('/api/gestor/consultas', consultaRoutes);
 
 // F5 — Protocolos Clínicos (templates reutilizáveis com snapshot na Consulta).
 app.use('/api/gestor/protocolos', protocoloRoutes);
+
+// F9 — Documentos (anexos clínicos: receitas, relatórios, fotografias).
+app.use('/api/gestor/documentos', documentoRoutes);
+// Serve ficheiros estáticos da pasta uploads (para downloads).
+app.use('/uploads', express.static(require('path').join(__dirname, '..', 'uploads')));
 
 /* ------------------------------------------------------------------ */
 /* Middleware global de tratamento de erros                            */

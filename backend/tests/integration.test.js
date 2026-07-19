@@ -1749,3 +1749,186 @@ describe('F7 — Cron Jobs de Consultas', () => {
     await Consulta.deleteOne({ _id: consulta._id });
   });
 });
+
+/* ------------------------------------------------------------------ */
+/* F9 — Documentos (upload + listagem + download + delete)            */
+/* ------------------------------------------------------------------ */
+
+describe('F9 — Documentos (CRUD)', () => {
+  let fisioF9Token, diretorF9Token, rececionistaF9Token;
+  let pacienteF9Id;
+  let documentoId;
+
+  beforeAll(async () => {
+    const hash = await bcrypt.hash(PASSWORD, 10);
+
+    const fisio = await Utilizador.create({
+      nome: 'Fisio F9', email: 'fisio.f9@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'fisioterapeuta', ativo: true,
+      perfil_profissional: { cedula: 'FIS-F9', ativo_clinico: true },
+    });
+
+    const diretor = await Utilizador.create({
+      nome: 'Diretor F9', email: 'diretor.f9@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'diretor_clinico', ativo: true,
+      perfil_profissional: { cedula: 'DIR-F9' },
+    });
+
+    const rececionista = await Utilizador.create({
+      nome: 'Rece F9', email: 'rece.f9@teste.pt', password_hash: hash,
+      empresa_id: empresaId, role: 'rececionista', ativo: true,
+    });
+
+    const [rFisio, rDir, rRec] = await Promise.all([
+      request(app).post('/api/auth/login').send({ email: 'fisio.f9@teste.pt', password: PASSWORD }),
+      request(app).post('/api/auth/login').send({ email: 'diretor.f9@teste.pt', password: PASSWORD }),
+      request(app).post('/api/auth/login').send({ email: 'rece.f9@teste.pt', password: PASSWORD }),
+    ]);
+    fisioF9Token = rFisio.body.token;
+    diretorF9Token = rDir.body.token;
+    rececionistaF9Token = rRec.body.token;
+
+    const Paciente = require('../models/Paciente');
+    const pac = await Paciente.create({ empresa_id: empresaId, nome: 'Paciente F9', telefone: '+351900000009' });
+    pacienteF9Id = String(pac._id);
+  });
+
+  afterAll(async () => {
+    await Utilizador.deleteMany({ email: { $in: ['fisio.f9@teste.pt', 'diretor.f9@teste.pt', 'rece.f9@teste.pt'] } });
+    const Paciente = require('../models/Paciente');
+    const Documento = require('../models/Documento');
+    await Paciente.deleteOne({ _id: pacienteF9Id });
+    await Documento.deleteMany({ empresa_id: empresaId, paciente_id: pacienteF9Id });
+  });
+
+  it('POST /upload (rececionista) → 201 cria documento', async () => {
+    const res = await request(app)
+      .post('/api/gestor/documentos/upload')
+      .set('Authorization', `Bearer ${rececionistaF9Token}`)
+      .attach('file', Buffer.from('Conteúdo de teste do PDF'), 'receita.pdf')
+      .field('paciente_id', pacienteF9Id)
+      .field('tipo', 'receita')
+      .field('descricao', 'Receita médica')
+      .field('consentimento_obtido', 'true');
+
+    expect(res.status).toBe(201);
+    expect(res.body.documento).toHaveProperty('_id');
+    expect(res.body.documento.tipo).toBe('receita');
+    expect(res.body.documento.nome_original).toBe('receita.pdf');
+    expect(res.body.documento.consentimento_obtido).toBe(true);
+    expect(res.body.documento.tamanho_bytes).toBeGreaterThan(0);
+    documentoId = res.body.documento._id;
+  });
+
+  it('POST /upload sem ficheiro → 400', async () => {
+    const res = await request(app)
+      .post('/api/gestor/documentos/upload')
+      .set('Authorization', `Bearer ${rececionistaF9Token}`)
+      .field('paciente_id', pacienteF9Id);
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /upload sem paciente_id → 400', async () => {
+    const res = await request(app)
+      .post('/api/gestor/documentos/upload')
+      .set('Authorization', `Bearer ${rececionistaF9Token}`)
+      .attach('file', Buffer.from('teste'), 'doc.pdf')
+      .field('tipo', 'relatorio');
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /upload com tipo inválido → 400', async () => {
+    const res = await request(app)
+      .post('/api/gestor/documentos/upload')
+      .set('Authorization', `Bearer ${rececionistaF9Token}`)
+      .attach('file', Buffer.from('teste'), 'doc.pdf')
+      .field('paciente_id', pacienteF9Id)
+      .field('tipo', 'invalido');
+    expect(res.status).toBe(400);
+  });
+
+  it('POST /upload foto JPEG → 201', async () => {
+    // Cria um JPEG mínimo (header + EOF).
+    const jpegBuffer = Buffer.from([
+      0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01,
+      0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xff, 0xd9,
+    ]);
+    const res = await request(app)
+      .post('/api/gestor/documentos/upload')
+      .set('Authorization', `Bearer ${fisioF9Token}`)
+      .attach('file', jpegBuffer, 'foto.jpg')
+      .field('paciente_id', pacienteF9Id)
+      .field('tipo', 'foto')
+      .field('descricao', 'Foto do documento de identificação');
+
+    expect(res.status).toBe(201);
+    expect(res.body.documento.tipo).toBe('foto');
+    expect(res.body.documento.content_type).toBe('image/jpeg');
+  });
+
+  it('GET / (rececionista) → 200 lista documentos', async () => {
+    const res = await request(app)
+      .get(`/api/gestor/documentos?paciente_id=${pacienteF9Id}`)
+      .set('Authorization', `Bearer ${rececionistaF9Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.total).toBeGreaterThanOrEqual(2);
+  });
+
+  it('GET com filtro tipo=foto → filtra', async () => {
+    const res = await request(app)
+      .get(`/api/gestor/documentos?paciente_id=${pacienteF9Id}&tipo=foto`)
+      .set('Authorization', `Bearer ${rececionistaF9Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.documentos.every((d) => d.tipo === 'foto')).toBe(true);
+  });
+
+  it('GET /:id → 200 detalhe', async () => {
+    const res = await request(app)
+      .get(`/api/gestor/documentos/${documentoId}`)
+      .set('Authorization', `Bearer ${rececionistaF9Token}`);
+    expect(res.status).toBe(200);
+    expect(res.body.documento._id).toBe(documentoId);
+  });
+
+  it('GET /:id/download → 200 devolve ficheiro', async () => {
+    const res = await request(app)
+      .get(`/api/gestor/documentos/${documentoId}/download`)
+      .set('Authorization', `Bearer ${rececionistaF9Token}`);
+    expect(res.status).toBe(200);
+    expect(res.headers['content-disposition']).toContain('receita.pdf');
+  });
+
+  it('GET /:id inexistente → 404', async () => {
+    const idFake = new mongoose.Types.ObjectId();
+    const res = await request(app)
+      .get(`/api/gestor/documentos/${idFake}`)
+      .set('Authorization', `Bearer ${rececionistaF9Token}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('DELETE /:id (rececionista) → 403 (só diretor)', async () => {
+    const res = await request(app)
+      .delete(`/api/gestor/documentos/${documentoId}`)
+      .set('Authorization', `Bearer ${rececionistaF9Token}`);
+    expect(res.status).toBe(403);
+  });
+
+  it('DELETE /:id (diretor) → 200 soft delete', async () => {
+    const res = await request(app)
+      .delete(`/api/gestor/documentos/${documentoId}`)
+      .set('Authorization', `Bearer ${diretorF9Token}`);
+    expect(res.status).toBe(200);
+  });
+
+  it('GET /:id após soft delete → 404', async () => {
+    const res = await request(app)
+      .get(`/api/gestor/documentos/${documentoId}`)
+      .set('Authorization', `Bearer ${rececionistaF9Token}`);
+    expect(res.status).toBe(404);
+  });
+
+  it('sem token → 401', async () => {
+    const res = await request(app).get('/api/gestor/documentos');
+    expect(res.status).toBe(401);
+  });
+});
