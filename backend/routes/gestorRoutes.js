@@ -5,6 +5,12 @@
  *
  * F0 — Rotas Smoobu removidas. Endpoints /configuracoes refatorados para
  * gerir nome/nif/morada/telefone/email da empresa (antes: smoobu_api_key).
+ *
+ * F8 — Limpeza: removidas todas as routes de Tarefas, Calendário (legado),
+ * Checklists e Webhooks que referenciavam controllers/modelos eliminados
+ * (tarefaController, checklistController, ModeloChecklist, WebhookLog).
+ * O dashboard passa a usar Consulta. A gestão de tarefas / load balancer
+ * foi substituída pelo fluxo de Consultas (F4-F7).
  */
 const express = require('express');
 const router = express.Router();
@@ -17,23 +23,14 @@ const {
   criarPropriedade,
   atualizarPropriedade,
   alternarEstadoPropriedade,
-  getTarefas,
-  getDadosCalendario,
   getEquipa,
   criarMembroEquipa,
   atualizarMembroEquipa,
   alternarEstadoMembro,
   eliminarMembroEquipa,
-  reportarFaltaSubita,
-  registarBaixaProlongada,
-  exportarTarefasCSV,
   getAuditoria,
-  getWebhooks,
-  reprocessarWebhook,
   setupClienteZero,
 } = require('../controllers/gestorController');
-const { reportarAtrasoTarefa, criarTarefa, atribuirTarefa, reatribuirTarefa, atualizarEstadoTarefa, apagarTarefasFuturas, listarIndisponiveisData, autoAtribuirTarefas } = require('../controllers/tarefaController');
-const { listarModelos, criarModelo, obterModelo, atualizarModelo, apagarModelo } = require('../controllers/checklistController');
 
 // Bootstrap do ambiente de testes — Cliente Zero. PÚBLICO (sem auth).
 router.get('/setup', setupClienteZero);
@@ -48,6 +45,8 @@ router.put('/propriedades/:id', auth, isDiretorClinico, atualizarPropriedade);
 router.patch('/propriedades/:id/estado', auth, isDiretorClinico, alternarEstadoPropriedade);
 
 // Aplica um checklist padrão a TODAS as propriedades ativas da empresa.
+// F8 — Mantido: usa o campo `checklist` (array de strings) da Propriedade,
+// não referencia ModeloChecklist (eliminado).
 router.post('/propriedades/default-checklist', auth, isDiretorClinico, async (req, res) => {
   try {
     const Propriedade = require('../models/Propriedade');
@@ -82,33 +81,6 @@ router.post('/propriedades/default-checklist', auth, isDiretorClinico, async (re
   }
 });
 
-// Calendário Geral de Operações — lista tarefas com filtro de datas.
-router.get('/tarefas', auth, isDiretorClinico, getTarefas);
-
-// Calendário Visual Avançado — endpoint unificado com filtros + populate.
-router.get('/calendario/dados', auth, isDiretorClinico, getDadosCalendario);
-
-// Exportação CSV de tarefas.
-router.get('/tarefas/export', auth, isDiretorClinico, exportarTarefasCSV);
-
-// Reportar atraso numa tarefa.
-router.post('/tarefas/:id/atraso', auth, isDiretorClinico, reportarAtrasoTarefa);
-
-// Gestão manual de tarefas.
-router.post('/tarefas', auth, isDiretorClinico, criarTarefa);
-router.patch('/tarefas/:id/atribuir', auth, isDiretorClinico, atribuirTarefa);
-router.patch('/tarefas/:id/reatribuir', auth, isDiretorClinico, reatribuirTarefa);
-router.patch('/tarefas/:id/estado', auth, isDiretorClinico, atualizarEstadoTarefa);
-
-// Apagar tarefas futuras não concluídas (reset do calendário).
-router.delete('/tarefas/futuras', auth, isDiretorClinico, apagarTarefasFuturas);
-
-// Auto-atribuição em lote (corre o load balancer para todas as tarefas órfãs).
-router.post('/tarefas/auto-atribuir', auth, isDiretorClinico, autoAtribuirTarefas);
-
-// Staff indisponíveis (férias/doença) numa data.
-router.get('/tarefas/indisponiveis', auth, isDiretorClinico, listarIndisponiveisData);
-
 // Gestão de equipa (utilizadores) da empresa. PROTEGIDO por JWT.
 router.get('/equipa', auth, isDiretorClinico, getEquipa);
 router.post('/equipa', auth, isDiretorClinico, criarMembroEquipa);
@@ -116,25 +88,8 @@ router.put('/equipa/:id', auth, isDiretorClinico, atualizarMembroEquipa);
 router.patch('/equipa/:id/estado', auth, isDiretorClinico, alternarEstadoMembro);
 router.delete('/equipa/:id', auth, isDiretorClinico, eliminarMembroEquipa);
 
-// Falta súbita — reatribuição de emergência.
-router.post('/equipa/:id/falta-subita', auth, isDiretorClinico, reportarFaltaSubita);
-
-// Baixa prolongada / férias — redistribuição de tarefas futuras.
-router.post('/equipa/:id/baixa', auth, isDiretorClinico, registarBaixaProlongada);
-
-// CRUD de Modelos de Checklist (futuro: Modelos de Protocolo Clínico).
-router.get('/checklists', auth, isDiretorClinico, listarModelos);
-router.post('/checklists', auth, isDiretorClinico, criarModelo);
-router.get('/checklists/:id', auth, isDiretorClinico, obterModelo);
-router.put('/checklists/:id', auth, isDiretorClinico, atualizarModelo);
-router.delete('/checklists/:id', auth, isDiretorClinico, apagarModelo);
-
 // Auditoria.
 router.get('/auditoria', auth, isDiretorClinico, getAuditoria);
-
-// Webhooks — logs de integrações externas (lista + reproccessamento manual).
-router.get('/webhooks', auth, isDiretorClinico, getWebhooks);
-router.post('/webhooks/:id/reprocessar', auth, isDiretorClinico, reprocessarWebhook);
 
 // Configurações do Gestor (tenant local).
 
@@ -196,28 +151,6 @@ router.put('/configuracoes', auth, isDiretorClinico, async (req, res) => {
     });
   } catch (err) {
     return res.status(500).json({ erro: 'Erro interno.', detalhe: err.message });
-  }
-});
-
-// POST /api/gestor/configuracoes/forcar-daily-briefing — dispara para a empresa do gestor.
-router.post('/configuracoes/forcar-daily-briefing', auth, isDiretorClinico, async (req, res) => {
-  try {
-    const { executarBriefing } = require('../jobs/dailyBriefing');
-    await executarBriefing();
-    return res.status(200).json({ message: 'Daily Briefing executado.' });
-  } catch (err) {
-    return res.status(500).json({ erro: 'Erro ao executar.', detalhe: err.message });
-  }
-});
-
-// POST /api/gestor/configuracoes/forcar-agenda-amanha — dispara para a empresa do gestor.
-router.post('/configuracoes/forcar-agenda-amanha', auth, isDiretorClinico, async (req, res) => {
-  try {
-    const { executarAgendaAmanha } = require('../jobs/agendaAmanha');
-    await executarAgendaAmanha();
-    return res.status(200).json({ message: 'Agenda de Amanhã executada.' });
-  } catch (err) {
-    return res.status(500).json({ erro: 'Erro ao executar.', detalhe: err.message });
   }
 });
 

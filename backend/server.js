@@ -15,6 +15,10 @@
  *
  * F0 — A integração Smoobu foi removida. O motor de atribuição (load
  * balancer) foi extraído para utils/loadBalancer.js.
+ * F8 — Limpeza: removidos os ficheiros legacy (Tarefa, TarefaArquivo,
+ * ModeloChecklist, tarefaController, checklistController, loadBalancer,
+ * scheduler, jobs dailyBriefing/agendaAmanha/caoGuarda/arquivista e
+ * scripts/seedChecklists). O domínio passou a usar Consulta (F4-F7).
  *
  * NOTA: a instância `app` é exportada (module.exports) para poder ser
  * usada nos testes com supertest SEM iniciar o servidor HTTP nem ligar
@@ -39,10 +43,7 @@ const pacienteRoutes = require('./routes/pacienteRoutes'); // F2 — Pacientes
 const horarioRoutes = require('./routes/horarioRoutes'); // F3 — Horários
 const consultaRoutes = require('./routes/consultaRoutes'); // F4 — Consultas
 const protocoloRoutes = require('./routes/protocoloRoutes'); // F5 — Protocolos
-const { iniciarDailyBriefing } = require('./jobs/dailyBriefing');
-const { iniciarAgendaAmanha } = require('./jobs/agendaAmanha');
-const { iniciarCaoGuarda } = require('./jobs/caoGuarda');
-const { iniciarArquivista } = require('./jobs/arquivista');
+// F8 — Cron jobs legacy removidos (dailyBriefing, agendaAmanha, caoGuarda, arquivista).
 // F7 — Cron jobs para Consultas (domínio Fisioterapia).
 const { iniciarBriefingFisio } = require('./jobs/briefingDiarioFisio');
 const { iniciarLembreteAmanha } = require('./jobs/lembreteConsultasAmanha');
@@ -199,23 +200,6 @@ if (require.main === module) {
       app.listen(PORT, () => {
         console.log(`🚀 Servidor a correr na porta ${PORT}.`);
       });
-
-      // Inicia o cron job do Daily Briefing (WhatsApp) — só em execução
-      // direta, não nos testes. Corre todos os dias às 08:00.
-      iniciarDailyBriefing();
-
-      // Prompt 94 — Cron job "Agenda de Amanhã": todos os dias às 19:00
-      // (Europe/Lisbon), envia push a cada staff com trabalho amanhã.
-      iniciarAgendaAmanha();
-
-      // Prompt 96 — Cron job "Cão de Guarda": todos os dias às 18:00
-      // (Europe/Lisbon), envia push por cada tarefa de limpeza de hoje
-      // ainda não concluída (lembra o staff de fechar o dia).
-      iniciarCaoGuarda();
-
-      // Prompt 109 — Cron job "Arquivista": dia 1 de cada trimestre,
-      // move tarefas concluídas/canceladas com mais de 3 meses para o arquivo.
-      iniciarArquivista();
 
       // F7 — Cron jobs para Consultas (domínio Fisioterapia).
       // Briefing diário fisio: 08:00 — push a cada fisio com consultas hoje.

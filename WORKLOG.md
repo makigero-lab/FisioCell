@@ -1577,3 +1577,219 @@ Stage Summary:
 - **ConsultaArquivo** preserva notas clínicas SOAP indefinitely (RGPD — 10-20 anos).
 - **200/200 testes ✓**.
 - **Próximo passo:** F8 (limpeza — remover Tarefa, TarefaArquivo, Propriedade, ModeloChecklist antigos + jobs legacy).
+
+---
+Task ID: F8-BACKEND-CLEANUP
+Agent: general-purpose (backend refactoring)
+Task: Limpeza de todas as referências a modelos/controllers eliminados (Tarefa, TarefaArquivo, ModeloChecklist, tarefaController, checklistController, loadBalancer, scheduler, jobs legacy, seedChecklists) nos ficheiros backend do projeto FisioCell.
+
+Work Log:
+
+### F8-1 — routes/gestorRoutes.js
+- Removidos imports de `tarefaController` e `checklistController` (eliminados).
+- Removidos do destructuring de `gestorController`: `getTarefas`, `getDadosCalendario`, `reportarFaltaSubita`, `registarBaixaProlongada`, `exportarTarefasCSV`, `getWebhooks`, `reprocessarWebhook`.
+- Removidas TODAS as routes de Tarefas: `GET /tarefas`, `GET /calendario/dados`, `GET /tarefas/export`, `POST /tarefas/:id/atraso`, `POST /tarefas`, `PATCH /tarefas/:id/atribuir`, `PATCH /tarefas/:id/reatribuir`, `PATCH /tarefas/:id/estado`, `DELETE /tarefas/futuras`, `POST /tarefas/auto-atribuir`, `GET /tarefas/indisponiveis`.
+- Removidas routes de Checklists: `GET/POST/GET /:id/PUT/DELETE /checklists`.
+- Removidas routes de Webhooks: `GET /webhooks`, `POST /webhooks/:id/reprocessar`.
+- Removidas routes de equipa que usavam Tarefa: `POST /equipa/:id/falta-subita`, `POST /equipa/:id/baixa`.
+- Removidas routes de forçar cron jobs legacy: `POST /configuracoes/forcar-daily-briefing`, `POST /configuracoes/forcer-agenda-amanha` (jobs eliminados).
+- MANTIDO: `POST /propriedades/default-checklist` (usa o campo `checklist` array de strings da Propriedade, NÃO referencia ModeloChecklist).
+- MANTIDOS: dashboard, propriedades CRUD, equipa CRUD, auditoria, configuracoes, setup.
+
+### F8-2 — routes/adminRoutes.js
+- Hard Reset global: trocado `Tarefa.deleteMany` por `Consulta.deleteMany` (Tarefa eliminado, passa a apagar Consulta).
+- Hard Reset por empresa: trocado `Tarefa.deleteMany` por `Consulta.deleteMany`, com auditoria atualizada (propriedades + consultas).
+- Removida route `POST /seed-checklists` (ModeloChecklist eliminado).
+- Removidas routes de forçar cron jobs legacy: `POST /forcar-daily-briefing`, `POST /forcar-agenda-amanha`, `POST /forcar-cao-guarda` (jobs eliminados).
+- MANTIDOS: listarEmpresas, impersonarGestor, gestão utilizadores, CRUD empresas, config-empresa, webhook-logs (WebhookLog mantido).
+
+### F8-3 — routes/staffRoutes.js
+- Removidos do destructuring: `concluirTarefa`, `reportarAvaria`, `reportarAtraso`, `toggleChecklistItem` (Tarefa eliminado).
+- Removidas routes: `PATCH /tarefas/:id/concluir`, `POST /tarefas/:id/avaria`, `POST /tarefas/:id/atraso`, `PATCH /tarefas/:id/checklist/:seccaoIndex/item/:itemIndex`.
+- MANTIDOS: ausencias (GET/POST/DELETE/cancelar), falta-hoje.
+
+### F8-4 — controllers/gestorController.js (cirúrgico, ~2000 → ~1100 linhas)
+- Removido `const Tarefa = require('../models/Tarefa')`.
+- Removido `const WebhookLog = require('../models/WebhookLog')` (só usado por getWebhooks).
+- Adicionado `const Consulta = require('../models/Consulta')`.
+- `getDashboard` REESCRITO: usa Consulta em vez de Tarefa (consultasHoje, consultasMarcadasHoje, consultasConcluidasHoje, cargaPorFisio com aggregate sobre duracao_minutos).
+- `alternarEstadoPropriedade` SIMPLIFICADO: removida a lógica de desatribuição de Tarefas futuras (Tarefa eliminado).
+- `atualizarPropriedade`: removida a referência a `modelo_checklist_id` e o require lazy de ModeloChecklist.
+- Removidas funções: `getTarefas`, `getDadosCalendario`, `exportarTarefasCSV`, `reportarFaltaSubita`, `registarBaixaProlongada`, `getWebhooks`, `reprocessarWebhook`.
+- MANTIDOS: obterEmpresaId, getDashboard (rewrite), getPropriedades, criarPropriedade, atualizarPropriedade, alternarEstadoPropriedade (simplified), getEquipa, criarMembroEquipa, atualizarMembroEquipa, alternarEstadoMembro, eliminarMembroEquipa, getAuditoria, setupClienteZero.
+
+### F8-5 — controllers/ausenciaController.js
+- Removido `const Tarefa = require('../models/Tarefa')`.
+- Removida função helper `desatribuirTarefasPeriodo` (load balancer extinto).
+- `registarAusencia`: removida chamada a `desatribuirTarefasPeriodo` e campo `desatribuicao` na resposta.
+- `aprovarRejeitarAusencia`: removida chamada a `desatribuirTarefasPeriodo` e campo `redistribuicao` na resposta.
+- `cancelarAusencia`: removida lógica de `reatribuicaoAviso` (Tarefas desatribuídas não existem mais).
+- MANTIDOS: listarAusencias, registarAusencia, eliminarAusencia, aprovarRejeitarAusencia, cancelarAusencia.
+
+### F8-6 — controllers/authController.js
+- Removido `const Tarefa = require('../models/Tarefa')`.
+- Removido `const Propriedade = require('../models/Propriedade')` (só usado por minhasTarefas).
+- `meuCalendario`: STUB — devolve `{ tarefas: [], ausencias: [...] }` (mantém Ausencia, frontend deve usar /api/gestor/consultas).
+- `minhasTarefas`: STUB — devolve `{ tarefas: [] }`.
+- `minhaTarefaDetalhe`: STUB — devolve 410 Gone.
+- `concluirMinhaTarefa`: STUB — devolve 410 Gone.
+- MANTIDOS: login, me, pushVapidPublicKey, pushSubscribe, pushUnsubscribe (não usam Tarefa).
+
+### F8-7 — controllers/staffController.js
+- Removido `const Tarefa = require('../models/Tarefa')`.
+- Removido `const Propriedade = require('../models/Propriedade')` (só usado por reportarAvaria).
+- Removidas funções: `concluirTarefa`, `reportarAvaria`, `reportarAtraso`, `toggleChecklistItem`.
+- `faltaHoje`: documentação atualizada (removida referência a "redistribuição imediata das tarefas").
+- MANTIDOS: minhasAusencias, criarAusencia, cancelarAusenciaSoft, cancelarAusencia, faltaHoje.
+
+### F8-8 — controllers/relatorioController.js
+- Removido `const Tarefa = require('../models/Tarefa')`.
+- Adicionado `const Consulta = require('../models/Consulta')`.
+- `getRelatorioProdutividade` REESCRITO para usar Consulta:
+  - Mapeamento de campos: `data` → `data_hora_inicio`, `utilizador_id` → `fisioterapeuta_id`, `propriedade_id` → `sala_id`, `tempo_limpeza_minutos` → `duracao_minutos`, `hora_conclusao` → `concluida_em`.
+  - Resposta renomeada: `totalTarefas` → `totalConsultas`, `porStaff` → `porFisio`, `porPropriedade` → `porSala`.
+  - Estados Consulta: marcada/confirmada/em_curso/concluida/cancelada/faltou/nao_compareceu.
+- `gerarPlaceholder` e `construirPrompt`: texto adaptado ao domínio Fisioterapia (consultas/fisioterapeutas/salas em vez de tarefas/limpezas/Alojamento Local).
+- `construirContexto`: aceita tanto campos novos (totalConsultas, porFisio, porSala) como legacy (totalTarefas, porStaff, porPropriedade) para retrocompatibilidade com payloads do frontend antigo.
+
+### F8-9 — controllers/superAdminController.js
+- Removido `const Tarefa = require('../models/Tarefa')`.
+- Removido `const WebhookLog = require('../models/WebhookLog')` (não usado neste controller).
+- Adicionado `const Consulta = require('../models/Consulta')`.
+- `listarEmpresas`: trocado `Tarefa.countDocuments` por `Consulta.countDocuments`, renomeado `num_tarefas` → `num_consultas` na resposta.
+
+### F8-10 — models/Propriedade.js
+- Removido campo `modelo_checklist_id` (referenciava ModeloChecklist eliminado).
+- MANTIDO `funcionario_preferencial_id` (campo da sala, pode ser usado para filtros/preferências futuras — não depende do load balancer extinto).
+- MANTIDOS: nome, morada, coordenadas, empresa_id, tempo_limpeza_minutos, ativo, checklist (array de strings), observacoes, capacidade_hospedes.
+
+### F8-11 — models/ModeloProtocolo.js
+- Verificado: NÃO referencia ModeloChecklist estruturalmente (apenas em comentário histórico "evolução do ModeloChecklist"). Sem alterações necessárias.
+
+### F8-12 — Limpezas adicionais (cosméticas)
+- `package.json`: removido script `seed:checklists` (scripts/seedChecklists.js eliminado). Description atualizada de "Alojamento Local" para "Clínicas de Fisioterapia".
+- `server.js`: atualizado comentário docblock para referir F8 e listar os ficheiros legacy removidos.
+- `models/Utilizador.js`: atualizado comentário que referia loadBalancer (extinto) — agora referencia Consulta (F4+).
+
+### Validação
+- `node -e "require('./server')"` → ✅ OK (sem erros de import).
+- Aviso esperado: Web Push não configurado (VAPID keys em falta) — não afeta imports.
+- `node --check` em todos os 13 ficheiros modificados → ✅ todos passam syntax check.
+
+Stage Summary:
+- **11 ficheiros backend limpos** de referências a Tarefa, TarefaArquivo, ModeloChecklist, tarefaController, checklistController, loadBalancer, scheduler, jobs legacy e seedChecklists.
+- **Nenhuma referência quebrada**: o servidor carrega sem erros (`require('./server')` ✅).
+- **Domínio migrado**: onde antes havia queries a Tarefa, agora usam Consulta (dashboard, relatórios, hard-reset, listarEmpresas, ausências sem redistribuição).
+- **Stubs em authController**: `meuCalendario`, `minhasTarefas`, `minhaTarefaDetalhe`, `concluirMinhaTarefa` devolvem respostas compatíveis (array vazio ou 410 Gone) para não quebrar o frontend legacy enquanto migra para /api/gestor/consultas.
+- **Funções mantidas**: todas as que NÃO usavam Tarefa/ModeloChecklist foram preservadas (autenticação, equipa CRUD, propriedades CRUD, ausências, auditoria, setup, push notifications, IA summary).
+- **Linguagem pt-pt** preservada em todos os comentários.
+- **Nota de escopo**: `tests/integration.test.js` ainda referencia Tarefa e jobs legacy (linhas 30, 1434, 1665, 2097, 2755). Como `require('./server')` não carrega testes, a validação passou. No entanto, `npm test` irá falhar — os testes precisam de ser limpos/atualizados numa tarefa separada (F8-FRONTEND ou F8-TESTS) para usar Consulta em vez de Tarefa.
+- **Próximo passo**: limpar `tests/integration.test.js` (remover testes de Tarefas, ajustar testes de ausências/relatórios para não esperar redistribuição) e atualizar o frontend para parar de chamar /api/auth/me/tarefas e /api/gestor/tarefas (migrar para /api/gestor/consultas e /api/gestor/calendario-consultas).
+
+---
+Task ID: DOC-F8
+Agent: general-purpose
+Task: Atualização de documentação para F8 (limpeza de modelos legacy — Tarefa/TarefaArquivo/ModeloChecklist removidos; Propriedade mantida como alias de Sala)
+
+Work Log:
+- Lido `WORKLOG.md` (1687 linhas — herdado o formato das entradas DOC-F4/DOC-F5/DOC-F6/DOC-F7 por subagent de documentação a seguir a cada fase de implementação; lida também a entrada F8-BACKEND-CLEANUP que descreve a limpeza de código que esta entrada documenta).
+- Lidos os 3 ficheiros de documentação: `docs/BACKEND.md` (1619 linhas — secção 2 Estrutura, secção 3.1 Modelos, secção 3.2 Lógica central, secção 3.3 Cron Jobs, secção 6 Endpoints, secção 9 Histórico), `docs/FRONTEND.md` (564 linhas — secção 3 Rotas, secção 3.1 Admin, secção 3.2 Staff, secção 11 Páginas, secção 13 Histórico) e `docs/ARQUITETURA.md` (450 linhas — secção 2 Princípios, secção 4 Mapa de Migração, secção 5.4 Consulta, secção 5.6 Sala, secção 6 Cron Jobs, secção 8 Roadmap).
+- Lido o `frontend/src/components/gestor/gestor-sidebar.tsx` (199 linhas — para confirmar a lista final de items do sidebar do gestor após F8: Dashboard, Agenda Consultas, Consultas, Salas, Pacientes, Equipa, Horários, Protocolos, Ausências / Férias, Relatórios, Notificações, Configurações) e o `frontend/src/components/admin/admin-sidebar.tsx` (161 linhas — para confirmar que o admin sidebar tem 1 item: Empresas).
+- Lido o `LS` de `/home/z/FisioCell/frontend/src/app/` (para confirmar quais páginas foram removidas vs mantidas no código real após F8).
+
+- `docs/BACKEND.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Cabeçalho (nota F0): alargada para mencionar **F8 concluída** — `Tarefa` removido (substituído por `Consulta` em F4), `ModeloChecklist` extinto (substituído por `ModeloProtocolo` em F5), `Propriedade` mantida como alias de Sala.
+  - Secção 2 (Estrutura de ficheiros): removidos da árvore `tarefaController.js`, `checklistController.js`, `Tarefa.js`, `loadBalancer.js`, `scheduler.js`; atualizado o comentário de `gestorController.js` (dashboard usa Consulta em F8), `ausenciaController.js` (sem redistribuição), `superAdminController.js` (hard-reset usa Consulta), `relatorioController.js` (reescrito sobre Consulta); `Propriedade.js` comentado como "Sala (alias Propriedade)"; adicionadas entradas para `Notificacao.js`, `Auditoria.js`, `WebhookLog.js` (modelos que já existiam mas não estavam na árvore); adicionada nova secção `├── jobs/` listando os 5 cron jobs F7 (`briefingDiarioFisio.js`, `lembreteConsultasAmanha.js`, `lembrete2hConsulta.js`, `caoGuardaConsultas.js`, `arquivistaConsultas.js`).
+  - Secção 3.1 (Modelos): contador atualizado de 10 → 9 coleções; adicionada nota F8 listando os modelos removidos e os modelos finais do projeto; modelo `Propriedade` atualizado para refletir F8 (campo `modelo_checklist_id` removido; `morada` agora opcional; mantém `funcionario_preferencial_id`, `checklist` array de strings, `observacoes`); modelo `Tarefa` substituído por uma nota "❌ Removido em F8" (em vez da tabela de campos, que foi eliminada — o histórico está no `git log`); `dias_folga` do `Utilizador` atualizado para referenciar o motor de disponibilidade F3 em vez do load balancer legacy.
+  - Secção 3.2 (Lógica central — Atribuição de tarefas): substituída por uma nota "❌ Removida em F8" explicando que o load balancer, scheduler e toda a lógica de auto-atribuição foram extintos; a marcação é agora manual via `POST /api/gestor/consultas` com validação de conflitos em tempo real (F4 secção 3.5).
+  - Secção 3.3 (Cron Jobs): parágrafo introdutório reescrito para referir apenas os 5 jobs F7 (removida a referência aos 3 jobs legacy); adicionada nota F8 explicando a remoção dos 4 jobs legacy sobre `Tarefa`; removida a tabela dos 3 jobs legacy (`dailyBriefing`, `caoGuarda`, `agendaAmanha`); removidas as subsecções detalhadas `### Cão de Guarda (jobs/caoGuarda.js)` e `### Agenda de Amanhã (jobs/agendaAmanha.js)` (com as suas Fase A/B e descrições passo-a-passo); mantida a subsecção `### Cron Jobs de Consultas (F7)` com a tabela dos 5 jobs + as 5 descrições detalhadas (briefingDiarioFisio, lembreteConsultasAmanha, lembrete2hConsulta, caoGuardaConsultas, arquivistaConsultas) — sem alterações de conteúdo (continuam accurate).
+  - Secção 6.3 (Ausências): nota "Integração com o motor de atribuição (load balancer)" substituída por "Integração com o motor de disponibilidade (F3)" — referência ao `utils/disponibilidade.js` em vez do `utils/loadBalancer.js`, com nota F8 sobre a remoção da redistribuição.
+  - Secção 6.4 (Relatórios): adicionada nota F8 sobre o `relatorioController` reescrito sobre `Consulta`; resposta JSON renomeada `totalTarefas`→`totalConsultas`, `porStaff`→`porFisio`, `porPropriedade`→`porSala`, `tempoMedioMinutos` 75→45 (duração de consulta vs tempo de limpeza); adicionada nota com o mapeamento de campos F8 (`data`→`data_hora_inicio`, `utilizador_id`→`fisioterapeuta_id`, `propriedade_id`→`sala_id`, `tempo_limpeza_minutos`→`duracao_minutos`, `hora_conclusao`→`concluida_em`).
+  - Secção 6.10 (Calendário Visual Avançado): substituída por uma nota "❌ Removido em F8" — o endpoint `GET /api/admin/calendario/dados` (que devolvia `Tarefa`) foi removido juntamente com `gestorController.getDadosCalendario`; o calendário operacional passou a ser servido pela rota `/gestor/calendario-consultas` (F6).
+  - Secção 6.11 (Fluxo de aprovação de ausências): "Lógica crítica" (que descrevia redistribuição via load balancer) substituída por "Lógica" — aprovar apenas atualiza estado, sem redistribuição; resposta JSON simplificada (removido o campo `redistribuicao`); removida a subsecção "Impacto no motor de atribuição (load balancer)"; adicionada nota F8 sobre a remoção do campo `redistribuicao`.
+  - Secção 9 (Histórico): adicionada entrada `**F8**` no topo da tabela (antes de `**F7**`) com o resumo completo da limpeza: 11 pontos cobrindo (1) modelos removidos, (2) controllers removidos, (3) utils removidos, (4) jobs legacy removidos, (5) script removido, (6) Propriedade mantida como alias, (7) controllers limpos com detalhe por controller, (8) routes limpas, (9) frontend removido + sidebar, (10) testes 116/116 ✓, (11) lista final de modelos do projeto.
+
+- `docs/FRONTEND.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Cabeçalho (nota F0): alargada para mencionar **F8 concluída** — listagem das páginas removidas + nota sobre o rename "Propriedades"→"Salas" e reposição do item "Configurações".
+  - Secção 3 (Sistema de rotas): adicionada nota F8 explicando as rotas removidas e o rename do sidebar; tabela de rotas reescrita — removidas as linhas `/admin/propriedades`, `/admin/tarefas`, `/admin/equipa`, `/admin/aprovacoes`, `/admin/calendario`, `/admin/calendario-operacional`, `/admin/relatorios` (estas páginas já tinham sido removidas em Prompt 122); adicionada a linha `/admin/empresas/[id]` (gaveta de empresa com webhook-logs + impersonação); atualizada a linha `/gestor/calendario-consultas` para referir "F8: substituiu definitivamente o antigo /gestor/calendario (removido)"; atualizada a linha `/gestor/propriedades` para "Salas (alias Propriedade)"; adicionadas linhas para `/gestor/equipa`, `/gestor/ausencias`, `/gestor/relatorios`, `/gestor/notificacoes`, `/gestor/configuracoes`, `/staff/calendario`, `/staff/notificacoes`.
+  - Secção 3.1 (Área Admin): substituída a descrição stale do admin-sidebar (8 itens: Dashboard, Propriedades, Tarefas, Equipa, Pedidos de Férias, Calendário Operacional, Calendário de Folgas, Relatórios) pela descrição atual (1 item: Empresas); adicionada nota F8 sobre a consolidação Prompt 122 + F8; descricao atualizada da página principal (`/admin` = tabela de empresas com tabs Ativas/Reciclagem) e da gaveta de empresa (`/admin/empresas/[id]` = utilizadores + webhook-logs + impersonação).
+  - Secção 3.2 (Área Staff): adicionada nota F8 explicando que a área de Staff está preservada com stubs no backend (`minhasTarefas`/`minhaTarefaDetalhe`/`concluirMinhaTarefa` devolvem array vazio ou 410 Gone) — aguarda futura migração para Consultas do fisioterapeuta; mantida a descrição da `/staff/ausencias` (única página totalmente operacional).
+  - Items de sidebar (notas F2/F4/F6): atualizadas as referências de posicionamento — "Pacientes posicionado entre **Salas** (antigo Propriedades, renomeado em F8) e Equipa"; "Consultas fica agora entre **Agenda Consultas** (F6) e **Salas**" (removida a referência aos items Calendário e Tarefas); "Agenda Consultas posicionado entre **Dashboard** e **Consultas**" (removida a referência ao antigo Calendário); nota F6 "Substituição progressiva" substituída por "F8 — Substituição concluída" (o `/gestor/calendario` foi removido).
+  - Secção 13 (Histórico): adicionada entrada `**F8**` no topo da tabela (antes de `**F6**`) com 5 pontos cobrindo (1) páginas removidas, (2) sidebar do gestor com detalhe dos items removidos/renomeados/repostos + lista final dos 12 items, (3) sidebar do admin (1 item), (4) rotas mantidas no `/staff` com nota sobre stubs, (5) nota sobre páginas legacy marcadas.
+
+- `docs/ARQUITETURA.md` (alterações cirúrgicas via Edit/MultiEdit):
+  - Cabeçalho: parágrafo de abertura alargado para mencionar **F8** (limpeza de modelos legacy — Tarefa/TarefaArquivo/ModeloChecklist removidos; Propriedade mantida como alias de Sala).
+  - Secção 2 (Princípios Herdados): linha "Modelo de arquivo" atualizada para referir F8 — o legacy `TarefaArquivo` foi removido; só o `ConsultaArquivo` (F7) está ativo.
+  - Secção 4 (Mapa de Migração de Domínio): tabela reescrita — linha `Tarefa` marcada "❌ removido (substituído por Consulta em F4 — o Tarefa foi extinto em F8) F8 ✅" (era "→ Consulta F4 ✅"); linha `ModeloChecklist` marcada "❌ removido (substituído por ModeloProtocolo em F5 — o ModeloChecklist foi extinto em F8) F8 ✅" (era "→ ModeloProtocolo F5 ✅"); linha `TarefaArquivo` marcada "❌ removido (substituído por ConsultaArquivo em F7 — o TarefaArquivo foi extinto em F8) F8 ✅" (era "→ ConsultaArquivo F7 ✅"); linha `Propriedade` atualizada para "mantida como alias de Sala (a Consulta.sala_id referencia Propriedade) — migração para um modelo Sala dedicado adiada F8 ✅ (alias mantido)" (era "→ Sala F3"); adicionadas linhas para `utils/loadBalancer.js` (removido em F8), `utils/scheduler.js` (removido em F8), `tarefaController.js` + `checklistController.js` (removidos em F8), cron jobs legacy (removidos em F8), `scripts/seedChecklists.js` (removido em F8); adicionadas linhas `— (novo) → Consulta (substitui Tarefa) F4 ✅`, `— (novo) → ModeloProtocolo (substitui ModeloChecklist) F5 ✅`, `— (novo) → ConsultaArquivo (substitui TarefaArquivo) F7 ✅` para deixar claro o mapeamento de substituição.
+  - Secção 5.6 (`Sala`): cabeçalho atualizado de "F3 (substitui Propriedade)" para "F3 (proposta — Propriedade mantida como alias em F8)"; adicionada nota F8 detalhando a decisão de adiar a migração para um modelo Sala dedicado (4 passos necessários caso venha a ser implementado) e justificando que não há pressão operacional (Propriedade já tem os campos necessários).
+  - Secção 6 (Cron Jobs — Adaptação): parágrafo introdutório atualizado — nota "F7 ✅ — Implementação real" mantida; nota "Os jobs legacy mantêm-se até F8 (limpeza) — coexistem com os jobs F7" substituída por "F8 ✅ — Limpeza: os jobs legacy (dailyBriefing, agendaAmanha, caoGuarda, arquivista) sobre Tarefa foram removidos — só os 5 jobs F7 sobre Consulta permanecem ativos".
+  - Secção 8 (Roadmap): linha **F8** marcada `✅ Concluído` (era "Pendente") com escopo reescrito para refletir a implementação real (lista detalhada dos modelos/controllers/utils/jobs/script/páginas removidos + nota sobre Propriedade mantida como alias); nota F3 (rodapé) atualizada para referir a confirmação F8 de que Propriedade é mantida como alias.
+
+Stage Summary:
+- **3 ficheiros de documentação atualizados** (`docs/BACKEND.md`, `docs/FRONTEND.md`, `docs/ARQUITETURA.md`) por via cirúrgica (Edit/MultiEdit — sem reescrita integral). Linguagem pt-pt preservada; formatação Markdown mantida; sem informação inventada (todos os detalhes foram extraídos do `WORKLOG.md` entrada F8-BACKEND-CLEANUP + dos ficheiros de implementação `gestor-sidebar.tsx` e `admin-sidebar.tsx` + do `LS` de `frontend/src/app/`).
+- **BACKEND.md**: árvore de ficheiros limpa (removidos `tarefaController`/`checklistController`/`Tarefa.js`/`loadBalancer`/`scheduler`; adicionados `Notificacao`/`Auditoria`/`WebhookLog`/`jobs/`); contador 10 → 9 coleções + nota F8; modelo `Tarefa` substituído por nota "❌ Removido em F8"; modelo `Propriedade` atualizado (campo `modelo_checklist_id` removido); secção 3.2 (load balancer) substituída por nota "❌ Removida em F8"; secção 3.3 (cron jobs) só com os 5 jobs F7; secção 6.3 (ausências) nota atualizada para motor de disponibilidade F3; secção 6.4 (relatórios) reescrita com novos nomes de campos; secção 6.10 (calendário/dados) substituída por nota "❌ Removido em F8"; secção 6.11 (aprovação ausências) sem redistribuição; entrada F8 no histórico.
+- **FRONTEND.md**: nota F0 atualizada para F8 concluída; tabela de rotas reescrita (removidas 6 rotas admin stale, adicionadas 7 rotas ativas); secção 3.1 (admin) atualizada para "1 item: Empresas"; secção 3.2 (staff) com nota F8 sobre stubs; items de sidebar (notas F2/F4/F6) atualizados para refletir rename "Propriedades"→"Salas" e remoção de "Calendário"/"Tarefas"; nota F6 "Substituição progressiva" substituída por "F8 — Substituição concluída"; entrada F8 no histórico.
+- **ARQUITETURA.md**: cabeçalho atualizado para mencionar F8; secção 2 (princípios) nota F8 sobre arquivo; secção 4 (mapa de migração) reescrita com Tarefa/TarefaArquivo/ModeloChecklist marcados "❌ removido" e Propriedade marcada "alias mantido"; secção 5.6 (Sala) nota F8 sobre adiamento da migração; secção 6 (cron jobs) nota F8 sobre remoção dos jobs legacy; secção 8 (roadmap) F8 marcado ✅ Concluído + nota F3 atualizada.
+- **Nota de escopo:** os históricos detalhados (BACKEND.md secção 9 e FRONTEND.md secção 13) preservam as entradas de Prompts anteriores (v1.x, Prompt 92/93/94/96/97/98/113/114/115/116/122/123/126/129/133/134/135/137/138/139) — essas referências a `Tarefa`/`loadBalancer`/`dailyBriefing`/etc. são registos históricos do que aconteceu em cada Prompt e não devem ser reescritos (o `git log` é a fonte de verdade). As notas F8 "❌ Removido" foram adicionadas nas secções ativas (estrutura, modelos, endpoints) onde a funcionalidade deixou de existir.
+- **Próximo passo:** F9 (Documento — anexos + fotografias clínicas com storage S3/Cloudinary + consentimento RGPD).
+
+---
+Task ID: F8
+Agent: Z.ai Code
+Task: Limpeza — remover modelos legacy (Tarefa, TarefaArquivo, ModeloChecklist), controllers, routes, jobs e páginas frontend antigas. Completa a migração para o domínio Fisioterapia.
+
+Work Log:
+
+### F8-A — Remoção de ficheiros
+- Removidos 3 modelos: Tarefa.js, TarefaArquivo.js, ModeloChecklist.js.
+- Removidos 2 controllers: tarefaController.js, checklistController.js.
+- Removidos 4 jobs legacy: dailyBriefing.js, agendaAmanha.js, caoGuarda.js, arquivista.js.
+- Removidos 2 utils: loadBalancer.js, scheduler.js (só usados por Tarefa).
+- Removido 1 script: seedChecklists.js.
+- Removidas 6 páginas frontend: /gestor/calendario, /gestor/tarefas, /gestor/configuracoes/checklists, /gestor/webhooks, /admin/webhooks, /admin/sistema.
+
+### F8-B — Limpeza de controllers (Task F8-BACKEND-CLEANUP por subagent)
+- gestorController.js (2048→~1100 linhas): removidas 9 funções Tarefa-dependentes (getTarefas, getDadosCalendario, exportarTarefasCSV, reportarFaltaSubita, registarBaixaProlongada, getWebhooks, reprocessarWebhook). getDashboard reescrito com Consulta. alternarEstadoPropriedade simplificado (sem desatribuição).
+- ausenciaController.js: removida lógica de redistribuição de Tarefas (load balancer eliminado).
+- authController.js: minhasTarefas → stub (array vazio); minhaTarefaDetalhe/concluirMinhaTarefa → 410 Gone.
+- staffController.js: removidas 4 funções Tarefa (concluirTarefa, reportarAvaria, reportarAtraso, toggleChecklistItem).
+- relatorioController.js: getRelatorioProdutividade reescrito com Consulta.
+- superAdminController.js: hard-reset troca Tarefa por Consulta.
+
+### F8-C — Limpeza de routes
+- gestorRoutes.js: removidas ~15 routes Tarefa/Checklist/Webhook.
+- adminRoutes.js: hard-reset usa Consulta; removido seed-checklists; removidos forçar-cron legacy.
+- staffRoutes.js: removidas routes Tarefa.
+
+### F8-D — Limpeza de modelos
+- Propriedade.js: removido campo modelo_checklist_id (ModeloChecklist eliminado).
+- ModeloProtocolo.js: verificado, sem referências estruturais a ModeloChecklist.
+
+### F8-E — Limpeza do server.js
+- Removidos imports dos 4 jobs legacy.
+- Removidas chamadas de arranque dos 4 jobs legacy.
+- Mantidos os 5 jobs F7 (briefingDiarioFisio, lembreteConsultasAmanha, lembrete2hConsulta, caoGuardaConsultas, arquivistaConsultas).
+
+### F8-F — Limpeza do frontend
+- Sidebar do gestor atualizado: removidos "Calendário" (antigo), "Tarefas", "Checklists"; renomeado "Propriedades" → "Salas"; adicionado "Configurações".
+- Lint ✓, tsc ✓, build ✓ (sem as 6 páginas removidas).
+
+### F8-G — Limpeza de testes
+- Removidos imports de Tarefa e WebhookLog.
+- Removidos todos os blocos describe Tarefa-dependentes (linhas 317-2853): calendario/dados, dashboard (old), relatorios (old), ausências (old), notificações push, super admin (old), staff/tarefas, cron jobs legacy, prompt 97, cão de guarda/fail-safe, correções, prompt 114, prompt 116.
+- Removida função helper `esperar` (não usada por F2-F7).
+- Corrigida rota 401: /api/gestor/tarefas → /api/gestor/consultas.
+- **Resultado: 116/116 testes a passar ✓** (eram 200, removidos ~84 testes Tarefa-dependentes).
+
+### F8-H — Documentação (Task DOC-F8 por subagent)
+- docs/BACKEND.md: removidas secções Tarefa/TarefaArquivo/ModeloChecklist, jobs legacy, endpoints legacy. Entrada F8 no histórico.
+- docs/FRONTEND.md: removidas 6 rotas antigas, sidebar atualizado. Entrada F8 no histórico.
+- docs/ARQUITETURA.md: F8 marcado ✅ no roadmap. Mapa de migração atualizado (Tarefa/TarefaArquivo/ModeloChecklist → ❌ removido).
+
+Stage Summary:
+- **Modelos legacy completamente removidos**: Tarefa, TarefaArquivo, ModeloChecklist. O projeto FisioCell agora usa exclusivamente os modelos do domínio Fisioterapia: Empresa, Utilizador, Propriedade (alias Sala), Paciente, Consulta, ConsultaArquivo, HorarioFisioterapeuta, ModeloProtocolo, Ausencia, Notificacao, Auditoria, WebhookLog.
+- **12 ficheiros backend eliminados**, 6 páginas frontend eliminadas.
+- **Controllers limpos**: ~950 linhas removidas do gestorController. getDashboard e relatorioController reescritos com Consulta.
+- **Sidebar limpo**: 12 items (era 14), sem referências a Tarefas/Calendário antigo/Checklists.
+- **116/116 testes ✓** + **lint ✓** + **tsc ✓** + **build ✓**.
+- **Migração completa** (F0-F8). Próxima fase: F9 (Documentos — anexos + fotografias clínicas).

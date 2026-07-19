@@ -1,6 +1,6 @@
 # Documentação Técnica — Backend (FisioCell)
 
-> ⚠️ **F0 — Documentação em transição.** O projeto está a migrar de Alojamento Local para Fisioterapia. A integração Smoobu foi removida. Os modelos `Tarefa`/`Propriedade` serão transformados em `Consulta`/`Sala` nas próximas fases (ver [`docs/ARQUITETURA.md`](ARQUITETURA.md) para o roadmap completo F0–F9).
+> ⚠️ **F0 — Documentação em transição (F8 concluída).** O projeto migrou de Alojamento Local para Fisioterapia. A integração Smoobu foi removida. **F8 — Limpeza:** o modelo `Tarefa` foi **removido** (substituído por `Consulta` em F4); o `ModeloChecklist` foi extinto (substituído por `ModeloProtocolo` em F5); o modelo `Propriedade` foi **mantido como alias de Sala** (ainda referenciado por `Consulta.sala_id` — a migração para um modelo `Sala` dedicado foi adiada). Ver [`docs/ARQUITETURA.md`](ARQUITETURA.md) para o roadmap completo F0–F9.
 
 API REST do SaaS de gestão para Fisioterapia, construída com **Node.js**, **Express** e **MongoDB** (via **Mongoose**).
 
@@ -30,41 +30,45 @@ backend/
 ├── controllers/
 │   ├── adminController.js    # Painel de Administração + setup Cliente Zero
 │   ├── authController.js     # Autenticação: login (JWT) + /me
-│   ├── gestorController.js   # Painel do Gestor (dashboard, tarefas, equipa)
+│   ├── gestorController.js   # Painel do Gestor (dashboard, salas, equipa) — getDashboard usa Consulta (F8)
 │   ├── consultaController.js # CRUD de Consultas (F4) + validação de conflitos + nota clínica SOAP + cédula
 │   ├── protocoloController.js # CRUD de Modelos de Protocolo (F5) + helper gerarSnapshotProtocolo
 │   ├── horarioController.js # CRUD de HorarioFisioterapeuta (F3) + verificador de disponibilidade
 │   ├── pacienteController.js # CRUD de Pacientes (F2) — permissões por role + sanitização de dados clínicos
 │   ├── staffController.js    # Painel do Staff
-│   ├── tarefaController.js   # CRUD de tarefas + atribuição manual
-│   ├── ausenciaController.js # Ausências (folgas/férias)
-│   ├── superAdminController.js # Gestão cross-tenant de empresas
-│   ├── relatorioController.js # Relatórios/analytics
-│   ├── checklistController.js # Modelos de checklist
+│   ├── ausenciaController.js # Ausências (folgas/férias) — sem redistribuição de Tarefas (F8)
+│   ├── superAdminController.js # Gestão cross-tenant de empresas — hard-reset usa Consulta (F8)
+│   ├── relatorioController.js # Relatórios/analytics — reescrito sobre Consulta (F8)
 │   └── notificacaoController.js # Notificações in-app
 ├── middleware/
 │   ├── auth.js               # Verifica JWT (strito), injeta req.user — sem fallback legacy
 │   └── requireRole.js        # Middlewares RBAC: isAdmin, isDiretorClinico, isClinico, isRececionista (F1)
 ├── models/                   # Modelos Mongoose (ODM do MongoDB)
 │   ├── Empresa.js            #   Entidade principal (multi-tenant)
-│   ├── Propriedade.js        #   Alojamento (será migrado para Sala em F3)
+│   ├── Propriedade.js        #   Sala (alias Propriedade — referenciado por Consulta.sala_id; modelo mantido em F8)
 │   ├── Utilizador.js         #   Admin / Staff de uma empresa (email + password_hash) + temCedulaValida() (F4)
 │   ├── Ausencia.js           #   Indisponibilidade de Staff num dia
-│   ├── Tarefa.js             #   Tarefa de limpeza (será migrada para Consulta em F4)
 │   ├── Paciente.js           #   Paciente da clínica (F2) — soft delete + dados clínicos sanitizados
 │   ├── HorarioFisioterapeuta.js # Limites de agenda do fisio (F3) — recorrente/excecao + motor de disponibilidade
 │   ├── Consulta.js           #   Marcação/sessão de fisioterapia (F4) — substitui Tarefa; conflitos + SOAP + cédula
 │   ├── ConsultaArquivo.js    #   Cópia exata de Consulta + arquivado_em (F7) — coleção `consultas_arquivo`; preserva SOAP para RGPD
+│   ├── Notificacao.js        #   Notificações in-app + push (destinatário, tipo, lida)
+│   ├── Auditoria.js          #   Log de auditoria (empresa_id, utilizador_id, recurso, acao, detalhes)
+│   ├── WebhookLog.js         #   Log de webhooks (mantido para auditoria)
 │   └── ModeloProtocolo.js    #   Template de protocolo clínico (F5) — substitui ModeloChecklist; área + ativo + snapshot
 ├── utils/
-│   ├── loadBalancer.js       # Motor de atribuição (extraído do webhook em F0)
 │   ├── geocoding.js          # Geocoding de moradas (Nominatim)
-│   ├── scheduler.js          # Scheduler sequencial de horas
 │   ├── disponibilidade.js    # Filtros de ausência/folga + motor de disponibilidade F3 (horários)
 │   ├── distancia.js          # Haversine (tempo de viagem)
 │   ├── notificar.js          # Notificações in-app + push
 │   ├── push.js               # Web Push (VAPID)
 │   └── auditoria.js          # Registo de auditoria
+├── jobs/                     # Cron jobs F7 (todos timezone: 'Europe/Lisbon')
+│   ├── briefingDiarioFisio.js           # 08:00 — briefing diário por fisio
+│   ├── lembreteConsultasAmanha.js       # 19:00 — lembrete 24h (idempotente via flag)
+│   ├── lembrete2hConsulta.js            # */15 min — lembrete 2h (janela 1h45–2h15)
+│   ├── caoGuardaConsultas.js            # 02:00 — alertas órfãs + esquecidas (diretores)
+│   └── arquivistaConsultas.js           # domingo 03:00 — move >6 meses para consultas_arquivo
 └── routes/
     ├── adminRoutes.js        # Rotas /api/admin/*
     ├── gestorRoutes.js       # Rotas /api/gestor/*
@@ -101,7 +105,9 @@ O fluxo de arranque segue uma sequência segura:
 
 ## 3.1. Modelos de dados (Mongoose)
 
-O sistema gira em torno de 10 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
+O sistema gira em torno de 9 coleções. Todas usam `timestamps: true` (createdAt/updatedAt).
+
+> **F8 — Limpeza de modelos legacy:** os modelos `Tarefa`, `TarefaArquivo` e `ModeloChecklist` foram **removidos** (juntamente com `tarefaController.js`, `checklistController.js`, `utils/loadBalancer.js`, `utils/scheduler.js`, `scripts/seedChecklists.js` e os 4 cron jobs legacy `dailyBriefing`/`agendaAmanha`/`caoGuarda`/`arquivista`). O modelo `Propriedade` foi mantido como **alias de Sala** (continua referenciado por `Consulta.sala_id`). Modelo final: `Empresa`, `Utilizador`, `Propriedade` (Sala), `Paciente`, `Consulta`, `ConsultaArquivo`, `HorarioFisioterapeuta`, `ModeloProtocolo`, `Ausencia`, `Notificacao`, `Auditoria`, `WebhookLog` (alguns partilham coleção — ver detalhe em cada secção).
 
 ### `Empresa`
 Entidade principal do SaaS (multi-tenant). Cada empresa agrupa Propriedades e Utilizadores.
@@ -133,19 +139,20 @@ Configuração operacional da clínica. Default: objeto vazio `{}`.
 | `fuso_horario`             | String   | Default `'Europe/Lisbon'`. Fuso horário da clínica (calendário + lembretes). |
 
 ### `Propriedade`
-Representa um alojamento. **F0:** o campo `smoobu_id` foi removido. Será migrado para `Sala` em F3.
+Representa uma **Sala** da clínica (alias — o modelo `Propriedade` foi mantido em F8 porque a `Consulta.sala_id` o referencia; a migração para um modelo `Sala` dedicado foi adiada para uma fase futura). **F0:** o campo `smoobu_id` foi removido. **F8:** o campo `modelo_checklist_id` foi removido (o `ModeloChecklist` foi extinto — o `ModeloProtocolo` é a sua evolução F5, mas usa snapshots por consulta e não referência direta à Propriedade).
 
 | Campo                        | Tipo     | Notas                                                              |
 |------------------------------|----------|--------------------------------------------------------------------|
 | `nome`                       | String   | Obrigatório, trim.                                                 |
-| `morada`                     | String   | Obrigatório, trim. Geocoding automático (Nominatim) ao criar/editar. |
+| `morada`                     | String   | Opcional, trim. Geocoding automático (Nominatim) ao criar/editar (mantido para retrocompatibilidade; salas de clínica nem sempre têm morada própria). |
 | `coordenadas`                | Object   | `{ lat: Number, lng: Number }`. Preenchidas via geocoding (default null). |
 | `empresa_id`                 | ObjectId | `ref: 'Empresa'`. Obrigatório, indexado.                           |
-| `tempo_limpeza_minutos`      | Number   | Default `45`, `min: 0`. Unidade de carga.                          |
+| `tempo_limpeza_minutos`      | Number   | Default `45`, `min: 0`. Unidade de carga (legacy — ainda usado em alguns relatórios operacionais). |
 | `ativo`                      | Boolean  | Default `true`.                                                    |
-| `checklist`                  | [String] | Default `[]`. Itens de limpeza definidos pelo gestor (v1.34.0).    |
+| `checklist`                  | [String] | Default `[]`. Itens livres definidos pelo gestor (array de strings; não referencia `ModeloChecklist` desde F8). |
 | `capacidade_hospedes`        | Number   | Default `null`, `min: 0`. Capacidade (v1.61.0 / Prompt 84).        |
-| `funcionario_preferencial_id`| ObjectId | `ref: 'Utilizador'`, default `null`, indexado. **Prompt 92 (Fase 1.5)** — staff preferencial da propriedade. |
+| `funcionario_preferencial_id`| ObjectId | `ref: 'Utilizador'`, default `null`, indexado. **Prompt 92 (Fase 1.5)** — staff preferencial da sala (mantido em F8 — não depende do load balancer extinto, pode ser usado para filtros/preferências futuras). |
+| `observacoes`                | String   | Default `''`, trim. Notas administrativas livres sobre a sala.     |
 
 ### `Utilizador`
 Admin, Diretor Clínico, Fisioterapeuta ou Rececionista de uma empresa (clínica). Credenciais de login (email + password_hash).
@@ -167,7 +174,7 @@ Admin, Diretor Clínico, Fisioterapeuta ou Rececionista de uma empresa (clínica
 | `role`           | String   | `enum: ['admin','diretor_clinico','fisioterapeuta','rececionista']`, default `'rececionista'`. Indexado. |
 | `responsavel_id` | ObjectId | `ref: 'Utilizador'`, default `null`. Superior hierárquico (admin/diretor_clinico). O admin não tem responsavel_id (topo da hierarquia). Indexado. |
 | `telefone`       | String   | Opcional, trim. Telemóvel para notificações (formato internacional). |
-| `dias_folga`     | [Number] | Default `[]`. Folgas fixas semanais (0=Dom…6=Sáb). O load balancer exclui automaticamente o fisioterapeuta cujo dia da semana está neste array. |
+| `dias_folga`     | [Number] | Default `[]`. Folgas fixas semanais (0=Dom…6=Sáb). **F8:** o motor de disponibilidade F3 (`utils/disponibilidade.js` — `verificarDisponibilidadeCompleta`) continua a consultar este array para excluir fisioterapeutas em folga fixa (camada 2 do motor); o load balancer legacy foi removido, mas o `dias_folga` mantém-se por retrocompatibilidade até ser totalmente substituído por regras `HorarioFisioterapeuta` recorrentes. |
 | `ativo`          | Boolean  | Default `true`. Utilizador inativo é ignorado pelo login.         |
 | `eliminado_em`   | Date     | Default `null`, indexado. Soft delete (preserva integridade referencial de consultas/notas históricas). |
 | `pushSubscription` | Mixed  | Default `null`. Subscrição Web Push (VAPID) gerada pelo browser. |
@@ -212,27 +219,9 @@ Indisponibilidade (férias/folga) de um Staff num intervalo de datas. Todas as d
 
 > **v1.8.0:** o modelo passou de dia único (`data`) para intervalos (`data_inicio`/`data_fim`) com `tipo` e `notas`. A verificação de sobreposição de intervalos mantém a query `data` legacy para retrocompatibilidade.
 
-### `Tarefa`
-Tarefa de limpeza. **F0:** o campo `smoobu_reserva_id` foi removido. Será migrada para `Consulta` em F4.
+### `Tarefa` — ❌ Removido em F8
 
-| Campo                   | Tipo     | Notas                                                              |
-|-------------------------|----------|--------------------------------------------------------------------|
-| `empresa_id`            | ObjectId | Obrigatório, indexado.                                             |
-| `propriedade_id`        | ObjectId | `ref: 'Propriedade'`. Obrigatório, indexado.                       |
-| `utilizador_id`         | ObjectId | `ref: 'Utilizador'`, **default `null`** → tarefa por atribuir.     |
-| `data`                  | Date     | Dia da tarefa (meia-noite UTC). Obrigatório, indexado.             |
-| `tempo_limpeza_minutos` | Number   | Obrigatório, default `45`, `min: 0`. Unidade de carga.             |
-| `tipo`                  | String   | `enum: ['limpeza','check_in','check_out','manutencao','outro']`.   |
-| `estado`                | String   | `enum: ['por_atribuir','atribuida','em_curso','concluida','cancelada']`. |
-| `observacoes`           | String   | Observações gerais (gestor/admin). Default `''`.                   |
-| `observacoes_staff`     | String   | Observações do staff ao concluir (v1.34.0). Default `''`.          |
-| `concluida_em`          | Date     | Data de conclusão (relatórios). Default `null`.                    |
-| `hora_conclusao`        | Date     | Timestamp preciso de conclusão (v1.34.0, auditoria). Default `null`. |
-| `avarias`               | [String] | Avarias reportadas pelo staff (v1.38.0). Default `[]`.             |
-| `checklist`             | [String] | Snapshot da checklist da propriedade na criação (v1.55.0 / Prompt 77). Default `[]`. |
-| `detalhes_reserva`      | Object   | **Prompt 92 (Fase 1.5)** — snapshot da reserva. Sub-campos: `checkin` (String), `checkout` (String), `pax` (Number), `nome_hospede` (String). |
-
-> Nota: `empresa_id` é uma referência a `Empresa` (modelo criado na v1.2.0).
+> **F8 — Limpeza:** o modelo `Tarefa` (e a respetiva coleção `tarefas`) foi **removido** do código-base. A migração para o domínio Fisioterapia está concluída desde F4 — a `Consulta` é o nó central da clínica (substitui `Tarefa` em todos os fluxos: marcação, dashboard, relatórios, hard-reset, arquivamento). Os cron jobs legacy que operavam sobre `Tarefa` (`dailyBriefing`, `agendaAmanha`, `caoGuarda`, `arquivista`) foram substituídos pelos 5 cron jobs F7 sobre `Consulta` (ver secção 3.3). Os controllers que dependiam de `Tarefa` (`gestorController.getDashboard`, `relatorioController.getRelatorioProdutividade`, `ausenciaController.aprovarRejeitarAusencia`, `superAdminController` hard-reset, `staffController` ações do staff) foram reescritos para usar `Consulta` ou foram stubbed (authController). O histórico da tabela de campos do `Tarefa` está preservado no `git log`.
 
 ### `Paciente`
 Paciente de uma clínica (empresa). **F2** — novo modelo do domínio Fisioterapia.
@@ -399,71 +388,19 @@ Cópia exata do schema `Consulta` usada para arquivar consultas concluídas/canc
 
 ---
 
-## 3.2. Lógica central — Atribuição de tarefas
+## 3.2. Lógica central — Atribuição de tarefas — ❌ Removida em F8
 
-> **F0 — A integração Smoobu foi removida.** O motor de atribuição (load balancer) foi extraído para `utils/loadBalancer.js`. A lógica abaixo descreve o algoritmo que continua a ser usado pelos cron jobs (`caoGuarda`) e pela atribuição manual/reatribuição de tarefas. A criação automática de tarefas via webhook Smoobu foi descontinuada — na era Fisioterapia, as marcações de consultas serão criadas manualmente ou via motor de disponibilidade (F3–F4).
-
-O motor de atribuição (`utils/loadBalancer.js`) implementa o seguinte fluxo **estrito** quando precisa de escolher um utilizador para uma tarefa/consulta:
-
-1. **Procurar Fisioterapeutas** — lista todos os `Utilizador` elegíveis (`ativo: true`, `eliminado_em: null`) com `role: 'fisioterapeuta'` da empresa (F1: a role `staff` foi renomeada para `fisioterapeuta`; antes de v1.45.0 os gestores já não recebiam tarefas de limpeza).
-2. **Filtro de Ausências + Folgas** — exclui os Staff que tenham uma `Ausencia` **aprovada** que cubra o dia (`data_inicio <= dia AND data_fim >= dia`) e os Staff cujo dia da semana esteja no seu `dias_folga` (folgas fixas semanais).
-3. **Algoritmo VIP — Funcionário Preferencial (Prompt 93 / Fase 1.5)** — *antes* do load balancer geral, verifica se a propriedade tem `funcionario_preferencial_id`. Se tiver, e esse funcionário estiver **disponível** (passou os filtros de ausência + folga) e **dentro do SLA de 8h/dia** (`cargaLimpeza + tempoNovaTarefa ≤ CAPACIDADE_MAXIMA_MINUTOS` = 480 min), a tarefa é-lhe atribuída **obrigatoriamente**, ignorando o cálculo de distância/carga dos outros. Só se o preferencial não puder (folga/ausência/inativo ou excede o SLA) é que o sistema faz **fallback** para o load balancer geral.
-4. **Cálculo de Carga + Tempo de Viagem (Load Balancing geral)** — para cada Staff disponível, soma `tempo_limpeza_minutos` das tarefas já atribuídas nesse dia (excluindo `cancelada`/`concluida`) + tempo de viagem (Haversine entre a última tarefa do dia e a nova propriedade) + tempo da nova tarefa. Se a `carga_total > 480 min` (SLA de 8h), o utilizador é excluído (v1.15.0).
-5. **Atribuição** — a tarefa é atribuída ao Staff com **menor `carga_total`** (empate → primeiro encontrado).
-6. **Sem disponíveis** — se não houver Staff disponível, a tarefa fica com `utilizador_id: null` e `estado: 'por_atribuir'`, para o gestor atribuir manualmente.
-7. **Scheduler sequencial** — se a tarefa for atribuída, calcula a hora exata de início (11:00 por defeito; após a última tarefa do dia + viagem, com proteção de almoço 13h-14h).
-
-### Regra de robustez
-> A criação da Tarefa **nunca** é impedida por falhas na lógica de atribuição: se algo falhar ao determinar o utilizador, a tarefa é criada com `utilizador_id: null` e o erro é registado.
+> **F8 — Limpeza:** o motor de atribuição (`utils/loadBalancer.js`), o scheduler sequencial (`utils/scheduler.js`) e toda a lógica de auto-atribuição/reatribuição de `Tarefa` foram **removidos**. Na era Fisioterapia a marcação é manual (via `POST /api/gestor/consultas` pelo `isRececionista`) com validação de conflitos em tempo real (ver secção 3.5) — não há load balancing automático. A aprovação de ausências (`PATCH /api/admin/ausencias/:id/estado`) deixou de redistribuir tarefas (não há `Tarefa` para redistribuir). O histórico do algoritmo VIP (Algoritmo do Funcionário Preferencial — Prompt 93) + Haversine + SLA 8h está preservado no `git log`.
 
 ---
 
 ## 3.3. Cron Jobs (node-cron)
 
-O backend tem **3 cron jobs legacy** (domínio Alojamento Local — `Tarefa`) e **5 cron jobs F7** (domínio Fisioterapia — `Consulta`), todos iniciados no arranque (`server.js`, dentro de `if (require.main === module)` — não correm nos testes). Os jobs legacy mantêm-se até F8 (fase de limpeza que removerá `Tarefa`/`TarefaArquivo`).
+O backend tem **5 cron jobs** (todos sobre o modelo `Consulta`, domínio Fisioterapia — implementados em F7), todos iniciados no arranque do `server.js` dentro de `if (require.main === module)` (não correm nos testes). Todos usam `timezone: 'Europe/Lisbon'` (estável em servidores UTC como o Render — acompanha horário de Verão/Inverno de Portugal) e o `require('../utils/notificar')` é feito **lazy** (dentro das funções) para permitir `jest.spyOn` nos testes.
 
-| Job | Ficheiro | Agenda (cron) | Timezone | Descrição |
-|-----|----------|---------------|----------|-----------|
-| **Daily Briefing** | `jobs/dailyBriefing.js` | `0 8 * * *` | servidor (configurar `TZ=Europe/Lisbon` no Render) | 08:00 — envia via WhatsApp (mock) + push o plano de limpezas de **hoje** a cada staff. |
-| **Cão de Guarda** (Prompt 96 + 98) | `jobs/caoGuarda.js` | `0 18 * * *` | `Europe/Lisbon` (opção nativa do node-cron) | 18:00 — **Fase A:** auto-atribui (load balancer) as tarefas órfãs de **amanhã** (Fail-Safe); **Fase B:** envia push por cada tarefa de limpeza de **hoje** ainda não concluída. |
-| **Agenda de Amanhã** (Prompt 94) | `jobs/agendaAmanha.js` | `0 19 * * *` | `Europe/Lisbon` (opção nativa do node-cron) | 19:00 — envia push a cada staff com trabalho **amanhã**: `📅 Agenda de Amanhã: Tens X tarefa(s) agendada(s). Entra na app para ver o itinerário`. |
-
-### Cão de Guarda (`jobs/caoGuarda.js`) — Prompt 96 + Prompt 98
-Executa **duas fases** todos os dias às 18:00 (Europe/Lisbon):
-
-**FASE A — Auto-Atribuição de Emergência (Fail-Safe, Prompt 98):** corre **antes** dos alertas.
-1. Calcula o intervalo do dia **seguinte** (meia-noite UTC).
-2. Procura todas as `Tarefa` com `data` nesse intervalo, `estado: 'por_atribuir'` e `utilizador_id: null` (órfãs), com populate de `propriedade_id` (nome + coordenadas).
-3. Para cada tarefa órfã, invoca `determinarUtilizadorAtribuido` (load balancer: Algoritmo VIP + Haversine + SLA 8h) — o mesmo usado na auto-atribuição manual.
-4. Se encontrar staff: recalcula a hora de início via scheduler sequencial (Haversine + almoço 13h-14h), atualiza a tarefa (`utilizador_id`, `estado: 'atribuida'`, nova `data`) e envia push `🧹 Nova Limpeza Atribuída` (fire-and-forget).
-5. Se não houver staff disponível: mantém `por_atribuir` (órfã).
-6. Devolve `{ encontradas, atribuidas, orfas }`.
-
-> **Objetivo (Prompt 98):** garantir que o dia seguinte está sempre coberto **antes** do relógio das 19:00 (Agenda de Amanhã) correr. Assim, quando os funcionários recebem a notificação das 19:00, as escalas já estão 100% preenchidas. Complementa o Prompt 97 (desligar a histeria automática): as tarefas desatribuídas por ausências/falta súbita/baixa/desativação de propriedade são reatribuídas aqui de forma centralizada e controlada.
-
-**FASE B — Alertas de Tarefas Incompletas (Prompt 96):** os alertas.
-1. Calcula o intervalo do dia **atual** (meia-noite UTC).
-2. Procura todas as `Tarefa` com `data` nesse intervalo, `tipo: 'limpeza'`, `utilizador_id` ≠ null e `estado` ∈ `{ atribuida, em_curso }` (atribuídas mas não concluídas), com populate de `propriedade_id` (nome) e `utilizador_id` (ativo, eliminado_em).
-3. Para cada tarefa "esquecida", chama `notificarUtilizador(staffId, '⚠️ Tarefa Incompleta', 'Ainda não marcaste a limpeza da [nome da propriedade] como concluída. Por favor, atualiza a app!', '/staff')` (fire-and-forget; skip silencioso se não houver `pushSubscription` ou Web Push não configurado).
-4. Ignora tarefas cujo staff foi entretanto desativado/eliminado.
-5. Devolve `{ encontradas, notificadas }`.
-
-> **Nota sobre estados:** o modelo `Tarefa` tem os estados `['por_atribuir','atribuida','em_curso','concluida','cancelada']`. Não existe `'pendente'` — o equivalente (atribuída mas ainda não iniciada) é `'atribuida'`. O prompt pede 'pendente' ou 'em_curso', pelo que o job usa `{ atribuida, em_curso }` (= atribuídas + não concluídas).
->
-> **Uma push por tarefa (Fase B):** ao contrário do `Agenda de Amanhã` (que agrupa por staff), os alertas do Cão de Guarda enviam **uma push por tarefa esquecida** (a mensagem inclui o nome da propriedade, pelo que cada push é específica). Se um staff tiver 3 limpezas por concluir, recebe 3 pushes.
-
-### Agenda de Amanhã (`jobs/agendaAmanha.js`) — Prompt 94
-1. Calcula o intervalo do dia **seguinte** (meia-noite UTC).
-2. Procura todas as `Tarefa` com `data` nesse intervalo e `estado` ∈ `{ atribuida, por_atribuir }`, com populate de `utilizador_id` (nome, ativo, eliminado_em).
-3. Agrupa por `utilizador_id` — só interessam as atribuídas a staff **ativos** e não eliminados. Tarefas `por_atribuir` (sem utilizador) não têm destinatário → não geram push.
-4. Para cada staff, chama `notificarUtilizador(staffId, '📅 Agenda de Amanhã', 'Tens X tarefa(s) agendada(s). Entra na app para ver o itinerário', '/staff')` (fire-and-forget; skip silencioso se não houver `pushSubscription` ou Web Push não configurado).
-5. Devolve `{ processados, notificados, tarefas }` (estatísticas para testes/logs).
-
-> **Timezone:** o `Cão de Guarda` e o `Agenda de Amanhã` usam a opção `timezone: 'Europe/Lisbon'` do node-cron, pelo que os horários são estáveis mesmo que o servidor esteja em UTC (caso do Render) — acompanham automaticamente as mudanças legais de horário de Verão/Inverno de Portugal. O `Daily Briefing` usa o fuso do servidor (definir `TZ=Europe/Lisbon` no ambiente para alinhar).
+> **F8 — Limpeza:** os 4 cron jobs legacy sobre `Tarefa` (`dailyBriefing`, `agendaAmanha`, `caoGuarda`, `arquivista`) foram **removidos**. As suas contrapartes F7 cobrem todos os casos de uso (briefing, lembretes, cão de guarda, arquivista) sobre o modelo `Consulta`.
 
 ### Cron Jobs de Consultas (F7)
-
-Os **5 cron jobs F7** operam sobre o modelo `Consulta` (domínio Fisioterapia). Todos usam `timezone: 'Europe/Lisbon'` (estável em servidores UTC como o Render) e o `require('../utils/notificar')` é feito **lazy** (dentro das funções) para permitir `jest.spyOn` nos testes.
 
 | Job | Ficheiro | Agenda (cron) | Timezone | Descrição |
 |-----|----------|---------------|----------|-----------|
@@ -862,17 +799,19 @@ Elimina uma ausência.
 - **Resposta (200 OK):** `{ "mensagem": "Ausência eliminada com sucesso.", "ausencia_id": "..." }`.
 - **Erros:** `400` ID inválido; `404` não encontrada; `500` erro.
 
-> **Integração com o motor de atribuição (load balancer):** as ausências registadas aqui são consultadas automaticamente pelo `utils/loadBalancer.js` (passo 2 do fluxo de atribuição) para excluir fisioterapeutas indisponíveis da atribuição automática de tarefas.
+> **Integração com o motor de disponibilidade (F3):** as ausências registadas aqui são consultadas automaticamente por `utils/disponibilidade.js` (`verificarDisponibilidadeCompleta` — passo 1: ausência aprovada) para bloquear novas marcações de `Consulta` durante o período da ausência. **F8:** o load balancer legacy foi removido, pelo que a aprovação de uma ausência já não desencadeia redistribuição de tarefas.
 
 ---
 
 ### 6.4. Relatórios / Analytics (`/api/admin/relatorios`)
 
-*Protegido por JWT (middleware `auth`).*
+*Protegido por JWT (middleware `auth`).* 
+
+> **F8 — Reescrito sobre `Consulta`:** o `relatorioController.getRelatorioProdutividade` deixou de consultar `Tarefa` e passou a usar `Consulta`. Os campos da resposta foram renomeados: `totalTarefas` → `totalConsultas`, `porStaff` → `porFisio`, `porPropriedade` → `porSala`. O `construirContexto` aceita tanto os nomes novos como os antigos (retrocompatibilidade com payloads do frontend legacy durante a migração).
 
 #### `GET /api/admin/relatorios/produtividade`
 
-Métricas de produtividade da empresa num intervalo de datas.
+Métricas de produtividade da empresa num intervalo de datas (sobre `Consulta`).
 
 **Query params (opcionais):**
 - `inicio` (`yyyy-mm-dd` | ISO) — início do período. Default: há 30 dias.
@@ -883,22 +822,22 @@ Métricas de produtividade da empresa num intervalo de datas.
 {
   "periodo": { "inicio": "...", "fim": "..." },
   "resumo": {
-    "totalTarefas": 100,
+    "totalConsultas": 100,
     "concluidas": 80,
     "taxaConclusao": 0.8,
     "emAtraso": 5,
     "taxaAtraso": 0.05,
     "cargaTotalMinutos": 6000,
-    "tempoMedioMinutos": 75
+    "tempoMedioMinutos": 45
   },
-  "porStaff": [{ "utilizador_id", "nome", "total", "concluidas", "carga_minutos", "taxaConclusao" }],
+  "porFisio": [{ "utilizador_id", "nome", "total", "concluidas", "carga_minutos", "taxaConclusao" }],
   "porDia": [{ "data": "yyyy-mm-dd", "total", "concluidas", "carga_minutos" }],
   "porEstado": [{ "estado", "total" }],
-  "porPropriedade": [{ "propriedade_id", "nome", "total", "carga_minutos" }]
+  "porSala": [{ "propriedade_id", "nome", "total", "carga_minutos" }]
 }
 ```
 
-> **"emAtraso"** = tarefas não concluídas nem canceladas cuja `data` já passou (proxy operacional de atraso — não há campo dedicado no modelo). **"tempoMedioMinutos"** = média de `tempo_limpeza_minutos` das concluídas.
+> **"emAtraso"** = consultas não concluídas nem canceladas cuja `data_hora_inicio` já passou (proxy operacional de atraso — não há campo dedicado no modelo). **"tempoMedioMinutos"** = média de `duracao_minutos` das concluídas. **Mapeamento de campos (F8):** `data` → `data_hora_inicio`, `utilizador_id` → `fisioterapeuta_id`, `propriedade_id` → `sala_id`, `tempo_limpeza_minutos` → `duracao_minutos`, `hora_conclusao` → `concluida_em`.
 
 ---
 
@@ -908,31 +847,9 @@ Métricas de produtividade da empresa num intervalo de datas.
 
 ---
 
-### 6.10. Calendário Visual Avançado — v1.23.0
+### 6.10. Calendário Visual Avançado — ❌ Removido em F8
 
-*Protegido por JWT (middleware `auth`).*
-
-#### `GET /api/admin/calendario/dados`
-
-Endpoint unificado para alimentar a página de Calendário Visual Avançado. Devolve as tarefas da empresa num intervalo de datas, com filtros opcionais e populate de propriedade (nome + morada + coordenadas) e utilizador (nome).
-
-**Query params:**
-| Parâmetro | Tipo | Descrição |
-|-----------|------|-----------|
-| `inicio` | yyyy-mm-dd \| ISO | Início do período |
-| `fim` | yyyy-mm-dd \| ISO | Fim do período (inclusive) |
-| `propriedadeId` | ObjectId | Filtra por propriedade (opcional) |
-| `utilizadorId` | ObjectId \| `null` | Filtra por funcionário; `null` = tarefas por atribuir (opcional) |
-| `estado` | string | `por_atribuir` \| `atribuida` \| `em_curso` \| `concluida` \| `cancelada` (opcional) |
-
-**Diferença para o `GET /api/admin/tarefas`:**
-- Não exclui canceladas por defeito (o calendário pode mostrá-las a tracejado). Use `?estado=atribuida` para excluir.
-- Aceita filtros opcionais por `propriedadeId`, `utilizadorId` e `estado`.
-- Populate inclui `morada` e `coordenadas` da propriedade (para tooltip e futuro mapa de rotas).
-
-**Resposta 200:** `{ tarefas: [...] }` (cada tarefa tem `propriedade_id: { nome, morada, coordenadas }` e `utilizador_id: { nome } | null`)
-
-**Erros:** `401` (sem token), `500` (erro interno).
+> **F8 — Limpeza:** o endpoint `GET /api/admin/calendario/dados` (que devolvia `Tarefa` para alimentar a página de Calendário Visual Avançado em `/admin/calendario` e `/admin/calendario-operacional`) foi **removido** juntamente com o `gestorController.getDadosCalendario`. O calendário operacional passou a ser servido pela rota `/gestor/calendario-consultas` (F6 — FullCalendar com Consultas, cores por fisioterapeuta). A página antiga `/gestor/calendario` foi descontinuada.
 
 ---
 
@@ -966,22 +883,19 @@ O staff **não pode aprovar** os próprios pedidos — só o admin.
 
 **Body:** `{ estado: 'aprovada' | 'rejeitada' }`
 
-**Lógica crítica:**
-- **Aprovar** → redistribui automaticamente as tarefas futuras do utilizador no período `[data_inicio, data_fim]` usando o load balancer (`determinarUtilizadorAtribuido`). Tarefas com staff disponível são reatribuídas; as sem staff disponível ficam `por_atribuir`.
-- **Rejeitar** → apenas atualiza o estado (não mexe nas tarefas).
+**Lógica:**
+- **Aprovar** → apenas atualiza o estado (`ausenciaController.aprovarRejeitarAusencia`). **F8:** a redistribuição automática de Tarefas foi **removida** (o load balancer foi extinto e não há `Tarefa` para redistribuir); o fisioterapeuta fica simplesmente indisponível para novas marcações durante o período da ausência (o motor de disponibilidade F3 consulta `Ausencia` no passo 1 de `verificarDisponibilidadeCompleta`).
+- **Rejeitar** → apenas atualiza o estado.
 
 **Resposta 200:**
 ```json
 {
-  "mensagem": "Ausência aprovada. 2 tarefa(s) reatribuída(s), 0 órfã(s).",
-  "ausencia": { ... },
-  "redistribuicao": { "total": 2, "reatribuidas": 2, "orfas": 0, "detalhes": [...] }
+  "mensagem": "Ausência aprovada.",
+  "ausencia": { ... }
 }
 ```
 
-#### Impacto no motor de atribuição (load balancer)
-
-O load balancer (`utils/loadBalancer.js`) e a reatribuição de tarefas agora só consideram ausências com `estado: 'aprovada'` para excluir staff da atribuição. Pedidos pendentes ou rejeitados **não bloqueiam** a atribuição (o staff pode ainda trabalhar).
+> **F8 — Removido o campo `redistribuicao`:** a resposta deixou de incluir `redistribuicao: { total, reatribuidas, orfas, detalhes }` (era dependente do load balancer). A aprovação ficou numa operação simples de estado.
 
 #### Ações do admin que criam ausências
 
@@ -1540,6 +1454,7 @@ Atualiza um protocolo (todos os campos opcionais, mas pelo menos um). Permite de
 
 | Data       | Versão | Alteração                                                            |
 |------------|--------|----------------------------------------------------------------------|
+| **F8**     | —      | **Limpeza de modelos legacy (Tarefa → Consulta, ModeloChecklist extinto):** (1) **Modelos removidos** — `models/Tarefa.js`, `models/TarefaArquivo.js`, `models/ModeloChecklist.js` (e respetivas coleções) eliminados do código-base. (2) **Controllers removidos** — `controllers/tarefaController.js` e `controllers/checklistController.js`. (3) **Utils removidos** — `utils/loadBalancer.js` (motor de atribuição legacy) e `utils/scheduler.js` (scheduler sequencial). (4) **Jobs legacy removidos** — `jobs/dailyBriefing.js`, `jobs/agendaAmanha.js`, `jobs/caoGuarda.js`, `jobs/arquivista.js` (sobre `Tarefa`) — substituídos pelos 5 cron jobs F7 sobre `Consulta` (mantêm-se `briefingDiarioFisio`, `lembreteConsultasAmanha`, `lembrete2hConsulta`, `caoGuardaConsultas`, `arquivistaConsultas`). (5) **Script removido** — `scripts/seedChecklists.js` + entry `seed:checklists` do `package.json`. (6) **Modelo `Propriedade`** — removido o campo `modelo_checklist_id` (referenciava `ModeloChecklist` extinto); o modelo é mantido como **alias de Sala** (ainda referenciado por `Consulta.sala_id`). (7) **Controllers limpos** — `gestorController` (~950 linhas removidas de funções Tarefa-dependentes; `getDashboard` reescrito com `Consulta`; `alternarEstadoPropriedade` simplificado); `ausenciaController` (removida redistribuição via load balancer — `aprovarRejeitarAusencia` agora só atualiza estado); `authController` (stubs para `minhasTarefas`/`meuCalendario` — arrays vazios ou 410 Gone); `staffController` (removidas `concluirTarefa`/`reportarAvaria`/`reportarAtraso`/`toggleChecklistItem`); `relatorioController` (rewrite com `Consulta` — `totalTarefas`→`totalConsultas`, `porStaff`→`porFisio`, `porPropriedade`→`porSala`, retrocompatível no `construirContexto`); `superAdminController` (`Tarefa.deleteMany`→`Consulta.deleteMany` no hard-reset; `num_tarefas`→`num_consultas` no `listarEmpresas`). (8) **Routes limpas** — `gestorRoutes` (removidas ~15 routes Tarefa/Checklist/Webhooks + forçar cron legacy; mantido `POST /propriedades/default-checklist` que usa `checklist` array de strings); `adminRoutes` (hard-reset usa `Consulta`; removido `POST /seed-checklists` + forçar cron legacy); `staffRoutes` (removidas routes Tarefa). (9) **Frontend** — páginas removidas: `/gestor/calendario` (antigo de Tarefas), `/gestor/tarefas`, `/gestor/configuracoes/checklists`, `/gestor/webhooks`, `/admin/webhooks`, `/admin/sistema`; sidebar do gestor atualizado: removidos "Calendário" (antigo)/"Tarefas"/"Checklists", renomeado "Propriedades"→"Salas", adicionado "Configurações". (10) **Testes** — 116/116 ✓ (removidos ~84 testes Tarefa-dependentes; mantidos F2–F7 + health/auth/propriedades). (11) **Modelos finais do projeto:** `Empresa`, `Utilizador`, `Propriedade` (Sala), `Paciente`, `Consulta`, `ConsultaArquivo`, `HorarioFisioterapeuta`, `ModeloProtocolo`, `Ausencia`, `Notificacao`, `Auditoria`, `WebhookLog`. |
 | **F7**     | —      | **Cron Jobs de Consultas + `ConsultaArquivo`:** (1) Novo modelo `models/ConsultaArquivo.js` — clone exato do schema `Consulta` com campo extra `arquivado_em` (Date, default `Date.now`); coleção dedicada `consultas_arquivo` (via `mongoose.model('ConsultaArquivo', consultaArquivoSchema, 'consultas_arquivo')`). Preserva todos os campos da `Consulta` (incluindo `nota_clinica` SOAP com `protocolo_aplicado[]` + `cedula_assinante`) para auditoria legal/RGPD (retenção 10–20 anos). Índices compostos `{empresa_id, fisioterapeuta_id, data_hora_inicio: -1}`, `{empresa_id, paciente_id, data_hora_inicio: -1}`, `{arquivado_em: 1}`. Sem endpoints REST dedicados — o movimento é feito exclusivamente pelo cron job `arquivistaConsultas`. (2) 5 novos cron jobs em `jobs/` (todos com `timezone: 'Europe/Lisbon'` e `require('../utils/notificar')` lazy para `jest.spyOn`): (2a) `briefingDiarioFisio.js` — `0 8 * * *` 08:00, push a cada fisio (`fisioterapeuta`/`diretor_clinico` ativo não eliminado) com consultas **hoje** (`estado` ∈ `{marcada, confirmada, em_curso}`), mensagem `📋 Tens X consulta(s) hoje. Entra na app para ver a agenda.`, agrupado por fisio, devolve `{processados, notificados, consultas}`; (2b) `lembreteConsultasAmanha.js` — `0 19 * * *` 19:00, push a cada fisio com consultas **amanhã** (`estado` ∈ `{marcada, confirmada}` e `lembrete_24h_enviado: {$ne: true}`), mensagem `📅 Lembrete: tens X consulta(s) amanhã.`, marca `lembrete_24h_enviado=true` em lote via `Consulta.updateMany` (idempotência); (2c) `lembrete2hConsulta.js` — `*/15 * * * *` a cada 15 min, procura consultas que começam na janela +1h45 a +2h15 (105–135 min, sobreposição garante nenhuma escapar), `estado` ∈ `{marcada, confirmada}` e `lembrete_2h_enviado: {$ne: true}`, push ao fisio com mensagem `Consulta com [paciente] às [HH:mm] — faltam ~2 horas.`, marca `lembrete_2h_enviado=true`; (2d) `caoGuardaConsultas.js` — `0 2 * * *` 02:00, verifica (1) consultas de **hoje** sem fisio ativo (órfãs) e (2) consultas de datas **passadas** não concluídas (esquecidas), agrupa alertas por `empresa_id`, notifica apenas `diretor_clinico`/`admin` ativos (rota `/gestor/consultas`, `tipo: 'aviso'`) com mensagem `🐕 Alerta: X consulta(s) órfã(s), Y consulta(s) esquecida(s). Verifica o painel.`; (2e) `arquivistaConsultas.js` — `0 3 * * 0` domingo 03:00, move `Consulta` com `estado` ∈ `{concluida, cancelada, faltou, nao_compareceu}` e `data_hora_inicio` anterior a 6 meses para `consultas_arquivo` (preserva todos os campos + `arquivado_em`), apaga originais só depois de copiados com sucesso (robustez — reprocessa falhadas no domingo seguinte), devolve `{arquivadas, erros}`. (3) `server.js` — os 5 jobs montados no arranque dentro de `if (require.main === module)` (após `mongoose.connect` com sucesso, depois dos 4 jobs legacy `dailyBriefing`/`agendaAmanha`/`caoGuarda`/`arquivista` que se mantêm até F8). Jobs legacy (Tarefa) não removidos — coexistem até F8 (limpeza). 200/200 testes ✓ (+8 testes: briefing fisio com consultas hoje, lembrete 24h marca `lembrete_24h_enviado=true`, lembrete 2h filtra janela e marca `lembrete_2h_enviado=true`, cão de guarda deteta órfãs + esquecidas e notifica diretores, arquivista move consultas >6 meses para `consultas_arquivo` preservando SOAP). |
 | **F5**     | —      | **Protocolos Clínicos + snapshot na Consulta:** (1) Novo modelo `models/ModeloProtocolo.js` (evolução do `ModeloChecklist`) — `empresa_id`, `nome`, `descricao`, `area` (`enum ['musculoesqueletica','neurologica','cardioresp','desporto','pediatria','outro']` default `'musculoesqueletica'`), `seccoes[{nome, items[]}]`, `ativo` (boolean default `true`). Índice composto `{empresa_id, ativo, area}` + índices individuais em `empresa_id`/`nome`/`area`/`ativo`. (2) Novo `controllers/protocoloController.js` — 5 funções CRUD (`listarProtocolos` com filtros `area`/`ativo` ordenado por `area`+`nome`, `obterProtocolo`, `criarProtocolo` com validação de `nome` obrigatório + `area` válida + `seccoes` array não vazio + cada secção com `nome` e `items` não vazios, `atualizarProtocolo` com normalização de `ativo`/`seccoes`, `apagarProtocolo` hard delete) + helper exportado `gerarSnapshotProtocolo(protocoloId, empresaId)` (devolve array de `{nome, items:[{texto, concluido:false}]}` ou `null` se não existir/não pertencer à empresa); auditoria registada (`recurso: 'modelo_protocolo'`). (3) Novas `routes/protocoloRoutes.js` montadas em `/api/gestor/protocolos` — middleware custom `podeVer` (4 roles: admin/diretor_clinico/fisioterapeuta/rececionista) para `GET /` e `GET /:id` (fisio precisa de ver para aplicar; rececionista para selecionar ao marcar); `isDiretorClinico` para POST/PUT/DELETE (só direção clínica gere protocolos). (4) `server.js` — mount `app.use('/api/gestor/protocolos', protocoloRoutes)`. (5) Integração na Consulta — `consultaController.criarConsulta` aceita `protocolo_id` opcional no body → invoca `gerarSnapshotProtocolo` e guarda em `nota_clinica.protocolo_aplicado` (400 se protocolo não encontrado/não pertence à empresa); `consultaController.atualizarNotaClinica` (`PATCH /:id/nota-clinica`) aceita `protocolo_aplicado` para marcar items como `concluido` durante a sessão (substitui o snapshot, normaliza `texto`/`concluido`). Snapshot imutável por edições futuras no template (RGPD/legal). 192/192 testes ✓ (+16 testes: CRUD de protocolos, validações de `nome`/`area`/`seccoes`, permissões `podeVer`/`isDiretorClinico`, snapshot na criação de consulta com `protocolo_id`, marcação de items concluídos via PATCH, protocolo inexistente → 400). |
 | **F4**     | —      | **Consultas + validação de conflitos + cédula profissional:** (1) Novo modelo `models/Consulta.js` — `empresa_id`, `sala_id` (`ref: 'Propriedade'` alias Sala até F8), `fisioterapeuta_id` (`ref: 'Utilizador'`), `paciente_id` (`ref: 'Paciente'`), `data_hora_inicio`/`data_hora_fim` (Date), `duracao_minutos` (default `45`, `min: 15`), `tipo` (`enum ['primeira_consulta','sessao','reavaliacao','alta','grupo']` default `'sessao'`), `estado` (`enum ['marcada','confirmada','em_curso','concluida','cancelada','faltou','nao_compareceu']` default `'marcada'`), `motivo_cancelamento` (`enum ['paciente','clinica','fisio','outro']`), `presenca` (`enum ['pendente','presente','ausente','atrasado']`), `nota_clinica` (`{subjetivo, objetivo, avaliacao, plano, tratamento_efetuado, protocolo_aplicado[], cedula_assinante}` — imutável após `estado='concluida'`), `criada_por`, `concluida_em`, `cancelada_em`, `cancelada_por`, `lembrete_24h_enviado`, `lembrete_2h_enviado`, `observacoes`. Índices compostos `{empresa_id, fisioterapeuta_id, data_hora_inicio}`, `{empresa_id, sala_id, data_hora_inicio}`, `{empresa_id, paciente_id, data_hora_inicio (-1)}`, `{estado, data_hora_inicio}`. (2) `models/Utilizador.js` — adicionado método de instância `temCedulaValida()` (devolve `true` para admin/rececionista; para fisio/diretor_clinico exige `perfil_profissional.cedula` preenchido). (3) Novo `controllers/consultaController.js` — função interna `validarConflitos` (4 verificações em simultâneo: fisio disponível via motor F3 + sala sem sobreposição + fisio sem sobreposição + paciente sem sobreposição, devolve `{ok, warnings, horario}`); 7 funções exportadas (`listarConsultas` com filtros fisioterapeuta_id/sala_id/paciente_id/estado/inicio/fim + fisio vê só as suas, `obterConsulta`, `criarConsulta` com `forcar` para soft block 409/200, `atualizarConsulta` com re-validação temporal + `excluirConsultaId`, `atualizarNotaClinica` endpoint separado com `isClinico` + validação de cédula + snapshot de `cedula_assinante`, `eliminarConsulta` bloqueia concluídas RGPD, `validarConflitosEndpoint` GET para o frontend validar em tempo real); auditoria registada (`recurso: 'consulta'`). (4) Novas `routes/consultaRoutes.js` montadas em `/api/gestor/consultas` — middleware custom `podeVer` (4 roles) para GET/listar/validar/detalhe, `isRececionista` para POST/PUT, `isClinico` para `PATCH /:id/nota-clinica`, `isDiretorClinico` para DELETE. (5) `server.js` — mount `app.use('/api/gestor/consultas', consultaRoutes)`. 176/176 testes ✓ (+25 testes de Consulta: CRUD, validação de conflitos fisio/sala/paciente, soft block com `forcar`, nota clínica SOAP com cédula, imutabilidade de concluídas, RGPD no delete). |

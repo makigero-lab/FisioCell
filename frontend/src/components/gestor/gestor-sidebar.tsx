@@ -54,11 +54,9 @@ interface NavItem {
  */
 const gestorNavItems: NavItem[] = [
   { label: "Dashboard", href: "/gestor", icon: LayoutDashboard },
-  { label: "Calendário", href: "/gestor/calendario", icon: CalendarRange },
-  { label: "Agenda Consultas", href: "/gestor/calendario-consultas", icon: CalendarPlus },
+  { label: "Agenda Consultas", href: "/gestor/calendario-consultas", icon: CalendarRange },
   { label: "Consultas", href: "/gestor/consultas", icon: CalendarPlus },
-  { label: "Tarefas", href: "/gestor/tarefas", icon: ClipboardList },
-  { label: "Propriedades", href: "/gestor/propriedades", icon: Building2 },
+  { label: "Salas", href: "/gestor/propriedades", icon: Building2 },
   { label: "Pacientes", href: "/gestor/pacientes", icon: UserRound },
   { label: "Equipa", href: "/gestor/equipa", icon: Users },
   { label: "Horários", href: "/gestor/equipa/horarios", icon: Clock },
@@ -66,8 +64,7 @@ const gestorNavItems: NavItem[] = [
   { label: "Ausências / Férias", href: "/gestor/ausencias", icon: CalendarOff },
   { label: "Relatórios", href: "/gestor/relatorios", icon: BarChart3 },
   { label: "Notificações", href: "/gestor/notificacoes", icon: Bell },
-  // Prompt 134 — Modelos de Checklist (configuração).
-  { label: "Checklists", href: "/gestor/configuracoes/checklists", icon: ListChecks },
+  { label: "Configurações", href: "/gestor/configuracoes", icon: ListChecks },
 ];
 
 /**

@@ -5,11 +5,20 @@
  *
  * Autenticação: obrigatória (middleware `auth` aplicado nas rotas).
  * O `empresa_id` é lido do JWT (req.user.empresa_id).
+ *
+ * F8 — Limpeza: removido o import de Tarefa (eliminado). A função
+ * getRelatorioProdutividade foi reescrita para usar Consulta (F4):
+ *   - data → data_hora_inicio
+ *   - utilizador_id → fisioterapeuta_id
+ *   - propriedade_id → sala_id
+ *   - tempo_limpeza_minutos → duracao_minutos
+ *   - hora_conclusao → concluida_em
+ * Estados: marcada/confirmada/em_curso/concluida/cancelada/faltou/nao_compareceu.
  */
 
 const mongoose = require('mongoose');
 const { GoogleGenerativeAI } = require('@google/generative-ai');
-const Tarefa = require('../models/Tarefa');
+const Consulta = require('../models/Consulta');
 const Utilizador = require('../models/Utilizador');
 const Propriedade = require('../models/Propriedade');
 const { obterEmpresaId } = require('./gestorController');
@@ -40,11 +49,13 @@ function round1(n) {
 }
 
 /* ------------------------------------------------------------------ */
-/* GET /api/admin/relatorios/produtividade                             */
+/* GET /api/gestor/relatorios/produtividade                             */
 /* ------------------------------------------------------------------ */
 
 /**
  * Relatório de produtividade da empresa num intervalo de datas.
+ *
+ * F8 — Reescrito para usar Consulta (F4) em vez de Tarefa (eliminado).
  *
  * Query params:
  *   - inicio (yyyy-mm-dd | ISO) — início do período. Default: há 30 dias.
@@ -54,20 +65,20 @@ function round1(n) {
  *   {
  *     periodo: { inicio, fim },
  *     resumo: {
- *       totalTarefas,           // exclui canceladas
+ *       totalConsultas,           // exclui canceladas
  *       concluidas,
- *       taxaConclusao,          // 0..1
- *       emAtraso,               // tarefas não concluídas cuja data já passou
- *       taxaAtraso,             // 0..1 (emAtraso / total)
- *       cargaTotalMinutos,      // soma de tempo_limpeza_minutos (exclui canceladas)
- *       tempoMedioMinutos,      // média de tempo estimado das concluídas (= tempoEstimadoMedioMinutos)
- *       tempoEstimadoMedioMinutos, // alias de tempoMedioMinutos
- *       tempoRealMedioMinutos   // média de (hora_conclusao - data) das concluídas, em minutos
+ *       taxaConclusao,            // 0..1
+ *       emAtraso,                 // consultas não concluídas/canceladas cuja data já passou
+ *       taxaAtraso,               // 0..1 (emAtraso / total)
+ *       cargaTotalMinutos,        // soma de duracao_minutos (exclui canceladas)
+ *       tempoMedioMinutos,        // média de duracao_minutos das concluídas
+ *       tempoEstimadoMedioMinutos,// alias de tempoMedioMinutos
+ *       tempoRealMedioMinutos     // média de (concluida_em - data_hora_inicio) das concluídas
  *     },
- *     porStaff: [{ utilizador_id, nome, total, concluidas, carga_minutos, taxaConclusao }],
+ *     porFisio: [{ utilizador_id, nome, total, concluidas, carga_minutos, taxaConclusao }],
  *     porDia:   [{ data, total, concluidas, carga_minutos }],
  *     porEstado:[{ estado, total }],
- *     porPropriedade: [{ propriedade_id, nome, total, carga_minutos }]
+ *     porSala:  [{ sala_id, nome, total, carga_minutos }]
  *   }
  */
 exports.getRelatorioProdutividade = async (req, res) => {
@@ -90,12 +101,12 @@ exports.getRelatorioProdutividade = async (req, res) => {
     // seguinte se vier de normalizarDataUTC; se for hojeFim também).
     const matchBase = {
       empresa_id: new mongoose.Types.ObjectId(empresaId),
-      data: { $gte: inicio, $lt: fim },
+      data_hora_inicio: { $gte: inicio, $lt: fim },
     };
 
     /* ---- Resumo (contagens + somas em paralelo) ---- */
     const [
-      totalTarefas,
+      totalConsultas,
       concluidas,
       emAtraso,
       cargaTotal,
@@ -104,39 +115,40 @@ exports.getRelatorioProdutividade = async (req, res) => {
       tempoRealAgg,
     ] = await Promise.all([
       // Total (exclui canceladas).
-      Tarefa.countDocuments({ ...matchBase, estado: { $ne: 'cancelada' } }),
+      Consulta.countDocuments({ ...matchBase, estado: { $ne: 'cancelada' } }),
       // Concluídas.
-      Tarefa.countDocuments({ ...matchBase, estado: 'concluida' }),
+      Consulta.countDocuments({ ...matchBase, estado: 'concluida' }),
       // Em atraso: não concluídas nem canceladas cuja data já passou.
-      Tarefa.countDocuments({
+      Consulta.countDocuments({
         ...matchBase,
         estado: { $nin: ['concluida', 'cancelada'] },
-        data: { $gte: inicio, $lt: new Date() },
+        data_hora_inicio: { $gte: inicio, $lt: new Date() },
       }),
       // Carga total (minutos) — exclui canceladas.
-      Tarefa.aggregate([
+      Consulta.aggregate([
         { $match: { ...matchBase, estado: { $ne: 'cancelada' } } },
-        { $group: { _id: null, total: { $sum: '$tempo_limpeza_minutos' } } },
+        { $group: { _id: null, total: { $sum: '$duracao_minutos' } } },
       ]),
-      // Tempo médio estimado das concluídas.
-      Tarefa.aggregate([
+      // Tempo médio estimado das concluídas (duracao_minutos).
+      Consulta.aggregate([
         { $match: { ...matchBase, estado: 'concluida' } },
-        { $group: { _id: null, media: { $avg: '$tempo_limpeza_minutos' } } },
+        { $group: { _id: null, media: { $avg: '$duracao_minutos' } } },
       ]),
       // Distribuição por estado.
-      Tarefa.aggregate([
+      Consulta.aggregate([
         { $match: matchBase },
         { $group: { _id: '$estado', total: { $sum: 1 } } },
         { $sort: { total: -1 } },
       ]),
-      // Tempo real médio: média da diferença entre hora_conclusao e data
-      // (em minutos) das tarefas concluídas com hora_conclusao definida.
-      Tarefa.aggregate([
+      // Tempo real médio: média da diferença entre concluida_em e
+      // data_hora_inicio (em minutos) das consultas concluídas com
+      // concluida_em definida.
+      Consulta.aggregate([
         {
           $match: {
             ...matchBase,
             estado: 'concluida',
-            hora_conclusao: { $ne: null, $type: 'date' },
+            concluida_em: { $ne: null, $type: 'date' },
           },
         },
         {
@@ -145,7 +157,7 @@ exports.getRelatorioProdutividade = async (req, res) => {
             media: {
               $avg: {
                 $divide: [
-                  { $subtract: ['$hora_conclusao', '$data'] },
+                  { $subtract: ['$concluida_em', '$data_hora_inicio'] },
                   60 * 1000, // ms → minutos
                 ],
               },
@@ -159,40 +171,41 @@ exports.getRelatorioProdutividade = async (req, res) => {
     const tempoMedioMinutos = tempoMedioAgg[0]?.media
       ? Math.round(tempoMedioAgg[0].media)
       : 0;
-    // Tempo real médio em minutos — arredondado. Se não houver tarefas
-    // concluídas com hora_conclusao, devolve 0.
+    // Tempo real médio em minutos — arredondado. Se não houver consultas
+    // concluídas com concluida_em, devolve 0.
     const tempoRealMedioMinutos = tempoRealAgg[0]?.media
       ? Math.round(tempoRealAgg[0].media)
       : 0;
 
-    /* ---- Por staff (produtividade individual) ---- */
-    const porStaffAgg = await Tarefa.aggregate([
+    /* ---- Por fisioterapeuta (produtividade individual) ---- */
+    const porFisioAgg = await Consulta.aggregate([
       { $match: { ...matchBase, estado: { $ne: 'cancelada' } } },
       {
         $group: {
-          _id: '$utilizador_id',
+          _id: '$fisioterapeuta_id',
           total: { $sum: 1 },
           concluidas: {
             $sum: { $cond: [{ $eq: ['$estado', 'concluida'] }, 1, 0] },
           },
-          carga_minutos: { $sum: '$tempo_limpeza_minutos' },
+          carga_minutos: { $sum: '$duracao_minutos' },
         },
       },
       { $sort: { total: -1 } },
     ]);
 
-    // Popula nomes (inclui tarefas por atribuir — utilizador_id null → "Por atribuir").
-    const staffIds = porStaffAgg
+    // Popula nomes (inclui consultas sem fisioterapeuta — fisioterapeuta_id
+    // é required no schema, mas por segurança tratamos como "Desconhecido").
+    const fisioIds = porFisioAgg
       .filter((s) => s._id)
       .map((s) => s._id);
-    const staffInfo = await Utilizador.find({ _id: { $in: staffIds } })
+    const fisioInfo = await Utilizador.find({ _id: { $in: fisioIds } })
       .select('nome')
       .lean();
-    const staffMap = new Map(staffInfo.map((s) => [String(s._id), s.nome]));
+    const fisioMap = new Map(fisioInfo.map((s) => [String(s._id), s.nome]));
 
-    const porStaff = porStaffAgg.map((s) => ({
+    const porFisio = porFisioAgg.map((s) => ({
       utilizador_id: s._id ? String(s._id) : null,
-      nome: s._id ? staffMap.get(String(s._id)) ?? 'Desconhecido' : 'Por atribuir',
+      nome: s._id ? fisioMap.get(String(s._id)) ?? 'Desconhecido' : 'Sem fisioterapeuta',
       total: s.total,
       concluidas: s.concluidas,
       carga_minutos: s.carga_minutos,
@@ -200,18 +213,18 @@ exports.getRelatorioProdutividade = async (req, res) => {
     }));
 
     /* ---- Por dia (série temporal) ---- */
-    const porDiaAgg = await Tarefa.aggregate([
+    const porDiaAgg = await Consulta.aggregate([
       { $match: { ...matchBase, estado: { $ne: 'cancelada' } } },
       {
         $group: {
           _id: {
-            $dateToString: { format: '%Y-%m-%d', date: '$data' },
+            $dateToString: { format: '%Y-%m-%d', date: '$data_hora_inicio' },
           },
           total: { $sum: 1 },
           concluidas: {
             $sum: { $cond: [{ $eq: ['$estado', 'concluida'] }, 1, 0] },
           },
-          carga_minutos: { $sum: '$tempo_limpeza_minutos' },
+          carga_minutos: { $sum: '$duracao_minutos' },
         },
       },
       { $sort: { _id: 1 } },
@@ -224,28 +237,28 @@ exports.getRelatorioProdutividade = async (req, res) => {
       carga_minutos: d.carga_minutos,
     }));
 
-    /* ---- Por propriedade ---- */
-    const porPropriedadeAgg = await Tarefa.aggregate([
+    /* ---- Por sala (Propriedade) ---- */
+    const porSalaAgg = await Consulta.aggregate([
       { $match: { ...matchBase, estado: { $ne: 'cancelada' } } },
       {
         $group: {
-          _id: '$propriedade_id',
+          _id: '$sala_id',
           total: { $sum: 1 },
-          carga_minutos: { $sum: '$tempo_limpeza_minutos' },
+          carga_minutos: { $sum: '$duracao_minutos' },
         },
       },
       { $sort: { total: -1 } },
     ]);
 
-    const propIds = porPropriedadeAgg.map((p) => p._id);
-    const propInfo = await Propriedade.find({ _id: { $in: propIds } })
+    const salaIds = porSalaAgg.map((p) => p._id);
+    const salaInfo = await Propriedade.find({ _id: { $in: salaIds } })
       .select('nome')
       .lean();
-    const propMap = new Map(propInfo.map((p) => [String(p._id), p.nome]));
+    const salaMap = new Map(salaInfo.map((p) => [String(p._id), p.nome]));
 
-    const porPropriedade = porPropriedadeAgg.map((p) => ({
-      propriedade_id: String(p._id),
-      nome: propMap.get(String(p._id)) ?? 'Desconhecida',
+    const porSala = porSalaAgg.map((p) => ({
+      sala_id: String(p._id),
+      nome: salaMap.get(String(p._id)) ?? 'Desconhecida',
       total: p.total,
       carga_minutos: p.carga_minutos,
     }));
@@ -256,20 +269,20 @@ exports.getRelatorioProdutividade = async (req, res) => {
     return res.status(200).json({
       periodo: { inicio: inicio.toISOString(), fim: fim.toISOString() },
       resumo: {
-        totalTarefas,
+        totalConsultas,
         concluidas,
-        taxaConclusao: totalTarefas > 0 ? round1(concluidas / totalTarefas) : 0,
+        taxaConclusao: totalConsultas > 0 ? round1(concluidas / totalConsultas) : 0,
         emAtraso,
-        taxaAtraso: totalTarefas > 0 ? round1(emAtraso / totalTarefas) : 0,
+        taxaAtraso: totalConsultas > 0 ? round1(emAtraso / totalConsultas) : 0,
         cargaTotalMinutos,
         tempoMedioMinutos,
         tempoEstimadoMedioMinutos: tempoMedioMinutos,
         tempoRealMedioMinutos,
       },
-      porStaff,
+      porFisio,
       porDia,
       porEstado,
-      porPropriedade,
+      porSala,
     });
   } catch (err) {
     console.error('❌ getRelatorioProdutividade:', err.message);
@@ -282,7 +295,7 @@ exports.getRelatorioProdutividade = async (req, res) => {
 /* ------------------------------------------------------------------ */
 /**
  * Gera um "Resumo Executivo" com IA a partir dos dados do relatório
- * (limpezas totais, horas, faltas, produtividade por staff, etc.).
+ * (consultas totais, horas, faltas, produtividade por fisio, etc.).
  *
  * Estratégia (best-effort, Prompt 125):
  *   1. Se GEMINI_API_KEY existir  → chama Google Gemini (@google/generative-ai SDK).
@@ -291,7 +304,7 @@ exports.getRelatorioProdutividade = async (req, res) => {
  *      placeholder estruturado gerado localmente a partir dos dados
  *      (com secções "Visão Geral", "Tendências", "Recomendações").
  *
- * Body: payload do relatório (resumo + porStaff + porDia + ...).
+ * Body: payload do relatório (resumo + porFisio + porDia + ...).
  * Resposta 200: { resumo: "..." }
  */
 exports.getResumoIA = async (req, res) => {
@@ -347,15 +360,24 @@ exports.getResumoIA = async (req, res) => {
  * Constrói um objecto normalizado a partir do body do pedido.
  * Suporta tanto a estrutura completa do /produtividade como um
  * subconjunto parcial (apenas resumo). Tudo é opcional e tem defaults.
+ *
+ * F8 — Aceita tanto os campos antigos (totalTarefas, etc.) como os novos
+ * (totalConsultas, etc.) para retrocompatibilidade com o frontend.
  */
 function construirContexto(dados) {
   const r = dados.resumo || {};
   const periodo = dados.periodo || {};
 
+  // F8 — suporta ambos os nomes (consultas + legacy tarefas) para
+  // retrocompatibilidade com payloads gerados pelo frontend antigo.
+  const totalConsultas = r.totalConsultas ?? r.totalTarefas ?? dados.totalConsultas ?? dados.totalTarefas ?? 0;
+  const porFisio = Array.isArray(dados.porFisio) ? dados.porFisio : (Array.isArray(dados.porStaff) ? dados.porStaff : []);
+  const porSala = Array.isArray(dados.porSala) ? dados.porSala : (Array.isArray(dados.porPropriedade) ? dados.porPropriedade : []);
+
   return {
     periodoInicio: periodo.inicio || null,
     periodoFim: periodo.fim || null,
-    totalTarefas: r.totalTarefas ?? dados.totalTarefas ?? 0,
+    totalConsultas,
     concluidas: r.concluidas ?? dados.concluidas ?? 0,
     taxaConclusao: r.taxaConclusao ?? dados.taxaConclusao ?? 0,
     emAtraso: r.emAtraso ?? dados.emAtraso ?? 0,
@@ -365,18 +387,19 @@ function construirContexto(dados) {
       r.tempoMedioMinutos ?? r.tempoEstimadoMedioMinutos ?? dados.tempoMedioMinutos ?? 0,
     tempoRealMedioMinutos:
       r.tempoRealMedioMinutos ?? dados.tempoRealMedioMinutos ?? 0,
-    porStaff: Array.isArray(dados.porStaff) ? dados.porStaff : [],
-    porPropriedade: Array.isArray(dados.porPropriedade)
-      ? dados.porPropriedade
-      : [],
+    porFisio,
+    porSala,
     porDia: Array.isArray(dados.porDia) ? dados.porDia : [],
     porEstado: Array.isArray(dados.porEstado) ? dados.porEstado : [],
   };
 }
 
 /**
- * Constrói um prompt em português europeu focado em gestão
+ * Constrói um prompt em português europeu focado em gestão clínica
  * (tendências e eficiência), a partir do contexto normalizado.
+ *
+ * F8 — Texto adaptado ao domínio Fisioterapia (Consultas em vez de
+ * Tarefas de limpeza).
  */
 function construirPrompt(contexto) {
   const pctConclusao = Math.round(contexto.taxaConclusao * 100);
@@ -385,7 +408,7 @@ function construirPrompt(contexto) {
   const tempoMedio = (contexto.tempoMedioMinutos / 60).toFixed(2);
   const tempoReal = (contexto.tempoRealMedioMinutos / 60).toFixed(2);
 
-  const topStaff = [...contexto.porStaff]
+  const topFisio = [...contexto.porFisio]
     .sort((a, b) => b.taxaConclusao - a.taxaConclusao)
     .slice(0, 5)
     .map(
@@ -394,36 +417,36 @@ function construirPrompt(contexto) {
           s.taxaConclusao * 100
         )}%), carga ${Math.round(s.carga_minutos / 60 * 10) / 10}h`
     )
-    .join('\n') || '- (sem dados de staff)';
+    .join('\n') || '- (sem dados de fisioterapeutas)';
 
-  const topProps = [...contexto.porPropriedade]
+  const topSalas = [...contexto.porSala]
     .sort((a, b) => b.total - a.total)
     .slice(0, 5)
     .map(
       (p) =>
-        `- ${p.nome}: ${p.total} tarefas, carga ${
+        `- ${p.nome}: ${p.total} consultas, carga ${
           Math.round((p.carga_minutos / 60) * 10) / 10
         }h`
     )
-    .join('\n') || '- (sem dados de propriedades)';
+    .join('\n') || '- (sem dados de salas)';
 
-  return `És um analista de operações de uma empresa de Alojamento Local (FisioCell).
+  return `És um analista clínico de uma clínica de Fisioterapia (FisioCell).
 Escreve um "Resumo Executivo" em português de Portugal, focado em gestão
-(tendências e eficiência), a partir dos seguintes dados do período.
+clínica (tendências e eficiência), a partir dos seguintes dados do período.
 
 Dados:
-- Total de tarefas: ${contexto.totalTarefas}
-- Tarefas concluídas: ${contexto.concluidas} (${pctConclusao}%)
-- Tarefas em atraso: ${contexto.emAtraso} (${pctAtraso}%)
+- Total de consultas: ${contexto.totalConsultas}
+- Consultas concluídas: ${contexto.concluidas} (${pctConclusao}%)
+- Consultas em atraso: ${contexto.emAtraso} (${pctAtraso}%)
 - Carga total estimada: ${horasTotal}h
-- Tempo médio estimado por tarefa: ${tempoMedio}h
-- Tempo real médio por tarefa (concluídas): ${tempoReal}h
+- Tempo médio estimado por consulta: ${tempoMedio}h
+- Tempo real médio por consulta (concluídas): ${tempoReal}h
 
-Top staff (por taxa de conclusão):
-${topStaff}
+Top fisioterapeutas (por taxa de conclusão):
+${topFisio}
 
-Top propriedades (por nº de tarefas):
-${topProps}
+Top salas (por nº de consultas):
+${topSalas}
 
 Estrutura obrigatória (usa exactamente estes títulos em markdown):
 ## Visão Geral
@@ -433,7 +456,7 @@ Estrutura obrigatória (usa exactamente estes títulos em markdown):
 (2-4 bullets sobre padrões: picos de carga, atrasos, eficiência real vs estimada)
 
 ## Recomendações
-(3-4 bullets acionáveis focados em gestão: redistribuição de carga,
+(3-4 bullets acionáveis focados em gestão clínica: redistribuição de carga,
 formação, revisão de estimativas, etc.)
 
 Máximo 350 palavras. Tom profissional, conciso, sem clichés.`;
@@ -460,7 +483,7 @@ async function chamarOpenAI(contexto) {
           {
             role: 'system',
             content:
-              'És um assistente de análise de operações para gestão de Alojamento Local. Responde sempre em português de Portugal.',
+              'És um assistente de análise clínica para gestão de clínicas de Fisioterapia. Responde sempre em português de Portugal.',
           },
           { role: 'user', content: prompt },
         ],
@@ -483,9 +506,9 @@ async function chamarOpenAI(contexto) {
 
 /**
  * Chama a API do Google Gemini (generateContent) e devolve o texto.
- * Modelo: gemini-1.5-flash (rápido e barato, equivalente ao gpt-4o-mini).
+ * Modelo: gemini-2.0-flash (rápido e barato, equivalente ao gpt-4o-mini).
  *
- * Prompt 125 — refactorizada para usar o SDK oficial @google/generative-ai
+ * Prompt 125 — refactorada para usar o SDK oficial @google/generative-ai
  * em vez do `fetch` cru. O SDK trata autenticação, retries e parsing.
  */
 async function chamarGemini(contexto) {
@@ -509,6 +532,8 @@ async function chamarGemini(contexto) {
 /**
  * Gera um resumo executivo estruturado localmente, sem chamar qualquer
  * API externa. Sempre útil e profissional (não é uma mensagem de erro).
+ *
+ * F8 — Texto adaptado ao domínio Fisioterapia (consultas em vez de tarefas).
  */
 function gerarPlaceholder(contexto) {
   const pctConclusao = Math.round(contexto.taxaConclusao * 100);
@@ -523,7 +548,7 @@ function gerarPlaceholder(contexto) {
       : 'no período selecionado';
 
   /* ---- Visão Geral ---- */
-  const visaoGeral = `Foram processadas **${contexto.totalTarefas} tarefas** ${periodoTxt}, das quais **${contexto.concluidas} foram concluídas** (taxa de conclusão de ${pctConclusao}%). Registaram-se **${contexto.emAtraso} tarefas em atraso** (${pctAtraso}% do total). A carga total estimada foi de **${horasTotal}h**, com um tempo médio estimado de ${tempoMedio}h por tarefa${
+  const visaoGeral = `Foram processadas **${contexto.totalConsultas} consultas** ${periodoTxt}, das quais **${contexto.concluidas} foram concluídas** (taxa de conclusão de ${pctConclusao}%). Registaram-se **${contexto.emAtraso} consultas em atraso** (${pctAtraso}% do total). A carga total estimada foi de **${horasTotal}h**, com um tempo médio estimado de ${tempoMedio}h por consulta${
     contexto.tempoRealMedioMinutos > 0
       ? ` e um tempo real médio de ${tempoReal}h nas concluídas`
       : ''
@@ -534,13 +559,13 @@ function gerarPlaceholder(contexto) {
 
   if (pctConclusao >= 90) {
     tendencias.push(
-      `- **Alta taxa de conclusão (${pctConclusao}%)**: a equipa está a cumprir a maioria das tarefas planeadas, indicando boa capacidade de execução.`
+      `- **Alta taxa de conclusão (${pctConclusao}%)**: a equipa clínica está a cumprir a maioria das consultas planeadas, indicando boa capacidade de execução.`
     );
   } else if (pctConclusao >= 70) {
     tendencias.push(
       `- **Taxa de conclusão moderada (${pctConclusao}%)**: há espaço para otimização do fluxo de trabalho e melhor distribuição de carga.`
     );
-  } else if (contexto.totalTarefas > 0) {
+  } else if (contexto.totalConsultas > 0) {
     tendencias.push(
       `- **Taxa de conclusão baixa (${pctConclusao}%)**: prioritário rever planeamento, atribuições e possíveis bloqueios operacionais.`
     );
@@ -570,14 +595,14 @@ function gerarPlaceholder(contexto) {
       );
     } else {
       tendencias.push(
-        `- **Tempo real acima do estimado** (${tempoReal}h vs ${tempoMedio}h, +${diffPct}%): rever precisão das estimativas ou identificar causas (formação, logística, propriedades mais exigentes).`
+        `- **Tempo real acima do estimado** (${tempoReal}h vs ${tempoMedio}h, +${diffPct}%): rever precisão das estimativas ou identificar causas (formação, logística, casos mais complexos).`
       );
     }
   }
 
-  // Tendência de carga por staff (concentração).
-  if (contexto.porStaff.length > 1) {
-    const cargas = contexto.porStaff
+  // Tendência de carga por fisioterapeuta (concentração).
+  if (contexto.porFisio.length > 1) {
+    const cargas = contexto.porFisio
       .filter((s) => s.total > 0)
       .map((s) => s.total);
     if (cargas.length > 1) {
@@ -585,7 +610,7 @@ function gerarPlaceholder(contexto) {
       const min = Math.min(...cargas);
       if (max > min * 2) {
         tendencias.push(
-          `- **Distribuição de carga desequilibrada**: o staff com mais tarefas tem ${max} e o com menos tem ${min} — possível sobrecarga pontual.`
+          `- **Distribuição de carga desequilibrada**: o fisioterapeuta com mais consultas tem ${max} e o com menos tem ${min} — possível sobrecarga pontual.`
         );
       }
     }
@@ -600,13 +625,13 @@ function gerarPlaceholder(contexto) {
   /* ---- Recomendações ---- */
   const recomendacoes = [];
 
-  if (pctConclusao < 90 && contexto.totalTarefas > 0) {
+  if (pctConclusao < 90 && contexto.totalConsultas > 0) {
     recomendacoes.push(
-      `Reforçar o acompanhamento das ${contexto.totalTarefas - contexto.concluidas} tarefas não concluídas: identificar bloqueios e reatribuir sempre que necessário.`
+      `Reforçar o acompanhamento das ${contexto.totalConsultas - contexto.concluidas} consultas não concluídas: identificar bloqueios e reatribuir sempre que necessário.`
     );
   } else {
     recomendacoes.push(
-      `Manter o ritmo de execução atual e continuar a monitorizar indicadores de qualidade (não apenas volume).`
+      `Manter o ritmo de execução atual e continuar a monitorizar indicadores de qualidade clínica (não apenas volume).`
     );
   }
 
@@ -621,29 +646,29 @@ function gerarPlaceholder(contexto) {
     contexto.tempoRealMedioMinutos > contexto.tempoMedioMinutos * 1.1
   ) {
     recomendacoes.push(
-      `Recalcular as estimativas de tempo de limpeza por propriedade com base no tempo real observado — os valores atuais estão subestimados.`
+      `Recalcular as estimativas de duração por consulta com base no tempo real observado — os valores atuais estão subestimados.`
     );
   } else if (
     contexto.tempoRealMedioMinutos > 0 &&
     contexto.tempoRealMedioMinutos < contexto.tempoMedioMinutos * 0.85
   ) {
     recomendacoes.push(
-      `Rever as estimativas de tempo (atualmente conservadoras) para otimizar o agendamento e a utilização da equipa.`
+      `Rever as estimativas de duração (atualmente conservadoras) para otimizar o agendamento e a utilização da equipa.`
     );
   }
 
-  if (contexto.porStaff.length > 1) {
+  if (contexto.porFisio.length > 1) {
     recomendacoes.push(
-      `Avaliar redistribuição de carga entre staff: equilibrar tarefas por capacidade e experiência, garantindo cobertura adequada das propriedades com maior volume.`
+      `Avaliar redistribuição de carga entre fisioterapeutas: equilibrar consultas por capacidade e experiência, garantindo cobertura adequada das salas com maior volume.`
     );
   }
 
-  if (contexto.porPropriedade.length > 0) {
-    const topProp = [...contexto.porPropriedade].sort(
+  if (contexto.porSala.length > 0) {
+    const topSala = [...contexto.porSala].sort(
       (a, b) => b.total - a.total
     )[0];
     recomendacoes.push(
-      `Focar otimização na propriedade "${topProp.nome}" (maior volume: ${topProp.total} tarefas) — padronizar checklist e antecedar agendamentos.`
+      `Focar otimização na sala "${topSala.nome}" (maior volume: ${topSala.total} consultas) — antecedar agendamentos e garantir disponibilidade de equipamentos.`
     );
   }
 

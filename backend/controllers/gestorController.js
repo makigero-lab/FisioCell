@@ -6,6 +6,13 @@
  * Autenticação (v1.10.0): o `empresa_id` é lido do JWT (injetado pelo
  * middleware `auth` em `req.user.empresa_id`). O fallback legacy
  * `x-empresa-id` foi REMOVIDO — todos os pedidos têm de trazer token válido.
+ *
+ * F8 — Limpeza: removidas todas as funções que usavam Tarefa (eliminado em
+ * F8): getTarefas, getDadosCalendario, exportarTarefasCSV, reportarFaltaSubita,
+ * registarBaixaProlongada, getWebhooks, reprocessarWebhook. O dashboard foi
+ * reescrito para usar Consulta (F4+). A lógica de desatribuição de Tarefas em
+ * alternarEstadoPropriedade foi removida. A referência a ModeloChecklist em
+ * atualizarPropriedade foi removida (campo modelo_checklist_id extinto).
  */
 
 const mongoose = require('mongoose');
@@ -13,10 +20,9 @@ const bcrypt = require('bcryptjs');
 const Empresa = require('../models/Empresa');
 const Propriedade = require('../models/Propriedade');
 const Utilizador = require('../models/Utilizador');
-const Tarefa = require('../models/Tarefa');
+const Consulta = require('../models/Consulta');
 const Ausencia = require('../models/Ausencia');
 const Auditoria = require('../models/Auditoria');
-const WebhookLog = require('../models/WebhookLog');
 const { obterCoordenadas } = require('../utils/geocoding');
 const { registarAuditoria } = require('../utils/auditoria');
 
@@ -48,22 +54,24 @@ function obterEmpresaId(req, res) {
   return { ok: true, empresaId };
 }
 
-// Exporta para reutilização noutros controllers (ex: tarefaController).
+// Exporta para reutilização noutros controllers (ex: relatorioController).
 exports.obterEmpresaId = obterEmpresaId;
 
 /* ------------------------------------------------------------------ */
-/* Propriedades                                                         */
+/* Dashboard                                                           */
 /* ------------------------------------------------------------------ */
 
 /**
- * GET /api/admin/dashboard
- * Devolve estatísticas em tempo real para o dashboard do admin.
+ * GET /api/gestor/dashboard
+ * Devolve estatísticas em tempo real para o dashboard do gestor.
+ *
+ * F8 — Reescrito para usar Consulta em vez de Tarefa (eliminado).
  *
  * Resposta 200: {
  *   totalPropriedades, propriedadesAtivas,
- *   membrosEquipaAtivos, tarefasHoje, tarefasPorAtribuir,
- *   tarefasConcluidasHoje, tarefasPorStaff: [{ nome, tarefas, carga_minutos }],
- *   checkinsEmRisco: { total: number, tarefas: [{ _id, data, propriedade_nome, estado }] }
+ *   membrosEquipaAtivos,
+ *   consultasHoje, consultasMarcadasHoje, consultasConcluidasHoje,
+ *   cargaPorFisio: [{ utilizador_id, nome, consultas, carga_minutos }]
  * }
  */
 exports.getDashboard = async (req, res) => {
@@ -77,17 +85,15 @@ exports.getDashboard = async (req, res) => {
       Date.UTC(agora.getUTCFullYear(), agora.getUTCMonth(), agora.getUTCDate())
     );
     const amanhaInicio = new Date(hojeInicio.getTime() + 24 * 60 * 60 * 1000);
-    // Janela de risco: próximas 48h a partir de agora.
-    const limiteRisco48h = new Date(agora.getTime() + 48 * 60 * 60 * 1000);
 
-    // Contagens em paralelo.
+    // Contagens em paralelo (Consulta em vez de Tarefa).
     const [
       totalPropriedades,
       propriedadesAtivas,
       membrosEquipaAtivos,
-      tarefasHoje,
-      tarefasPorAtribuir,
-      tarefasConcluidasHoje,
+      consultasHoje,
+      consultasMarcadasHoje,
+      consultasConcluidasHoje,
     ] = await Promise.all([
       Propriedade.countDocuments({ empresa_id: empresaId }),
       Propriedade.countDocuments({ empresa_id: empresaId, ativo: true }),
@@ -97,91 +103,67 @@ exports.getDashboard = async (req, res) => {
         ativo: true,
         eliminado_em: null,
       }),
-      Tarefa.countDocuments({
+      // Total de consultas de hoje (exceto canceladas).
+      Consulta.countDocuments({
         empresa_id: empresaId,
-        data: { $gte: hojeInicio, $lt: amanhaInicio },
+        data_hora_inicio: { $gte: hojeInicio, $lt: amanhaInicio },
         estado: { $ne: 'cancelada' },
       }),
-      Tarefa.countDocuments({
+      // Consultas de hoje marcadas/confirmadas/em_curso (não concluídas nem canceladas).
+      Consulta.countDocuments({
         empresa_id: empresaId,
-        data: { $gte: hojeInicio, $lt: amanhaInicio },
-        estado: 'por_atribuir',
+        data_hora_inicio: { $gte: hojeInicio, $lt: amanhaInicio },
+        estado: { $in: ['marcada', 'confirmada', 'em_curso'] },
       }),
-      Tarefa.countDocuments({
+      // Consultas de hoje concluídas.
+      Consulta.countDocuments({
         empresa_id: empresaId,
-        data: { $gte: hojeInicio, $lt: amanhaInicio },
+        data_hora_inicio: { $gte: hojeInicio, $lt: amanhaInicio },
         estado: 'concluida',
       }),
     ]);
 
-    // Carga por staff (aggregate).
-    const cargasPorStaff = await Tarefa.aggregate([
+    // Carga por fisioterapeuta (aggregate sobre duracao_minutos).
+    const cargasPorFisio = await Consulta.aggregate([
       {
         $match: {
           empresa_id: new mongoose.Types.ObjectId(empresaId),
-          data: { $gte: hojeInicio, $lt: amanhaInicio },
-          estado: { $nin: ['cancelada', 'concluida'] },
-          utilizador_id: { $ne: null },
+          data_hora_inicio: { $gte: hojeInicio, $lt: amanhaInicio },
+          estado: { $nin: ['cancelada'] },
+          fisioterapeuta_id: { $ne: null },
         },
       },
       {
         $group: {
-          _id: '$utilizador_id',
-          tarefas: { $sum: 1 },
-          carga_minutos: { $sum: '$tempo_limpeza_minutos' },
+          _id: '$fisioterapeuta_id',
+          consultas: { $sum: 1 },
+          carga_minutos: { $sum: '$duracao_minutos' },
         },
       },
     ]);
 
-    // Popula nomes dos staff.
-    const staffIds = cargasPorStaff.map((c) => c._id);
-    const staffInfo = await Utilizador.find({ _id: { $in: staffIds } })
+    // Popula nomes dos fisioterapeutas.
+    const fisioIds = cargasPorFisio.map((c) => c._id);
+    const fisioInfo = await Utilizador.find({ _id: { $in: fisioIds } })
       .select('nome')
       .lean();
-    const staffMap = new Map(staffInfo.map((s) => [String(s._id), s.nome]));
+    const fisioMap = new Map(fisioInfo.map((s) => [String(s._id), s.nome]));
 
-    const tarefasPorStaff = cargasPorStaff.map((c) => ({
+    const cargaPorFisio = cargasPorFisio.map((c) => ({
       utilizador_id: String(c._id),
-      nome: staffMap.get(String(c._id)) ?? '?',
-      tarefas: c.tarefas,
+      nome: fisioMap.get(String(c._id)) ?? '?',
+      consultas: c.consultas,
       carga_minutos: c.carga_minutos,
     }));
-
-    // ----------------------------------------------------------------
-    // v1.54.0 (Prompt 76) — Radar de Risco: check-ins sem limpeza
-    // atribuída nas próximas 48h. Tarefas 'por_atribuir' (sem staff)
-    // que podem comprometer check-ins. Devolve contagem + detalhes.
-    // ----------------------------------------------------------------
-    const tarefasRiscoRaw = await Tarefa.find({
-      empresa_id: empresaId,
-      data: { $gte: agora, $lte: limiteRisco48h },
-      estado: 'por_atribuir',
-    })
-      .populate({ path: 'propriedade_id', select: 'nome' })
-      .select('data estado propriedade_id tempo_limpeza_minutos')
-      .sort({ data: 1 })
-      .lean();
-
-    const checkinsEmRisco = {
-      total: tarefasRiscoRaw.length,
-      tarefas: tarefasRiscoRaw.map((t) => ({
-        _id: String(t._id),
-        data: t.data,
-        estado: t.estado,
-        tempo_limpeza_minutos: t.tempo_limpeza_minutos,
-        propriedade_nome: t.propriedade_id?.nome ?? '—',
-      })),
-    };
 
     return res.status(200).json({
       totalPropriedades,
       propriedadesAtivas,
       membrosEquipaAtivos,
-      tarefasHoje,
-      tarefasPorAtribuir,
-      tarefasConcluidasHoje,
-      tarefasPorStaff,
-      checkinsEmRisco,
+      consultasHoje,
+      consultasMarcadasHoje,
+      consultasConcluidasHoje,
+      cargaPorFisio,
     });
   } catch (err) {
     console.error('❌ getDashboard:', err.message);
@@ -189,8 +171,12 @@ exports.getDashboard = async (req, res) => {
   }
 };
 
+/* ------------------------------------------------------------------ */
+/* Propriedades                                                         */
+/* ------------------------------------------------------------------ */
+
 /**
- * GET /api/admin/propriedades
+ * GET /api/gestor/propriedades
  * Devolve as propriedades dessa empresa.
  */
 exports.getPropriedades = async (req, res) => {
@@ -316,396 +302,14 @@ exports.criarPropriedade = async (req, res) => {
   }
 };
 
-/* ------------------------------------------------------------------ */
-/* Tarefas (Calendário Geral de Operações)                             */
-/* ------------------------------------------------------------------ */
-
 /**
- * GET /api/admin/tarefas
- * Lista todas as Tarefas da empresa, com populate de propriedade e utilizador.
- *
- * Query params opcionais:
- *   ?inicio=YYYY-MM-DD  — data de início do filtro (inclusive)
- *   ?fim=YYYY-MM-DD     — data de fim do filtro (inclusive)
- *
- * Sem filtro de datas: devolve todas as tarefas (pode ser pesado — recomenda-se
- * sempre passar inicio/fim no frontend).
- *
- * Resposta 200: { tarefas: [...] }
- */
-exports.getTarefas = async (req, res) => {
-  try {
-    const { ok, empresaId } = obterEmpresaId(req, res);
-    if (!ok) return;
-
-    const filtro = { empresa_id: empresaId, estado: { $ne: 'cancelada' } };
-
-    // Filtro por intervalo de datas (opcional).
-    // Sempre filtra a partir de hoje (não mostra tarefas passadas).
-    const { inicio, fim } = req.query;
-    const agora = new Date();
-    const hojeInicio = new Date(
-      Date.UTC(agora.getUTCFullYear(), agora.getUTCMonth(), agora.getUTCDate())
-    );
-
-    if (inicio || fim) {
-      const dataFiltro = {};
-      if (inicio) {
-        const d = new Date(inicio);
-        if (!isNaN(d.getTime())) {
-          const inicioReq = new Date(
-            Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
-          );
-          // Não permite ver datas anteriores a hoje.
-          dataFiltro.$gte = inicioReq < hojeInicio ? hojeInicio : inicioReq;
-        }
-      } else {
-        // Se só tem fim, aplica $gte = hoje.
-        dataFiltro.$gte = hojeInicio;
-      }
-      if (fim) {
-        const d = new Date(fim);
-        if (!isNaN(d.getTime())) {
-          // Inclui o dia inteiro (até meia-noite do dia seguinte).
-          dataFiltro.$lt = new Date(
-            Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) +
-              24 * 60 * 60 * 1000
-          );
-        }
-      }
-      if (Object.keys(dataFiltro).length > 0) {
-        filtro.data = dataFiltro;
-      }
-    } else {
-      // Sem filtros de data → data >= hoje (não devolve tarefas do passado).
-      filtro.data = { $gte: hojeInicio };
-    }
-
-    const tarefas = await Tarefa.find(filtro)
-      // Prompt 114 — Inclui capacidade_hospedes para destaque no detalhe.
-      // Prompt 139 — Inclui coordenadas para cálculo on-the-fly de tempo_viagem.
-      .populate({ path: 'propriedade_id', select: 'nome capacidade_hospedes coordenadas' })
-      .populate({ path: 'utilizador_id', select: 'nome' })
-      .sort({ data: 1 })
-      .lean();
-
-    // Prompt 139 — Cálculo on-the-fly de tempo_viagem_minutos (best-effort).
-    const { calcularTempoViagem } = require('../utils/scheduler');
-    const tarefasComViagem = tarefas.map((t) => {
-      if (t.tempo_viagem_minutos && Number(t.tempo_viagem_minutos) > 0) {
-        return t;
-      }
-      if (!t.utilizador_id || !t.propriedade_id) {
-        return { ...t, tempo_viagem_minutos: 0 };
-      }
-      const diaTarefa = new Date(t.data);
-      const diaStr = diaTarefa.toISOString().slice(0, 10);
-      const tarefaAnterior = tarefas.find((outra) => {
-        if (String(outra._id) === String(t._id)) return false;
-        if (!outra.utilizador_id || !outra.propriedade_id) return false;
-        if (String(outra.utilizador_id._id) !== String(t.utilizador_id._id)) return false;
-        const diaOutra = new Date(outra.data).toISOString().slice(0, 10);
-        return diaOutra === diaStr && new Date(outra.data).getTime() < diaTarefa.getTime();
-      });
-      if (tarefaAnterior && tarefaAnterior.propriedade_id?.coordenadas && t.propriedade_id?.coordenadas) {
-        const viagem = calcularTempoViagem(
-          tarefaAnterior.propriedade_id.coordenadas,
-          t.propriedade_id.coordenadas
-        );
-        return { ...t, tempo_viagem_minutos: viagem };
-      }
-      return { ...t, tempo_viagem_minutos: 0 };
-    });
-
-    return res.status(200).json({ tarefas: tarefasComViagem });
-  } catch (err) {
-    console.error('❌ getTarefas:', err.message);
-    return res.status(500).json({ erro: 'Erro interno do servidor.' });
-  }
-};
-
-/**
- * GET /api/admin/calendario/dados
- *
- * Endpoint unificado para alimentar a página de Calendário Visual Avançado.
- * Devolve as tarefas da empresa num intervalo de datas, com filtros
- * opcionais e populate de propriedade (nome + morada) e utilizador (nome).
- *
- * Query params:
- *   - inicio        (yyyy-mm-dd | ISO) — início do período (obrigatório na prática)
- *   - fim           (yyyy-mm-dd | ISO) — fim do período (inclusive)
- *   - propriedadeId (ObjectId)         — filtra por propriedade (opcional)
- *   - utilizadorId  (ObjectId)         — filtra por funcionário (opcional)
- *   - estado        (string)           — filtra por estado (opcional):
- *                                        por_atribuir | atribuida | em_curso |
- *                                        concluida | cancelada
- *
- * Notas:
- *   - Diferente do getTarefas, NÃO exclui canceladas por defeito (o calendário
- *     pode querer mostrá-las a tracejado). O utilizador pode excluí-las com
- *     ?estado=atribuida (ou outro).
- *   - Populate inclui `morada` (para tooltip/info no calendário) e `coordenadas`
- *     (para futuro mapa de rotas).
- *
- * Resposta 200: { tarefas: [...] }
- */
-exports.getDadosCalendario = async (req, res) => {
-  try {
-    const { ok, empresaId } = obterEmpresaId(req, res);
-    if (!ok) return;
-
-    const { inicio, fim, propriedadeId, utilizadorId, estado, incluir_canceladas } = req.query;
-
-    // Filtro base: empresa do utilizador autenticado.
-    const filtro = { empresa_id: empresaId };
-
-    // Filtro por intervalo de datas [inicio, fim] (fim inclusive).
-    if (inicio || fim) {
-      const dataFiltro = {};
-      if (inicio) {
-        const d = new Date(inicio);
-        if (!isNaN(d.getTime())) {
-          dataFiltro.$gte = new Date(
-            Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
-          );
-        }
-      }
-      if (fim) {
-        const d = new Date(fim);
-        if (!isNaN(d.getTime())) {
-          // Inclui o dia inteiro (até meia-noite do dia seguinte).
-          dataFiltro.$lt = new Date(
-            Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) +
-              24 * 60 * 60 * 1000
-          );
-        }
-      }
-      if (Object.keys(dataFiltro).length > 0) {
-        filtro.data = dataFiltro;
-      }
-    }
-
-    // Filtro opcional por propriedade.
-    if (propriedadeId && mongoose.isValidObjectId(propriedadeId)) {
-      filtro.propriedade_id = propriedadeId;
-    }
-
-    // Filtro opcional por utilizador (funcionário).
-    // Nota: utilizadorId pode ser 'null' (string) para filtrar tarefas por atribuir.
-    if (utilizadorId !== undefined && utilizadorId !== null && utilizadorId !== '') {
-      if (utilizadorId === 'null' || utilizadorId === 'sem_atribuicao') {
-        filtro.utilizador_id = null;
-      } else if (mongoose.isValidObjectId(utilizadorId)) {
-        filtro.utilizador_id = utilizadorId;
-      }
-    }
-
-    // Filtro opcional por estado.
-    const ESTADOS_VALIDOS = [
-      'por_atribuir',
-      'atribuida',
-      'em_curso',
-      'concluida',
-      'cancelada',
-    ];
-    if (estado && ESTADOS_VALIDOS.includes(estado)) {
-      filtro.estado = estado;
-    } else if (!estado && incluir_canceladas !== 'true') {
-      // Prompt 103 — Se nenhum filtro de estado for especificado E não veio
-      // incluir_canceladas=true, exclui canceladas (não aparecem no calendário
-      // visual nem na agenda do staff). O Excel passa incluir_canceladas=true
-      // para receber também as canceladas (histórico para relatório).
-      filtro.estado = { $ne: 'cancelada' };
-    }
-
-    const tarefas = await Tarefa.find(filtro)
-      // Prompt 114 — Inclui capacidade_hospedes para destaque no detalhe.
-      .populate({ path: 'propriedade_id', select: 'nome morada coordenadas capacidade_hospedes' })
-      .populate({ path: 'utilizador_id', select: 'nome' })
-      .sort({ data: 1 })
-      .lean();
-
-    // Prompt 139 — Cálculo on-the-fly de tempo_viagem_minutos para tarefas
-    // antigas que não têm o campo preenchido (criadas antes do Prompt 138).
-    // Agrupa por utilizador + dia, ordena por data, e calcula a viagem entre
-    // tarefas consecutivas usando Haversine (capped 60min, fallback 30min).
-    // Isto é best-effort: se não houver coordenadas, fica 0.
-    const { calcularTempoViagem } = require('../utils/scheduler');
-    const tarefasComViagem = tarefas.map((t) => {
-      // Já tem tempo_viagem_minutos > 0? Mantém.
-      if (t.tempo_viagem_minutos && Number(t.tempo_viagem_minutos) > 0) {
-        return t;
-      }
-      // Tarefa sem utilizador atribuído → sem viagem.
-      if (!t.utilizador_id || !t.propriedade_id) {
-        return { ...t, tempo_viagem_minutos: 0 };
-      }
-      // Procura a tarefa ANTERIOR do mesmo staff no mesmo dia.
-      const diaTarefa = new Date(t.data);
-      const diaStr = diaTarefa.toISOString().slice(0, 10);
-      const tarefaAnterior = tarefas.find((outra) => {
-        if (String(outra._id) === String(t._id)) return false;
-        if (!outra.utilizador_id || !outra.propriedade_id) return false;
-        if (String(outra.utilizador_id._id) !== String(t.utilizador_id._id)) return false;
-        const diaOutra = new Date(outra.data).toISOString().slice(0, 10);
-        return diaOutra === diaStr && new Date(outra.data).getTime() < diaTarefa.getTime();
-      });
-      // Se há tarefa anterior, calcula a viagem entre as coordenadas.
-      if (tarefaAnterior && tarefaAnterior.propriedade_id?.coordenadas && t.propriedade_id?.coordenadas) {
-        const viagem = calcularTempoViagem(
-          tarefaAnterior.propriedade_id.coordenadas,
-          t.propriedade_id.coordenadas
-        );
-        return { ...t, tempo_viagem_minutos: viagem };
-      }
-      // Sem tarefa anterior → sem viagem (primeira tarefa do dia).
-      return { ...t, tempo_viagem_minutos: 0 };
-    });
-
-    // v1.42.0 — Injeta folgas fixas semanais (dias_folga) como objetos virtuais
-    // no array de tarefas, para o calendário as mostrar dinamicamente.
-    // Só injeta se houver um intervalo de datas definido.
-    if (filtro.data && (filtro.data.$gte || filtro.data.$lt)) {
-      const dataInicio = filtro.data.$gte || new Date(Date.now() - 365 * 86400000);
-      const dataFim = filtro.data.$lt || new Date(Date.now() + 365 * 86400000);
-
-      // Busca todos os staff/gestor da empresa com dias_folga configurados.
-      const staffComFolgas = await Utilizador.find({
-        empresa_id: empresaId,
-        role: { $in: ['fisioterapeuta', 'diretor_clinico'] },
-        eliminado_em: null,
-        dias_folga: { $exists: true, $ne: [] },
-      })
-        .select('nome dias_folga')
-        .lean();
-
-      // Se o filtro utilizadorId for específico, filtra só esse staff.
-      const staffFiltrados = (filtro.utilizador_id && filtro.utilizador_id !== null)
-        ? staffComFolgas.filter((s) => String(s._id) === String(filtro.utilizador_id))
-        : staffComFolgas;
-
-      // Gera objetos virtuais de folga para cada dia do intervalo.
-      const diasFolga = [];
-      const diaAtual = new Date(dataInicio);
-
-      while (diaAtual < dataFim) {
-        const diaSemana = diaAtual.getDay(); // 0=Dom, 1=Seg, ..., 6=Sáb
-
-        for (const staff of staffFiltrados) {
-          if (Array.isArray(staff.dias_folga) && staff.dias_folga.includes(diaSemana)) {
-            diasFolga.push({
-              _id: `folga_${staff._id}_${diaAtual.toISOString().slice(0, 10)}`,
-              tipo: 'folga_fixa',
-              data: new Date(diaAtual),
-              utilizador_id: { _id: String(staff._id), nome: staff.nome },
-              estado: 'concluida', // folga fixa não é uma tarefa ativa
-              tempo_limpeza_minutos: 0,
-              propriedade_id: null,
-            });
-          }
-        }
-
-        diaAtual.setDate(diaAtual.getDate() + 1);
-      }
-
-      // ----------------------------------------------------------------
-      // v1.57.0 (Prompt 79) — Injeta ausências APROVADAS (férias/doença)
-      // como eventos virtuais no calendário, para o gestor ver quem está
-      // indisponível em cada dia. Só ausências 'aprovada' (pendentes/
-      // rejeitadas não contam — não são garantidas).
-      // ----------------------------------------------------------------
-      const filtroAusencias = {
-        empresa_id: empresaId,
-        estado: 'aprovada',
-        // Sobreposição de intervalos: a ausência cobre o período se
-        // data_inicio < fimDoPeriodo E data_fim >= inicioDoPeriodo.
-        data_inicio: { $lt: dataFim },
-        data_fim: { $gte: dataInicio },
-      };
-      // Se o filtro utilizadorId for específico, filtra só esse staff.
-      if (filtro.utilizador_id && filtro.utilizador_id !== null) {
-        filtroAusencias.utilizador_id = filtro.utilizador_id;
-      }
-
-      const ausenciasAprovadas = await Ausencia.find(filtroAusencias)
-        .populate({ path: 'utilizador_id', select: 'nome eliminado_em' })
-        .select('data_inicio data_fim tipo utilizador_id notas')
-        .lean();
-
-      // Filtra ausências cujo utilizador foi eliminado (soft delete) —
-      // não devem aparecer no calendário.
-      const ausenciasFiltradas = ausenciasAprovadas.filter(
-        (a) => a.utilizador_id && !a.utilizador_id.eliminado_em
-      );
-
-      // Converte cada ausência num evento virtual tipo 'ausencia'.
-      // FullCalendar com allDay espera que `end` seja EXCLUSIVE (o dia
-      // seguinte ao último dia de férias) para cobrir o bloco inteiro.
-      const eventosAusencias = ausenciasFiltradas.map((a) => {
-        const endExclusive = new Date(a.data_fim);
-        endExclusive.setDate(endExclusive.getDate() + 1); // +1 dia
-
-        const tituloPorTipo =
-          a.tipo === 'ferias' ? '🌴 Férias'
-          : a.tipo === 'doenca' ? '🤒 Doença'
-          : '📅 Ausência';
-
-        return {
-          _id: `ausencia_${a._id}`,
-          tipo: 'ausencia',
-          // Para compatibilidade com o frontend (que lê `data` como Date):
-          // usamos data_inicio como `data` (início do bloco).
-          data: new Date(a.data_inicio),
-          // Campos extras para o FullCalendar (eventos allDay multi-dia).
-          start: new Date(a.data_inicio),
-          end: endExclusive,
-          allDay: true,
-          title: `${tituloPorTipo}: ${a.utilizador_id?.nome ?? 'Staff'}`,
-          utilizador_id: a.utilizador_id
-            ? { _id: String(a.utilizador_id._id), nome: a.utilizador_id.nome }
-            : null,
-          estado: 'concluida', // ausência não é uma tarefa ativa
-          tempo_limpeza_minutos: 0,
-          propriedade_id: null,
-          notas: a.notas || '',
-        };
-      });
-
-      // Junta tarefas + folgas fixas + ausências e ordena por data.
-      // Prompt 139 — usa tarefasComViagem (com tempo_viagem_minutos calculado).
-      const resultado = [...tarefasComViagem, ...diasFolga, ...eventosAusencias].sort(
-        (a, b) => new Date(a.data).getTime() - new Date(b.data).getTime()
-      );
-
-      return res.status(200).json({ tarefas: resultado });
-    }
-
-    // Prompt 139 — sem filtro de datas, devolve tarefasComViagem directamente.
-    return res.status(200).json({ tarefas: tarefasComViagem });
-  } catch (err) {
-    console.error('❌ getDadosCalendario:', err.message);
-    return res.status(500).json({ erro: 'Erro interno do servidor.' });
-  }
-};
-
-/* ------------------------------------------------------------------ */
-/* Equipa (Utilizadores)                                               */
-/* ------------------------------------------------------------------ */
-
-/**
- * PATCH /api/admin/propriedades/:id/estado
+ * PATCH /api/gestor/propriedades/:id/estado
  * Alterna o campo `ativo` da propriedade (true ↔ false).
- * Propriedades inativas são ignoradas pelo webhook do Smoobu.
  *
- * Prompt 97 — "Desligar a Histeria Automática": quando uma propriedade é
- * DESATIVADA (ativo=false), as tarefas FUTURAS (a partir de hoje) dessa
- * propriedade que ainda não foram executadas (estado ∉
- * ['concluida','cancelada']) deixam de ser APAGADAS — passam a
- * utilizador_id = null + estado = 'por_atribuir'. O recálculo/atribuição
- * fica a cargo do Gestor (manual, via "Auto-Atribuir Pendentes") ou do
- * Fail-Safe noturno. (Anteriormente, v1.35.0/Prompt 73, eram apagadas.)
+ * F8 — Limpeza: removida a lógica de desatribuição de Tarefas futuras
+ * (Tarefa eliminado em F8). A propriedade é simplesmente ativada/desativada.
  *
- * Resposta 200: { propriedade: { ... }, ativo: boolean, tarefasDesatribuidas: number }
+ * Resposta 200: { propriedade: { ... }, ativo: boolean }
  */
 exports.alternarEstadoPropriedade = async (req, res) => {
   try {
@@ -741,41 +345,9 @@ exports.alternarEstadoPropriedade = async (req, res) => {
       { new: true }
     ).lean();
 
-    // ----------------------------------------------------------------
-    // Prompt 97 — Ao DESATIVAR propriedade, desatribui (não apaga) as
-    // tarefas FUTURAS (data >= hoje 00:00 UTC) que ainda não foram
-    // concluídas nem canceladas: passam a utilizador_id = null +
-    // estado = 'por_atribuir'. O recálculo fica para o Gestor/Fail-Safe.
-    // ----------------------------------------------------------------
-    let tarefasDesatribuidas = 0;
-    if (!novoEstado) {
-      const agora = new Date();
-      const hojeInicio = new Date(
-        Date.UTC(agora.getUTCFullYear(), agora.getUTCMonth(), agora.getUTCDate())
-      );
-
-      const resultado = await Tarefa.updateMany(
-        {
-          propriedade_id: id,
-          empresa_id: empresaId,
-          data: { $gte: hojeInicio },
-          estado: { $nin: ['concluida', 'cancelada'] },
-        },
-        { $set: { utilizador_id: null, estado: 'por_atribuir' } }
-      );
-
-      tarefasDesatribuidas = resultado?.modifiedCount || 0;
-      if (tarefasDesatribuidas > 0) {
-        console.log(
-          `📤 Propriedade "${propriedade.nome || id}" desativada — ${tarefasDesatribuidas} tarefa(s) futura(s) desatribuída(s) (por atribuir).`
-        );
-      }
-    }
-
     return res.status(200).json({
       propriedade: atualizada,
       ativo: novoEstado,
-      tarefasDesatribuidas,
     });
   } catch (err) {
     console.error('❌ alternarEstadoPropriedade:', err.message);
@@ -787,12 +359,13 @@ exports.alternarEstadoPropriedade = async (req, res) => {
  * PUT /api/gestor/propriedades/:id
  * Atualiza os dados de uma propriedade/sala (nome, morada,
  * tempo_limpeza_minutos). Se a morada mudar, re-faz geocoding para
- * atualizar as coordenadas (usadas no load balancer Haversine).
+ * atualizar as coordenadas.
  *
  * F0: smoobu_id removido (integração Smoobu eliminada).
+ * F8: modelo_checklist_id removido (ModeloChecklist eliminado).
  *
  * Body (todos opcionais, mas pelo menos um tem de vir):
- *   { nome?, morada?, tempo_limpeza_minutos? }
+ *   { nome?, morada?, tempo_limpeza_minutos?, checklist?, funcionario_preferencial_id? }
  *
  * Regras:
  *   - Valida pertença à empresa (404 se não pertencer).
@@ -821,7 +394,7 @@ exports.atualizarPropriedade = async (req, res) => {
       });
     }
 
-    const { nome, morada, tempo_limpeza_minutos, funcionario_preferencial_id, modelo_checklist_id } = req.body || {};
+    const { nome, morada, tempo_limpeza_minutos, funcionario_preferencial_id } = req.body || {};
 
     // Tem de haver pelo menos um campo para atualizar.
     if (
@@ -829,11 +402,10 @@ exports.atualizarPropriedade = async (req, res) => {
       morada === undefined &&
       tempo_limpeza_minutos === undefined &&
       funcionario_preferencial_id === undefined &&
-      modelo_checklist_id === undefined &&
       req.body?.checklist === undefined
     ) {
       return res.status(400).json({
-        erro: 'Nenhum campo para atualizar. Envie nome, morada, tempo_limpeza_minutos, checklist, funcionario_preferencial_id ou modelo_checklist_id.',
+        erro: 'Nenhum campo para atualizar. Envie nome, morada, tempo_limpeza_minutos, checklist ou funcionario_preferencial_id.',
       });
     }
 
@@ -841,7 +413,6 @@ exports.atualizarPropriedade = async (req, res) => {
     if (nome !== undefined && !String(nome).trim()) {
       return res.status(400).json({ erro: 'nome não pode ser vazio.' });
     }
-    // F0 — Validação de smoobu_id removida.
     if (morada !== undefined && !String(morada).trim()) {
       return res.status(400).json({ erro: 'morada não pode ser vazia.' });
     }
@@ -854,8 +425,6 @@ exports.atualizarPropriedade = async (req, res) => {
       }
     }
 
-    // F0 — Validação de unicidade do smoobu_id removida.
-
     // Nome.
     if (nome !== undefined) {
       propriedade.nome = String(nome).trim();
@@ -867,8 +436,6 @@ exports.atualizarPropriedade = async (req, res) => {
     }
 
     // Morada — se mudou, re-faz geocoding (best-effort).
-    // Prompt 114 — Se geocoding falhar/devolver vazio, mantém coordenadas
-    // antigas e devolve flag `geocoding_falhou` para o frontend avisar.
     let geocodingFalhou = false;
     if (morada !== undefined) {
       const novaMorada = String(morada).trim();
@@ -892,14 +459,14 @@ exports.atualizarPropriedade = async (req, res) => {
       }
     }
 
-    // v1.34.0: atualiza checklist (array de strings).
+    // Checklist (array de strings — lista de itens a verificar).
     if (req.body?.checklist !== undefined) {
       propriedade.checklist = Array.isArray(req.body.checklist)
         ? req.body.checklist.filter((s) => typeof s === 'string' && s.trim())
         : [];
     }
 
-    // Prompt 95 (Fase 1.5) — Funcionário preferencial (Algoritmo VIP).
+    // Funcionário preferencial (Algoritmo VIP).
     // Aceita null/empty para remover; caso contrário valida que é um staff
     // ativo da mesma empresa.
     if (funcionario_preferencial_id !== undefined) {
@@ -924,31 +491,6 @@ exports.atualizarPropriedade = async (req, res) => {
         }
       }
       propriedade.funcionario_preferencial_id = valor;
-    }
-
-    // Prompt 133/134 — Modelo de Checklist associado à propriedade.
-    // Aceita null/empty para remover; caso contrário valida que é um
-    // ModeloChecklist da mesma empresa.
-    if (modelo_checklist_id !== undefined) {
-      const valor = modelo_checklist_id === null || modelo_checklist_id === ''
-        ? null
-        : String(modelo_checklist_id).trim();
-      if (valor !== null) {
-        if (!mongoose.isValidObjectId(valor)) {
-          return res.status(400).json({ erro: 'modelo_checklist_id inválido.' });
-        }
-        const ModeloChecklist = require('../models/ModeloChecklist');
-        const modelo = await ModeloChecklist.findOne({
-          _id: valor,
-          empresa_id: empresaId,
-        }).lean();
-        if (!modelo) {
-          return res.status(400).json({
-            erro: 'Modelo de checklist não encontrado (não pertence a esta empresa).',
-          });
-        }
-      }
-      propriedade.modelo_checklist_id = valor;
     }
 
     await propriedade.save();
@@ -988,8 +530,12 @@ exports.atualizarPropriedade = async (req, res) => {
   }
 };
 
+/* ------------------------------------------------------------------ */
+/* Equipa (Utilizadores)                                               */
+/* ------------------------------------------------------------------ */
+
 /**
- * GET /api/admin/equipa
+ * GET /api/gestor/equipa
  * Lista todos os utilizadores da empresa (qualquer role).
  * O `empresa_id` vem do JWT (via obterEmpresaId, que lê `req.user.empresa_id`).
  *
@@ -1037,7 +583,7 @@ exports.getEquipa = async (req, res) => {
 };
 
 /**
- * POST /api/admin/equipa
+ * POST /api/gestor/equipa
  * Cria um novo membro de equipa (Utilizador) para a empresa.
  *
  * Body: { nome, email, password, role }
@@ -1174,7 +720,7 @@ exports.criarMembroEquipa = async (req, res) => {
 };
 
 /**
- * PUT /api/admin/equipa/:id
+ * PUT /api/gestor/equipa/:id
  * Atualiza Nome, Email e/ou Role de um utilizador, e opcionalmente a password.
  *
  * Body (todos opcionais, mas pelo menos um deve vir):
@@ -1345,7 +891,7 @@ exports.atualizarMembroEquipa = async (req, res) => {
 };
 
 /**
- * PATCH /api/admin/equipa/:id/estado
+ * PATCH /api/gestor/equipa/:id/estado
  * Alterna o estado `ativo` do utilizador (ativa ↔ desativa).
  *
  * Um utilizador desativado NÃO consegue fazer login (ver authController.login).
@@ -1395,7 +941,7 @@ exports.alternarEstadoMembro = async (req, res) => {
 };
 
 /**
- * DELETE /api/admin/equipa/:id
+ * DELETE /api/gestor/equipa/:id
  * Remove permanentemente o utilizador da base de dados.
  *
  * Regras de segurança:
@@ -1438,8 +984,9 @@ exports.eliminarMembroEquipa = async (req, res) => {
 
     const nomeEliminado = utilizador.nome;
     // Soft delete: marca eliminado_em em vez de remover fisicamente.
-    // Isto protege as Tarefas antigas de ficarem com utilizador_id órfão
-    // (o histórico de tarefas continua a referenciar o utilizador).
+    // Isto protege o histórico de Consultas antigas de ficarem com
+    // fisioterapeuta_id órfão (o histórico de consultas continua a
+    // referenciar o utilizador).
     utilizador.eliminado_em = new Date();
     utilizador.ativo = false; // garante que não consegue fazer login
     await utilizador.save();
@@ -1466,346 +1013,11 @@ exports.eliminarMembroEquipa = async (req, res) => {
 };
 
 /* ------------------------------------------------------------------ */
-/* Falta Súbita — Reatribuição de Emergência                          */
-/* ------------------------------------------------------------------ */
-
-/**
- * POST /api/admin/equipa/:id/falta-subita
- *
- * Regista uma ausência de hoje para o utilizador e desatribui as suas
- * tarefas de hoje (passam a 'por_atribuir').
- *
- * Lógica (Prompt 97 — "Desligar a Histeria Automática"):
- *   1. Valida utilizador (pertence à empresa, não é admin, não é si próprio).
- *   2. Regista Ausencia para hoje (ignora duplicado).
- *   3. Desatribui as tarefas de hoje do utilizador (utilizador_id = null +
- *      estado = 'por_atribuir') — NÃO chama o load balancer. O recálculo
- *      fica a cargo do Gestor (manual) ou do Fail-Safe noturno.
- *
- * Resposta 200: { desatribuidas, total, detalhes: [...] }
- */
-exports.reportarFaltaSubita = async (req, res) => {
-  try {
-    const { ok, empresaId } = obterEmpresaId(req, res);
-    if (!ok) return;
-
-    const { id } = req.params;
-    if (!mongoose.isValidObjectId(id)) {
-      return res.status(400).json({ erro: 'ID de utilizador inválido.' });
-    }
-
-    // Valida utilizador.
-    const utilizador = await Utilizador.findOne({
-      _id: id,
-      empresa_id: empresaId,
-      eliminado_em: null,
-    });
-    if (!utilizador) {
-      return res.status(404).json({
-        erro: 'Utilizador não encontrado (ou não pertence a esta empresa).',
-      });
-    }
-    if (utilizador.role === 'admin') {
-      return res.status(403).json({
-        erro: 'Não é possível reportar falta de um administrador.',
-      });
-    }
-
-    // 1) Calcula o intervalo de hoje (UTC meia-noite).
-    const agora = new Date();
-    const hojeInicio = new Date(
-      Date.UTC(agora.getUTCFullYear(), agora.getUTCMonth(), agora.getUTCDate())
-    );
-    const amanhaInicio = new Date(hojeInicio.getTime() + 24 * 60 * 60 * 1000);
-
-    // 2) Registra Ausencia para hoje (ignora erro de duplicado).
-    // v1.24.0: falta súbita é uma ação do admin → estado 'aprovada'.
-    try {
-      await Ausencia.create({
-        utilizador_id: id,
-        empresa_id: empresaId,
-        data_inicio: hojeInicio,
-        data_fim: hojeInicio,
-        tipo: 'outro',
-        estado: 'aprovada',
-        notas: 'Falta súbita reportada pelo admin',
-      });
-    } catch (err) {
-      if (err.code !== 11000) {
-        console.error('⚠️  Erro ao criar ausência de falta súbita:', err.message);
-      }
-      // Se duplicado, não é problema — o utilizador já tem ausência hoje.
-    }
-
-    // 3) Procura tarefas de hoje do utilizador (atribuida ou por_atribuir).
-    const tarefas = await Tarefa.find({
-      utilizador_id: id,
-      data: { $gte: hojeInicio, $lt: amanhaInicio },
-      estado: { $in: ['atribuida', 'por_atribuir'] },
-    }).populate({ path: 'propriedade_id', select: 'nome' });
-
-    if (tarefas.length === 0) {
-      return res.status(200).json({
-        mensagem: 'Sem tarefas para desatribuir hoje.',
-        desatribuidas: 0,
-        total: 0,
-        detalhes: [],
-      });
-    }
-
-    // 4) Desatribui cada tarefa (SEM load balancer — Prompt 97).
-    let desatribuidas = 0;
-    const detalhes = [];
-
-    for (const tarefa of tarefas) {
-      tarefa.utilizador_id = null;
-      tarefa.estado = 'por_atribuir';
-      await tarefa.save();
-      desatribuidas++;
-      detalhes.push({
-        tarefa_id: String(tarefa._id),
-        propriedade: tarefa.propriedade_id?.nome ?? '?',
-        novo_utilizador_id: null,
-        reatribuida: false,
-      });
-    }
-
-    // Auditoria.
-    registarAuditoria({
-      utilizador_id: req.user.id,
-      utilizador_nome: req.user.nome || 'Admin',
-      empresa_id: empresaId,
-      acao: 'falta_subita',
-      recurso: 'utilizador',
-      recurso_id: id,
-      descricao: `Falta súbita reportada para "${utilizador.nome}": ${desatribuidas} tarefa(s) desatribuída(s)`,
-      detalhes: { desatribuidas, total: tarefas.length },
-    });
-
-    return res.status(200).json({
-      mensagem: `Falta súbita processada: ${desatribuidas} tarefa(s) desatribuída(s) (por atribuir).`,
-      desatribuidas,
-      total: tarefas.length,
-      detalhes,
-    });
-  } catch (err) {
-    console.error('❌ reportarFaltaSubita:', err.message);
-    return res.status(500).json({ erro: 'Erro interno do servidor.' });
-  }
-};
-
-/* ------------------------------------------------------------------ */
-/* Baixa Prolongada / Férias — Redistribuição de tarefas futuras      */
-/* ------------------------------------------------------------------ */
-
-/**
- * POST /api/admin/equipa/:id/baixa
- *
- * Regista uma ausência prolongada (baixa/férias) e desatribui TODAS as
- * tarefas futuras do utilizador nesse período (passam a 'por_atribuir').
- *
- * Body: { data_inicio, data_fim, tipo?, notas? }
- *
- * Lógica (Prompt 97 — "Desligar a Histeria Automática"):
- *   1. Valida utilizador (empresa, não admin, não eliminado).
- *   2. Cria Ausencia (ignora duplicado).
- *   3. Desatribui as tarefas atribuídas no período [data_inicio, data_fim]
- *      (utilizador_id = null + estado = 'por_atribuir') — NÃO chama o load
- *      balancer. O recálculo fica a cargo do Gestor (manual) ou do
- *      Fail-Safe noturno.
- *
- * Resposta 200: { desatribuidas, total, detalhes: [...] }
- */
-exports.registarBaixaProlongada = async (req, res) => {
-  try {
-    const { ok, empresaId } = obterEmpresaId(req, res);
-    if (!ok) return;
-
-    const { id } = req.params;
-    if (!mongoose.isValidObjectId(id)) {
-      return res.status(400).json({ erro: 'ID de utilizador inválido.' });
-    }
-
-    const { data_inicio, data_fim, tipo, notas } = req.body || {};
-    if (!data_inicio || !data_fim) {
-      return res.status(400).json({
-        erro: 'Campos obrigatórios em falta: data_inicio e data_fim.',
-      });
-    }
-
-    // Valida utilizador.
-    const utilizador = await Utilizador.findOne({
-      _id: id,
-      empresa_id: empresaId,
-      eliminado_em: null,
-    });
-    if (!utilizador) {
-      return res.status(404).json({
-        erro: 'Utilizador não encontrado (ou não pertence a esta empresa).',
-      });
-    }
-    if (utilizador.role === 'admin') {
-      return res.status(403).json({
-        erro: 'Não é possível registar baixa de um administrador.',
-      });
-    }
-
-    // Normaliza datas para meia-noite UTC.
-    const dInicio = new Date(data_inicio);
-    const inicio = new Date(
-      Date.UTC(dInicio.getUTCFullYear(), dInicio.getUTCMonth(), dInicio.getUTCDate())
-    );
-    const dFim = new Date(data_fim);
-    const fim = new Date(
-      Date.UTC(dFim.getUTCFullYear(), dFim.getUTCMonth(), dFim.getUTCDate())
-    );
-    // fim do dia = meia-noite do dia seguinte (para query <).
-    const fimDia = new Date(fim.getTime() + 24 * 60 * 60 * 1000);
-
-    if (fim < inicio) {
-      return res.status(400).json({
-        erro: 'data_fim não pode ser anterior a data_inicio.',
-      });
-    }
-
-    // 1) Cria a Ausencia (ignora duplicado).
-    // v1.24.0: baixa prolongada é uma ação do admin → estado 'aprovada'.
-    try {
-      await Ausencia.create({
-        utilizador_id: id,
-        empresa_id: empresaId,
-        data_inicio: inicio,
-        data_fim: fim,
-        tipo: tipo || 'ferias',
-        estado: 'aprovada',
-        notas: notas ? String(notas).trim() : '',
-      });
-    } catch (err) {
-      if (err.code !== 11000) {
-        console.error('⚠️  Erro ao criar ausência de baixa:', err.message);
-      }
-      // Se duplicado, não é problema.
-    }
-
-    // 2) Procura tarefas atribuídas no período.
-    const tarefas = await Tarefa.find({
-      utilizador_id: id,
-      data: { $gte: inicio, $lt: fimDia },
-      estado: 'atribuida',
-    }).populate({ path: 'propriedade_id', select: 'nome' });
-
-    if (tarefas.length === 0) {
-      return res.status(200).json({
-        mensagem: 'Sem tarefas para desatribuir no período.',
-        desatribuidas: 0,
-        total: 0,
-        detalhes: [],
-      });
-    }
-
-    // 3) Desatribui cada tarefa (SEM load balancer — Prompt 97).
-    let desatribuidas = 0;
-    const detalhes = [];
-
-    for (const tarefa of tarefas) {
-      tarefa.utilizador_id = null;
-      tarefa.estado = 'por_atribuir';
-      await tarefa.save();
-      desatribuidas++;
-      detalhes.push({
-        tarefa_id: String(tarefa._id),
-        data: tarefa.data,
-        propriedade: tarefa.propriedade_id?.nome ?? '?',
-        novo_utilizador_id: null,
-        reatribuida: false,
-      });
-    }
-
-    // Auditoria.
-    registarAuditoria({
-      utilizador_id: req.user.id,
-      utilizador_nome: req.user.nome || 'Admin',
-      empresa_id: empresaId,
-      acao: 'baixa_prolongada',
-      recurso: 'utilizador',
-      recurso_id: id,
-      descricao: `Baixa/férias registadas para "${utilizador.nome}": ${desatribuidas} tarefa(s) desatribuída(s)`,
-      detalhes: { data_inicio: inicio, data_fim: fim, desatribuidas, total: tarefas.length },
-    });
-
-    return res.status(200).json({
-      mensagem: `Baixa processada: ${desatribuidas} tarefa(s) desatribuída(s) (por atribuir).`,
-      desatribuidas,
-      total: tarefas.length,
-      detalhes,
-    });
-  } catch (err) {
-    console.error('❌ registarBaixaProlongada:', err.message);
-    return res.status(500).json({ erro: 'Erro interno do servidor.' });
-  }
-};
-
-/* ------------------------------------------------------------------ */
-/* Exportação CSV                                                      */
-/* ------------------------------------------------------------------ */
-
-/**
- * GET /api/admin/tarefas/export?inicio=YYYY-MM-DD&fim=YYYY-MM-DD
- * Exporta tarefas em formato CSV (para Excel/Sheets).
- *
- * Resposta 200: text/csv (download direto)
- */
-exports.exportarTarefasCSV = async (req, res) => {
-  try {
-    const { ok, empresaId } = obterEmpresaId(req, res);
-    if (!ok) return;
-
-    const { inicio, fim } = req.query;
-    const filtro = { empresa_id: empresaId, estado: { $ne: 'cancelada' } };
-    if (inicio || fim) {
-      const dataFiltro = {};
-      if (inicio) {
-        const d = new Date(inicio);
-        if (!isNaN(d.getTime())) dataFiltro.$gte = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
-      }
-      if (fim) {
-        const d = new Date(fim);
-        if (!isNaN(d.getTime())) dataFiltro.$lt = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) + 86400000);
-      }
-      if (Object.keys(dataFiltro).length > 0) filtro.data = dataFiltro;
-    }
-
-    const tarefas = await Tarefa.find(filtro)
-      .populate({ path: 'propriedade_id', select: 'nome' })
-      .populate({ path: 'utilizador_id', select: 'nome' })
-      .sort({ data: 1 })
-      .lean();
-
-    // Cabeçalho CSV.
-    const header = 'Data,Propriedade,Funcionario,Tipo,Estado,Tempo Limpeza (min),Observacoes\n';
-    const linhas = tarefas.map((t) => {
-      const data = new Date(t.data).toLocaleDateString('pt-PT');
-      const prop = (t.propriedade_id?.nome || '').replace(/,/g, ';');
-      const func = (t.utilizador_id?.nome || 'Por atribuir').replace(/,/g, ';');
-      const obs = (t.observacoes || '').replace(/[\n\r,]/g, ' ');
-      return `${data},${prop},${func},${t.tipo},${t.estado},${t.tempo_limpeza_minutos},${obs}`;
-    }).join('\n');
-
-    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
-    res.setHeader('Content-Disposition', 'attachment; filename="tarefas.csv"');
-    return res.status(200).send(header + linhas);
-  } catch (err) {
-    console.error('❌ exportarTarefasCSV:', err.message);
-    return res.status(500).json({ erro: 'Erro interno do servidor.' });
-  }
-};
-
-/* ------------------------------------------------------------------ */
 /* Auditoria                                                           */
 /* ------------------------------------------------------------------ */
 
 /**
- * GET /api/admin/auditoria
+ * GET /api/gestor/auditoria
  * Lista os registos de auditoria da empresa (ordenados por data desc).
  *
  * Query params: ?limit=50 (default 50, máx 200)
@@ -1854,9 +1066,6 @@ exports.setupClienteZero = async (req, res) => {
   try {
     const NOME_EMPRESA = 'Clínica FisioCell Teste';
     const NOME_PROPRIEDADE = 'Sala Teste';
-    // F0 — SMOOBU_ID_TESTE removido.
-    // Password comum de teste do Cliente Zero (em produção, cada utilizador
-    // deve alterar a sua password após o primeiro login).
     const PASSWORD_TESTE = 'fisiocell123';
 
     // Utilizadores a garantir (admin + gestor + staff).
@@ -1936,7 +1145,6 @@ exports.setupClienteZero = async (req, res) => {
     }
 
     // 3) Propriedade/Sala — não duplicar (procura por nome + empresa).
-    // F0 — procura por nome em vez de smoobu_id (campo removido).
     let propriedade = await Propriedade.findOne({ nome: NOME_PROPRIEDADE, empresa_id: empresa._id });
     let propriedadeCriada = false;
     if (!propriedade) {
@@ -1984,65 +1192,4 @@ exports.setupClienteZero = async (req, res) => {
 
     return res.status(500).json({ erro: 'Erro interno do servidor.' });
   }
-};
-
-/* ------------------------------------------------------------------ */
-/* Webhooks — Logs do Smoobu                                          */
-/* ------------------------------------------------------------------ */
-
-/**
- * GET /api/admin/webhooks
- * Lista os WebhookLogs recebidos do Smoobu (ordenados por data desc).
- *
- * Útil para o Admin confirmar que os webhooks estão a chegar e ver o estado
- * de processamento (recebido / processado / erro) + o payload bruto + a
- * mensagem de erro (se houver).
- *
- * Query params:
- *   - status (opcional): filtra por estado ('recebido' | 'processado' | 'erro')
- *   - limit (opcional, default 50, máx 200)
- *
- * Resposta 200: { webhooks: [...], total }
- *
- * NOTA: o WebhookLog é global (não tem empresa_id) porque o webhook é um
- * endpoint público do Smoobu. Em ambientes multi-tenant futuros, será
- * adicionada filtragem por empresa.
- */
-exports.getWebhooks = async (req, res) => {
-  try {
-    // Não usamos obterEmpresaId aqui porque o WebhookLog é global — não tem
-    // empresa_id. A auth continua a ser exigida (rota protegida) para que só
-    // admins autenticados vejam os logs.
-    const { status } = req.query;
-    const limit = Math.min(Number(req.query?.limit) || 50, 200);
-
-    const filtro = {};
-    if (status && ['recebido', 'processado', 'erro'].includes(status)) {
-      filtro.status = status;
-    }
-
-    const [webhooks, total] = await Promise.all([
-      WebhookLog.find(filtro)
-        .sort({ createdAt: -1 })
-        .limit(limit)
-        .lean(),
-      WebhookLog.countDocuments(filtro),
-    ]);
-
-    return res.status(200).json({ webhooks, total });
-  } catch (err) {
-    console.error('❌ getWebhooks:', err.message);
-    return res.status(500).json({ erro: 'Erro interno do servidor.' });
-  }
-};
-
-/**
- * POST /api/gestor/webhooks/:id/reprocessar
- * F0 — Endpoint DESATIVADO. A integração Smoobu foi removida na F0.
- * Mantido como stub 410 Gone para não quebrar clientes antigos.
- */
-exports.reprocessarWebhook = async (req, res) => {
-  return res.status(410).json({
-    erro: 'Reprocessamento de webhooks foi desativado (integração Smoobu removida na F0).',
-  });
 };

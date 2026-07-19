@@ -24,8 +24,7 @@ const bcrypt = require('bcryptjs');
 const Empresa = require('../models/Empresa');
 const Utilizador = require('../models/Utilizador');
 const Propriedade = require('../models/Propriedade');
-const Tarefa = require('../models/Tarefa');
-const WebhookLog = require('../models/WebhookLog');
+const Consulta = require('../models/Consulta');
 const { JWT_SECRET } = require('../middleware/auth');
 const { registarAuditoria } = require('../utils/auditoria');
 
@@ -38,12 +37,13 @@ const TOKEN_EXPIRACAO = process.env.JWT_EXPIRACAO || '7d';
 /**
  * Lista todas as empresas (cross-tenant) com gestor principal + estatísticas.
  *
- * Prompt 112 — Adicionadas contagens de Propriedades e Tarefas.
+ * Prompt 112 — Adicionadas contagens de Propriedades e Consultas.
+ * F8 — Contagem de Tarefas substituída por Consultas (Tarefa eliminado).
  *
  * Resposta 200: { empresas: [{ _id, nome, nif, plano_ativo, createdAt,
  *   gestor: { id, nome, email } | null,
  *   num_propriedades: number,
- *   num_tarefas: number }] }
+ *   num_consultas: number }] }
  */
 exports.listarEmpresas = async (req, res) => {
   try {
@@ -52,7 +52,7 @@ exports.listarEmpresas = async (req, res) => {
     // Para cada empresa, procura o gestor + contagens em paralelo.
     const empresasComDados = await Promise.all(
       empresas.map(async (emp) => {
-        const [gestor, numPropriedades, numTarefas] = await Promise.all([
+        const [gestor, numPropriedades, numConsultas] = await Promise.all([
           Utilizador.findOne({
             empresa_id: emp._id,
             role: 'diretor_clinico',
@@ -61,7 +61,7 @@ exports.listarEmpresas = async (req, res) => {
             .select('nome email')
             .lean(),
           Propriedade.countDocuments({ empresa_id: emp._id }),
-          Tarefa.countDocuments({ empresa_id: emp._id }),
+          Consulta.countDocuments({ empresa_id: emp._id }),
         ]);
 
         return {
@@ -70,7 +70,7 @@ exports.listarEmpresas = async (req, res) => {
             ? { id: String(gestor._id), nome: gestor.nome, email: gestor.email }
             : null,
           num_propriedades: numPropriedades,
-          num_tarefas: numTarefas,
+          num_consultas: numConsultas,
         };
       })
     );

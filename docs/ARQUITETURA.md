@@ -8,7 +8,8 @@
 > (`Consulta` + validação de conflitos + cédula profissional + nota clínica SOAP
 > imutável), **F5** (`ModeloProtocolo` + snapshot imutável na Consulta),
 > **F6** (calendário FullCalendar com Consultas) e **F7** (cron jobs de Consultas
-> + `ConsultaArquivo`) e define o roadmap de migração F0–F9. Os esquemas Mongoose
+> + `ConsultaArquivo`) e **F8** (limpeza de modelos legacy — `Tarefa`/`TarefaArquivo`/`ModeloChecklist` removidos;
+> `Propriedade` mantida como alias de Sala) e define o roadmap de migração F0–F9. Os esquemas Mongoose
 > abaixo são **propostas** — a implementação decorre fase a fase.
 
 ---
@@ -47,7 +48,7 @@ e endpoints novos.
 | JWT em cookie httpOnly    | O token JWT é guardado num cookie `fisiocell_token` (httpOnly, SameSite=Strict, Secure). O middleware Edge lê o cookie; o backend verifica a assinatura. |
 | Cron jobs (node-cron)     | Jobs agendados com `timezone: 'Europe/Lisbon'`. Iniciados no arranque do `server.js` dentro de `if (require.main === module)` (não correm nos testes). |
 | Snapshots imutáveis       | Dados contextuais no momento da criação (ex.: checklist da propriedade, detalhes da reserva) são copiados para o documento — não há `populate` retroativo que possa mudar o passado. |
-| Modelo de arquivo         | Entidades concluídas/arquivadas são movidas para uma coleção `*Arquivo` (ex.: `TarefaArquivo` → `ConsultaArquivo`) com snapshot completo. Mantém a coleção principal leve. |
+| Modelo de arquivo         | Entidades concluídas/arquivadas são movidas para uma coleção `*Arquivo` com snapshot completo. Mantém a coleção principal leve. **F8:** o legacy `TarefaArquivo` foi removido; só o `ConsultaArquivo` (F7) está ativo. |
 
 ---
 
@@ -100,16 +101,24 @@ const isRececionista   = requireRole('admin', 'diretor_clinico', 'rececionista')
 | Modelo/Controller (Alojamento Local) | → | Modelo/Controller (Fisioterapia) | Fase |
 |---------------------------------------|---|----------------------------------|------|
 | `Empresa`                             | → | `Empresa` (Clínica) — adiciona `morada`, `telefone`, `email` | F0 ✅ |
-| `Propriedade`                         | → | `Sala`                           | F3 |
+| `Propriedade`                         | → | **mantida como alias de Sala** (a `Consulta.sala_id` referencia `Propriedade`) — migração para um modelo `Sala` dedicado adiada | F8 ✅ (alias mantido) |
 | `Utilizador` (admin/manager/staff)    | → | `Utilizador` (admin/diretor_clinico/fisioterapeuta/rececionista) | F1 ✅ |
-| `Tarefa`                              | → | `Consulta`                       | F4 ✅ |
-| `ModeloChecklist`                     | → | `ModeloProtocolo`                | F5 ✅ |
-| `TarefaArquivo`                       | → | `ConsultaArquivo`                | F7 ✅ |
+| `Tarefa`                              | → | ❌ **removido** (substituído por `Consulta` em F4 — o `Tarefa` foi extinto em F8) | F8 ✅ |
+| `ModeloChecklist`                     | → | ❌ **removido** (substituído por `ModeloProtocolo` em F5 — o `ModeloChecklist` foi extinto em F8) | F8 ✅ |
+| `TarefaArquivo`                       | → | ❌ **removido** (substituído por `ConsultaArquivo` em F7 — o `TarefaArquivo` foi extinto em F8) | F8 ✅ |
 | `smoobuController.js`                 | → | ❌ **removido**                   | F0 ✅ |
 | `webhookController.js`                | → | ❌ **removido**                   | F0 ✅ |
 | `routes/webhookRoutes.js`             | → | ❌ **removido**                   | F0 ✅ |
+| `utils/loadBalancer.js`               | → | ❌ **removido** (F8 — substituído pelo motor de disponibilidade F3 + validação de conflitos F4) | F8 ✅ |
+| `utils/scheduler.js`                  | → | ❌ **removido** (F8 — scheduler sequencial legacy) | F8 ✅ |
+| `tarefaController.js` + `checklistController.js` | → | ❌ **removidos** (F8) | F8 ✅ |
+| Cron jobs legacy (`dailyBriefing`/`agendaAmanha`/`caoGuarda`/`arquivista`) | → | ❌ **removidos** (F8 — substituídos pelos 5 jobs F7 sobre `Consulta`) | F8 ✅ |
+| `scripts/seedChecklists.js`           | → | ❌ **removido** (F8)              | F8 ✅ |
 | — (novo)                              | → | `Paciente`                       | F2 ✅ |
 | — (novo)                              | → | `HorarioFisioterapeuta`          | F3 ✅ |
+| — (novo)                              | → | `Consulta` (substitui `Tarefa`)  | F4 ✅ |
+| — (novo)                              | → | `ModeloProtocolo` (substitui `ModeloChecklist`) | F5 ✅ |
+| — (novo)                              | → | `ConsultaArquivo` (substitui `TarefaArquivo`) | F7 ✅ |
 | — (novo)                              | → | `Documento`                      | F9 |
 
 ---
@@ -297,7 +306,9 @@ modeloProtocoloSchema.index({ empresa_id: 1, ativo: 1, area: 1 });
 
 > **F5 — Implementação real:** o `ModeloProtocolo` evolui o `ModeloChecklist` (Prompt 133) com dois campos novos: `area` (área clínica — enum de 6 valores, default `'musculoesqueletica'`, indexado individualmente e no composto) e `ativo` (soft toggle — permite desativar um protocolo sem apagar, preservando os snapshots já guardados em `Consulta.nota_clinica.protocolo_aplicado`). O `nome` é indexado individualmente para pesquisa. Cada secção tem `nome` (obrigatório) + `items` (array de strings não vazias). O índice composto `{ empresa_id, ativo, area }` otimiza a query mais frequente: listar protocolos ativos por área para o select no formulário de marcação de consulta. O controller `protocoloController.js` exporta o helper `gerarSnapshotProtocolo(protocoloId, empresaId)` (devolve array de `{ nome, items: [{ texto, concluido: false }] }` ou `null` se não existir/não pertencer à empresa) — invocado por `consultaController.criarConsulta` quando o body traz `protocolo_id`, guardando o snapshot imutável em `nota_clinica.protocolo_aplicado`. O `PATCH /:id/nota-clinica` aceita `protocolo_aplicado` para marcar items `concluido` durante a sessão. O `DELETE` é hard delete (não há soft delete — para "desativar" sem perder histórico usa-se `PUT` com `ativo: false`). Permissões: middleware custom `podeVer` (4 roles) para GET/listar/detalhe (fisio precisa de ver para aplicar; rececionista para selecionar ao marcar); `isDiretorClinico` para POST/PUT/DELETE.
 
-### 5.6 `Sala` — F3 (substitui `Propriedade`)
+### 5.6 `Sala` — F3 (proposta — `Propriedade` mantida como alias em F8)
+
+> **F8 — Decisão:** a migração `Propriedade` → `Sala` (modelo dedicado) foi **adiada**. O modelo `Propriedade` continua em produção como **alias de Sala** (a `Consulta.sala_id` referencia `Propriedade` desde F4). O schema abaixo é a **proposta original v0.1** para um modelo `Sala` dedicado — caso venha a ser implementado, a migração implicará: (1) criar o novo modelo `Sala` com os campos propostos; (2) migrar os documentos existentes da coleção `propriedades`; (3) atualizar a referência `Consulta.sala_id` de `ref: 'Propriedade'` para `ref: 'Sala'`; (4) atualizar controllers/routes/frontend que usam `/api/gestor/propriedades` para `/api/gestor/salas`. Não há pressão operacional — `Propriedade` já tem os campos necessários para salas de clínica.
 
 ```js
 const salaSchema = new Schema({
@@ -375,9 +386,10 @@ documentoSchema.index({ empresa_id: 1, paciente_id: 1, tipo: 1 });
 Os cron jobs do Alojamento Local são adaptados para o domínio Fisioterapia.
 Todos mantêm `timezone: 'Europe/Lisbon'`. **F7 ✅ — Implementação real:** os 5
 jobs abaixo estão implementados em `backend/jobs/` e montados no arranque do
-`server.js` dentro de `if (require.main === module)` (não correm nos testes). Os
-jobs legacy (`dailyBriefing`, `agendaAmanha`, `caoGuarda`, `arquivista`) sobre
-`Tarefa` mantêm-se até F8 (limpeza) — coexistem com os jobs F7.
+`server.js` dentro de `if (require.main === module)` (não correm nos testes).
+**F8 ✅ — Limpeza:** os jobs legacy (`dailyBriefing`, `agendaAmanha`, `caoGuarda`,
+`arquivista`) sobre `Tarefa` foram **removidos** — só os 5 jobs F7 sobre `Consulta`
+permanecem ativos.
 
 | Job (Alojamento Local)   | → | Job (Fisioterapia)              | Agenda       | Descrição |
 |--------------------------|---|---------------------------------|--------------|-----------|
@@ -426,10 +438,10 @@ jobs legacy (`dailyBriefing`, `agendaAmanha`, `caoGuarda`, `arquivista`) sobre
 | **F5** | `ModeloProtocolo` (de `ModeloChecklist`) + CRUD + snapshot imutável na Consulta (`protocolo_id` em `criarConsulta`, `protocolo_aplicado` em `PATCH /nota-clinica`) | ✅ Concluído |
 | **F6** | Adaptar frontend: calendário FullCalendar mostra `Consultas` em vez de `Tarefas` (nova rota `/gestor/calendario-consultas` com cores por fisioterapeuta, filtros, legenda e modal de detalhe) | ✅ Concluído |
 | **F7** | Cron jobs novos (`briefingDiarioFisio`, `lembreteConsultasAmanha`, `lembrete2hConsulta`, `caoGuardaConsultas`, `arquivistaConsultas`) + modelo `ConsultaArquivo` (clone de `Consulta` + `arquivado_em`, coleção `consultas_arquivo`) | ✅ Concluído |
-| **F8** | Limpeza: remover `Tarefa`, `TarefaArquivo`, `Propriedade`, `ModeloChecklist` antigos | Pendente |
+| **F8** | Limpeza: remover `Tarefa`, `TarefaArquivo`, `ModeloChecklist` antigos + `tarefaController`/`checklistController` + `utils/loadBalancer`/`scheduler` + cron jobs legacy (`dailyBriefing`/`agendaAmanha`/`caoGuarda`/`arquivista`) + `scripts/seedChecklists` + páginas frontend legacy (`/gestor/calendario` antigo, `/gestor/tarefas`, `/gestor/configuracoes/checklists`, `/gestor/webhooks`, `/admin/webhooks`, `/admin/sistema`). `Propriedade` mantida como alias de Sala (referenciada por `Consulta.sala_id`). | ✅ Concluído |
 | **F9** | `Documento` (anexos + fotografias clínicas) com storage S3/Cloudinary + consentimento RGPD | Pendente |
 
-> *\*F3 — Implementação efetiva:* o modelo `HorarioFisioterapeuta` + motor de disponibilidade (3 camadas) + endpoints `/api/gestor/horarios` + página `/gestor/equipa/horarios` estão concluídos. A migração `Propriedade` → `Sala` foi adiada (continua em `Propriedade`) — será retomada numa fase posterior quando o modelo `Consulta` exigir o `sala_id` (F4).
+> *\*F3 — Implementação efetiva:* o modelo `HorarioFisioterapeuta` + motor de disponibilidade (3 camadas) + endpoints `/api/gestor/horarios` + página `/gestor/equipa/horarios` estão concluídos. A migração `Propriedade` → `Sala` foi adiada (continua em `Propriedade`) — **F8 confirmou** que o modelo `Propriedade` é mantido como alias de Sala (a `Consulta.sala_id` referencia `Propriedade` desde F4); a migração para um modelo `Sala` dedicado foi adiada para uma fase futura (não há pressão operacional — `Propriedade` já tem os campos necessários para salas de clínica: `nome`, `empresa_id`, `ativo`, `capacidade_hospedes`, `observacoes`).
 
 ---
 

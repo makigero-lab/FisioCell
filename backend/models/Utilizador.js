@@ -16,8 +16,8 @@
  *   - `email` é único (índice único) — serve de credencial de login.
  *   - `password_hash` guarda a hash bcrypt da password (nunca a password em claro).
  *
- * O load balancer (utils/loadBalancer.js) considera utilizadores com role
- * "fisioterapeuta" e ativos=true para atribuição de tarefas/consultas.
+ * Os utilizadores com role "fisioterapeuta" e ativo=true são considerados
+ * para atribuição de Consultas (F4+) e aparecem no dashboard do gestor.
  */
 const mongoose = require('mongoose');
 
