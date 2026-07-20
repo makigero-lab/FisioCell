@@ -52,7 +52,7 @@ exports.login = async (req, res) => {
     // Procura o utilizador por email (único).
     const utilizador = await Utilizador.findOne({
       email: String(email).toLowerCase().trim(),
-    });
+    }).select('+password_hash');
 
     // Mensagem genérica para não revelar se o email existe ou não.
     const MSG_INVALIDAS = 'Credenciais inválidas.';
